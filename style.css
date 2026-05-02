@@ -1355,9 +1355,14 @@ input[type="range"]::-moz-range-thumb {
    `tooltips({ parent: document.body, position: "fixed" })`), so the
    z-index here governs their stacking against floating windows.
    Windows start at 100 and increment per click; menu bar sits at 9000.
-   8500 keeps tooltips above all windows but below menus. */
+   8500 keeps tooltips above all windows but below menus.
+   `!important` because CM6's base theme also sets `.cm-tooltip
+   { z-index: 100 }` via style-mod, and style-mod's <style> tags
+   often load after our linked stylesheet — without !important the
+   100 wins on later loads and the tooltip ducks under any window
+   the user has clicked since boot. */
 .cm-tooltip {
-  z-index: 8500;
+  z-index: 8500 !important;
 }
 
 /* CodeMirror's tooltip wrapper — drop the default white background and
