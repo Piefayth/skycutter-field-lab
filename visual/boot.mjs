@@ -204,7 +204,7 @@ function updateAll({ force = false } = {}) {
   });
   if (force || runtime.frame - lastMetricsRefreshFrame >= 6) {
     runner?.syncState?.(state);
-    metrics.updateStrip({ fields: state.fields, events: state.events });
+    metrics.updateStrip({ state });
     lastMetricsRefreshFrame = runtime.frame;
   }
   ui.stats.textContent = `frame ${runtime.frame} | ${paint.lastPaintLabel}`;

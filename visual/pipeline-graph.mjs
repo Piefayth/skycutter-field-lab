@@ -37,8 +37,20 @@
 
 import { createEditorView } from "./editor-core.mjs";
 import { extractDslFieldNames, extractDslSourceNames, extractDslImmutableNames } from "./editor-fieldlab-lang.mjs";
-import { configureFieldColorPalette, fieldCssColor, fieldCssTint, fieldRgbForName } from "./field-colors.mjs";
-import { renderGeodesicPreviewGpu } from "./geodesic-preview-renderer.mjs";
+import { configureFieldColorPalette } from "./field-colors.mjs";
+import { extractTopLevelBlocks, findStageRange, splitPipelineDsl } from "./pipeline-dsl-split.mjs";
+import { buildGraphModel, computeDepths, orderColumns } from "./pipeline-graph-model.mjs";
+import {
+  fieldAccent,
+  formatVarValue,
+  paramVisualType,
+  portAccent,
+  portKey,
+  railPortCount,
+  wireAccent,
+  wireGlow,
+} from "./pipeline-graph-ports.mjs";
+import { drawFieldPreview, isElementOnScreen, PREVIEW_SIZE, previewResolutionForGrid } from "./pipeline-previews.mjs";
 import { showToast } from "./toast.mjs";
 import { diagnoseDsl } from "../dsl/compiler.mjs";
 
@@ -52,7 +64,6 @@ const COL_GAP = 64;
 const ROW_GAP = 28;
 const PADDING_X = 24;
 const PADDING_Y = 32;     // leaves room for depth-tick row above first node
-const PREVIEW_W = 72;
 const MIN_ZOOM = 0.35;
 const MAX_ZOOM = 2.2;
 
@@ -108,7 +119,6 @@ export function mountPipelineGraph(rootEl, api) {
   const dslEditor = pipelineDslSection.editor;
   const dslSections = [pipelineDslSection, stampDslSection, presetDslSection];
   setupDslAccordion();
-  installDslDebugHook();
 
   const graphWrap = document.createElement("div");
   graphWrap.className = "pg-graph-wrap";
@@ -275,56 +285,6 @@ export function mountPipelineGraph(rootEl, api) {
     suppressDslToggle = false;
     const active = dslSections.find((section) => section.kind === kind);
     requestAnimationFrame(() => active?.editor.refreshLayout?.());
-  }
-
-  function installDslDebugHook() {
-    window.fieldLabDebug ??= {};
-    window.fieldLabDebug.pipelineDslScroll = () => {
-      const rows = {};
-      const containers = {
-        root: rectSummary(rootEl),
-        pane: rectSummary(dslPane),
-        stack: rectSummary(dslStack),
-      };
-      for (const section of dslSections) {
-        const editorEl = section.editor.view.dom;
-        const scroller = section.editor.view.scrollDOM;
-        rows[section.kind] = {
-          open: section.root.open,
-          host: rectSummary(section.editorHost),
-          editor: rectSummary(editorEl),
-          scroller: {
-            ...rectSummary(scroller),
-            overflowY: getComputedStyle(scroller).overflowY,
-            scrollTop: scroller.scrollTop,
-            scrollHeight: scroller.scrollHeight,
-            clientHeight: scroller.clientHeight,
-            canScroll: scroller.scrollHeight > scroller.clientHeight,
-          },
-        };
-      }
-      console.table(Object.entries(rows).map(([kind, row]) => ({
-        kind,
-        open: row.open,
-        hostH: row.host.height,
-        editorH: row.editor.height,
-        scrollerH: row.scroller.height,
-        clientH: row.scroller.clientHeight,
-        scrollH: row.scroller.scrollHeight,
-        overflowY: row.scroller.overflowY,
-        canScroll: row.scroller.canScroll,
-      })));
-      console.table(containers);
-      return { containers, sections: rows };
-    };
-  }
-
-  function rectSummary(el) {
-    const rect = el.getBoundingClientRect();
-    return {
-      width: Math.round(rect.width),
-      height: Math.round(rect.height),
-    };
   }
 
   function refreshPipelineDsl() {
@@ -585,7 +545,7 @@ export function mountPipelineGraph(rootEl, api) {
   }
 
   function previewThumbHeight() {
-    return PREVIEW_W;
+    return PREVIEW_SIZE;
   }
 
   function renderNode(item, listIndex) {
@@ -738,8 +698,8 @@ export function mountPipelineGraph(rootEl, api) {
       cell.style.setProperty("--accent", fieldAccent(field));
       const canvas = document.createElement("canvas");
       canvas.className = "pg-preview__canvas pg-preview__canvas--geodesic";
-      canvas.width = PREVIEW_W;
-      canvas.height = PREVIEW_W;
+      canvas.width = PREVIEW_SIZE;
+      canvas.height = PREVIEW_SIZE;
       canvas.dataset.field = field;
       canvas.addEventListener("pointerdown", (event) => {
         event.preventDefault();
@@ -1276,330 +1236,8 @@ export function mountPipelineGraph(rootEl, api) {
   };
 }
 
-function drawFieldPreview(canvas, field, fieldName, resolution = null, grid = null, view = null) {
-  const dpr = grid?.kind === "geodesic" ? 1 : Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
-  const previewResolution = normalizePreviewResolution(resolution ?? previewResolutionForGrid(grid));
-  const width = previewResolution.width;
-  const height = previewResolution.height;
-  const targetW = Math.floor(width * dpr);
-  const targetH = Math.floor(height * dpr);
-  if (grid?.kind === "geodesic" && grid.topology) {
-    if (!field) {
-      if (canvas.width !== targetW || canvas.height !== targetH) {
-        canvas.width = targetW;
-        canvas.height = targetH;
-      }
-      return;
-    }
-    const rendered = renderGeodesicPreviewGpu(canvas, {
-      field,
-      topology: grid.topology,
-      accent: fieldRgb(fieldName),
-      range: fieldRange(field),
-      view,
-      width: targetW,
-      height: targetH,
-    });
-    if (!rendered && canvas.width !== targetW) canvas.width = targetW;
-    if (!rendered && canvas.height !== targetH) canvas.height = targetH;
-    return;
-  }
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  if (canvas.width !== targetW || canvas.height !== targetH) {
-    canvas.width = targetW;
-    canvas.height = targetH;
-  }
-  if (!field) {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    return;
-  }
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-}
-
-function fieldRange(field) {
-  let min = Infinity;
-  let max = -Infinity;
-  for (let i = 0; i < field.length; i++) {
-    const value = field[i];
-    if (!Number.isFinite(value)) continue;
-    if (value < min) min = value;
-    if (value > max) max = value;
-  }
-  if (!Number.isFinite(min) || !Number.isFinite(max)) {
-    min = 0;
-    max = 1;
-  }
-  return { min, max };
-}
-
-function isElementOnScreen(el) {
-  const rect = el.getBoundingClientRect();
-  if (rect.width <= 0 || rect.height <= 0) return false;
-  return rect.right >= 0
-    && rect.bottom >= 0
-    && rect.left <= window.innerWidth
-    && rect.top <= window.innerHeight;
-}
-
-function previewResolutionForGrid(grid, { popout = false } = {}) {
-  const size = popout ? Math.min(640, Math.max(384, Math.round(Math.sqrt(grid?.cells ?? 4096) * 2.6))) : PREVIEW_W;
-  return { width: size, height: size };
-}
-
-function fieldRgb(name) {
-  return fieldRgbForName(name);
-}
-
 function clampNumber(value, min, max) {
   return Math.max(min, Math.min(max, value));
-}
-
-function normalizePreviewResolution(resolution = null) {
-  const width = Number(resolution?.width ?? PREVIEW_W);
-  const height = Number(resolution?.height ?? PREVIEW_W);
-  return {
-    width: clampNumber(Number.isFinite(width) ? Math.round(width) : PREVIEW_W, 16, 1024),
-    height: clampNumber(Number.isFinite(height) ? Math.round(height) : PREVIEW_W, 16, 1024),
-  };
-}
-
-function fieldAccent(name) {
-  return fieldCssColor(name);
-}
-
-function paramVisualType(meta) {
-  if (meta?.type === "boolean") return "boolean";
-  if (meta?.control === "stepper") return "stepper";
-  return "number";
-}
-
-function portKey(kind, name, meta = null) {
-  return kind === "param" ? `param:${paramVisualType(meta)}:${name}` : name;
-}
-
-function portAccent(kind, name, meta = null) {
-  if (kind === "param") return paramAccent(paramVisualType(meta));
-  return fieldAccent(name);
-}
-
-function paramAccent(type) {
-  if (type === "boolean") return "var(--info)";
-  if (type === "stepper") return "var(--violet)";
-  return "var(--amber)";
-}
-
-function paramTypeFromPort(port) {
-  const match = /^param:([^:]+):/.exec(String(port ?? ""));
-  return match?.[1] ?? null;
-}
-
-function wireAccent(fromPort, toPort) {
-  const paramType = paramTypeFromPort(fromPort) ?? paramTypeFromPort(toPort);
-  if (paramType) return paramAccent(paramType);
-  return fieldCssColor(toPort ?? fromPort);
-}
-
-function wireGlow(fromPort, toPort) {
-  const paramType = paramTypeFromPort(fromPort) ?? paramTypeFromPort(toPort);
-  if (paramType) {
-    return `color-mix(in srgb, ${paramAccent(paramType)} 34%, transparent)`;
-  }
-  return fieldCssTint(toPort ?? fromPort, 38);
-}
-
-function railPortCount(item) {
-  return (item.inputs?.fields?.length ?? 0)
-    + (item.inputs?.sources?.length ?? 0)
-    + (item.inputs?.params?.length ?? 0)
-    + (item.outputs?.fields?.length ?? 0)
-    + (item.outputs?.sources?.length ?? 0)
-    + (item.outputs?.params?.length ?? 0);
-}
-
-// Render a variable-node's bound value inline. FieldRef shows the field
-// name; Scalar shows the number; FieldRefList shows count+first; Vec2
-// shows components. Truncated for the small node footprint.
-function formatVarValue(type, value) {
-  if (value === null || value === undefined) return "—";
-  if (type === "FieldRef") return value.name ?? String(value);
-  if (type === "Scalar") return String(value);
-  if (type === "FieldRefList") {
-    if (!Array.isArray(value)) return String(value);
-    if (value.length === 0) return "(empty)";
-    return `${value.length} field${value.length === 1 ? "" : "s"}`;
-  }
-  if (type === "Vec2") return Array.isArray(value) ? `${value[0]},${value[1]}` : String(value);
-  return String(value);
-}
-
-function computeDepths(ids, edges) {
-  const depths = new Map(ids.map((id) => [id, 0]));
-  let changed = true;
-  let safety = ids.length + 1;
-  while (changed && safety-- > 0) {
-    changed = false;
-    for (const edge of edges) {
-      const from = edge.from?.node;
-      const to = edge.to?.node;
-      if (!depths.has(from) || !depths.has(to) || from === to) continue;
-      const candidate = (depths.get(from) ?? 0) + 1;
-      if (candidate > (depths.get(to) ?? 0)) {
-        depths.set(to, candidate);
-        changed = true;
-      }
-    }
-  }
-  return depths;
-}
-
-function buildGraphModel(stageItems, baseEdges, paramDecls = [], fieldDecls = []) {
-  const items = [...stageItems];
-  const edges = [...baseEdges];
-  const lastWriter = new Map();
-  const inputFields = new Set();
-  const inputSources = new Set();
-  const inputParams = new Set();
-  const outputFields = new Set();
-  const inputRailId = "rail:input";
-  const outputRailId = "rail:output";
-  const paramMeta = new Map(paramDecls.map((decl) => [decl.name, decl]).filter(([name]) => Boolean(name)));
-  const paramOrder = new Map(paramDecls.map((decl, index) => [decl.name, index]).filter(([name]) => Boolean(name)));
-  const declaredFields = fieldDecls.filter((decl) => decl?.name && decl.kind !== "source" && decl.kind !== "declared");
-  const declaredSources = fieldDecls.filter((decl) => decl?.name && decl.kind === "source");
-  const sourceNames = new Set(declaredSources.map((decl) => decl.name));
-  const fieldOrder = new Map(fieldDecls.map((decl, index) => [decl.name, index]).filter(([name]) => Boolean(name)));
-
-  for (const decl of declaredFields) inputFields.add(decl.name);
-  for (const decl of declaredSources) inputSources.add(decl.name);
-
-  for (const item of stageItems) {
-    for (const field of item.inputs?.fields ?? []) {
-      if (sourceNames.has(field)) {
-        inputSources.add(field);
-        edges.push({
-          from: { node: inputRailId, port: field },
-          to: { node: item.id, port: field },
-          rail: true,
-        });
-        continue;
-      }
-      if (lastWriter.has(field)) continue;
-      inputFields.add(field);
-      edges.push({
-        from: { node: inputRailId, port: field },
-        to: { node: item.id, port: field },
-        rail: true,
-      });
-    }
-    for (const param of item.inputs?.params ?? []) {
-      inputParams.add(param);
-      const paramPort = portKey("param", param, paramMeta.get(param));
-      edges.push({
-        from: { node: inputRailId, port: paramPort },
-        to: { node: item.id, port: paramPort },
-        rail: true,
-      });
-    }
-    const declared = new Set(item.outputs?.declared ?? []);
-    for (const field of item.outputs?.fields ?? []) {
-      if (declared.has(field)) {
-        lastWriter.set(field, item.id);
-      } else if (!sourceNames.has(field)) {
-        lastWriter.set(field, item.id);
-      }
-    }
-  }
-
-  for (const [field, writerId] of lastWriter) {
-    if (isDeclaredPipelineName(field, stageItems)) continue;
-    outputFields.add(field);
-    edges.push({
-      from: { node: writerId, port: field },
-      to: { node: outputRailId, port: field },
-      rail: true,
-    });
-  }
-
-  if (inputFields.size > 0 || inputSources.size > 0 || inputParams.size > 0) {
-    items.push({
-      id: inputRailId,
-      label: "State In",
-      kind: "rail",
-      railSide: "input",
-      inputs: { fields: [] },
-      outputs: {
-        fields: sortFieldsForRail(inputFields, fieldOrder),
-        sources: sortFieldsForRail(inputSources, fieldOrder),
-        params: sortParamsForRail(inputParams, paramOrder),
-      },
-    });
-  }
-  if (outputFields.size > 0) {
-    items.push({
-      id: outputRailId,
-      label: "State Out",
-      kind: "rail",
-      railSide: "output",
-      inputs: { fields: [...outputFields] },
-      outputs: { fields: [] },
-    });
-  }
-
-  return { items, edges };
-}
-
-function sortParamsForRail(params, paramOrder) {
-  return [...params].sort((a, b) => {
-    const ai = paramOrder.has(a) ? paramOrder.get(a) : Number.MAX_SAFE_INTEGER;
-    const bi = paramOrder.has(b) ? paramOrder.get(b) : Number.MAX_SAFE_INTEGER;
-    if (ai !== bi) return ai - bi;
-    return a.localeCompare(b);
-  });
-}
-
-function sortFieldsForRail(fields, fieldOrder) {
-  return [...fields].sort((a, b) => {
-    const ai = fieldOrder.has(a) ? fieldOrder.get(a) : Number.MAX_SAFE_INTEGER;
-    const bi = fieldOrder.has(b) ? fieldOrder.get(b) : Number.MAX_SAFE_INTEGER;
-    if (ai !== bi) return ai - bi;
-    return a.localeCompare(b);
-  });
-}
-
-function isDeclaredPipelineName(name, stageItems) {
-  for (const item of stageItems) {
-    if ((item.outputs?.declared ?? []).includes(name)) return true;
-  }
-  return false;
-}
-
-function orderColumns(columns, edges) {
-  const ordered = new Map([...columns.entries()].sort(([a], [b]) => a - b));
-  const idsByDepth = [...ordered.keys()];
-  const orderIndex = new Map();
-  for (const depth of idsByDepth) {
-    const ids = ordered.get(depth);
-    ids.forEach((id, index) => orderIndex.set(id, index));
-  }
-  for (const depth of idsByDepth) {
-    if (depth === 0) continue;
-    const ids = ordered.get(depth);
-    ids.sort((a, b) => predecessorScore(a, edges, orderIndex) - predecessorScore(b, edges, orderIndex));
-    ids.forEach((id, index) => orderIndex.set(id, index));
-  }
-  return ordered;
-}
-
-function predecessorScore(id, edges, orderIndex) {
-  const scores = [];
-  for (const edge of edges) {
-    if (edge.to?.node !== id) continue;
-    if (!orderIndex.has(edge.from?.node)) continue;
-    scores.push(orderIndex.get(edge.from.node));
-  }
-  if (!scores.length) return orderIndex.get(id) ?? 0;
-  return scores.reduce((sum, value) => sum + value, 0) / scores.length;
 }
 
 function summarizeDslKind(dsl) {
@@ -1616,155 +1254,6 @@ function kindShortLabel(kind) {
   if (!kind) return "DSL";
   if (kind.includes("+")) return "MIX";
   return kind.slice(0, 4).toUpperCase();
-}
-
-function findStageRange(source, targetId) {
-  if (!source || !targetId) return null;
-  let i = 0;
-  while (i < source.length) {
-    const start = source.indexOf("stage", i);
-    if (start === -1) return null;
-    if (!isWordBoundary(source, start - 1) || !isWordBoundary(source, start + 5)) {
-      i = start + 5;
-      continue;
-    }
-    let cursor = skipWs(source, start + 5);
-    const id = readIdentifier(source, cursor);
-    if (!id) {
-      i = start + 5;
-      continue;
-    }
-    cursor = skipWs(source, id.end);
-    if (source[cursor] === "\"") {
-      const name = readQuotedString(source, cursor);
-      if (!name) return null;
-      cursor = skipWs(source, name.end);
-    }
-    if (source[cursor] !== "{") {
-      i = cursor + 1;
-      continue;
-    }
-    const block = readStageBlockEnd(source, cursor);
-    if (!block) return null;
-    if (id.value === targetId) return { from: start, to: block.end };
-    i = block.end;
-  }
-  return null;
-}
-
-function readIdentifier(source, start) {
-  const match = /^[A-Za-z_][A-Za-z0-9_]*/.exec(source.slice(start));
-  if (!match) return null;
-  return { value: match[0], end: start + match[0].length };
-}
-
-function readQuotedString(source, start) {
-  let i = start + 1;
-  while (i < source.length) {
-    if (source[i] === "\\" && i + 1 < source.length) {
-      i += 2;
-      continue;
-    }
-    if (source[i] === "\"") return { end: i + 1 };
-    i++;
-  }
-  return null;
-}
-
-function readStageBlockEnd(source, start) {
-  let depth = 0;
-  let i = start;
-  let inFence = false;
-  while (i < source.length) {
-    if (source.startsWith("```", i)) {
-      inFence = !inFence;
-      i += 3;
-      continue;
-    }
-    const ch = source[i];
-    if (!inFence && ch === "{") depth++;
-    if (!inFence && ch === "}") {
-      depth--;
-      if (depth === 0) return { end: i + 1 };
-    }
-    i++;
-  }
-  return null;
-}
-
-function extractTopLevelBlocks(source, keyword) {
-  return extractTopLevelBlockRanges(source, keyword).map((range) => range.text.trim());
-}
-
-function splitPipelineDsl(source) {
-  const stampRanges = extractTopLevelBlockRanges(source, "stamp");
-  const presetRanges = extractTopLevelBlockRanges(source, "preset");
-  const ranges = [...stampRanges, ...presetRanges].sort((a, b) => a.from - b.from);
-  let main = source ?? "";
-  for (const range of [...ranges].sort((a, b) => b.from - a.from)) {
-    main = `${main.slice(0, range.from)}\n${main.slice(range.to)}`;
-  }
-  return {
-    main: cleanSplitDslText(main),
-    stamps: stampRanges.map((range) => range.text.trim()).join("\n\n"),
-    presets: presetRanges.map((range) => range.text.trim()).join("\n\n"),
-  };
-}
-
-function cleanSplitDslText(source) {
-  return String(source ?? "")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
-function extractTopLevelBlockRanges(source, keyword) {
-  source = String(source ?? "");
-  const blocks = [];
-  let i = 0;
-  while (i < source.length) {
-    const start = source.indexOf(keyword, i);
-    if (start < 0) break;
-    if (!isWordBoundary(source, start - 1) || !isWordBoundary(source, start + keyword.length)) {
-      i = start + keyword.length;
-      continue;
-    }
-    let cursor = skipWs(source, start + keyword.length);
-    const id = readIdentifier(source, cursor);
-    if (!id) {
-      i = start + keyword.length;
-      continue;
-    }
-    cursor = skipWs(source, id.end);
-    if (source[cursor] === "\"") {
-      const name = readQuotedString(source, cursor);
-      if (!name) {
-        i = cursor + 1;
-        continue;
-      }
-      cursor = skipWs(source, name.end);
-    }
-    if (source[cursor] !== "{") {
-      i = cursor + 1;
-      continue;
-    }
-    const block = readStageBlockEnd(source, cursor);
-    if (!block) break;
-    blocks.push({ from: start, to: block.end, text: source.slice(start, block.end) });
-    i = block.end;
-  }
-  return blocks;
-}
-
-function skipWs(source, start) {
-  let i = start;
-  while (i < source.length && /\s/.test(source[i])) i++;
-  return i;
-}
-
-function isWordBoundary(source, i) {
-  if (i < 0 || i >= source.length) return true;
-  return !/[A-Za-z0-9_]/.test(source[i]);
 }
 
 function cssEscape(value) {

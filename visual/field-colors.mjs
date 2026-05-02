@@ -19,8 +19,7 @@ export function createFieldColorPalette(fieldNames = []) {
     const rgb = hslToRgb(hue / 360, 0.96, 0.68);
     // Store hue alongside RGB so callers building backgrounds can pick
     // a different lightness without round-tripping through RGB. The
-    // existing `r`/`g`/`b` keys stay flat for back-compat with consumers
-    // that just want the colour.
+    // Keep `r`/`g`/`b` flat for consumers that just want the colour.
     palette.set(name, { hue, r: rgb.r, g: rgb.g, b: rgb.b });
   }
   return palette;

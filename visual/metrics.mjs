@@ -174,18 +174,9 @@ export function createMetrics({ ui }) {
     varianceHistory.length = 0;
   }
 
-  function updateStrip({ state, fields, events }) {
-    // Newer callers pass `state` directly; older callers pass
-    // `fields, events` and we synthesize a state-shaped wrapper.
-    // windU/windV no longer live at the top level of state — they're
-    // declared fields like everything else.
-    const metricState = state ?? {
-      fields,
-      events: {
-        totalThisTick: events?.totalThisTick ?? 0,
-        byLabel: events?.byLabel ?? {},
-      },
-    };
+  function updateStrip({ state }) {
+    if (!state) throw new Error("metrics.updateStrip requires state");
+    const metricState = state;
     const baseValues = deriveMetricValues(metricState);
     const variance = baseValues.cloudVariance ?? 0;
     varianceHistory.push(variance);
@@ -196,8 +187,8 @@ export function createMetrics({ ui }) {
     const values = {
       ...baseValues,
       activity,
-      events: events?.totalThisTick ?? baseValues.events ?? 0,
-      eventsByLabel: events?.byLabel ?? baseValues.eventsByLabel ?? {},
+      events: baseValues.events ?? 0,
+      eventsByLabel: baseValues.eventsByLabel ?? {},
     };
     lastValues = values;
 
