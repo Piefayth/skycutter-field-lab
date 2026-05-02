@@ -23,29 +23,29 @@
 import { ramp, gray } from "../prims/colorers.mjs";
 import { compileDsl } from "../dsl/compiler.mjs";
 
-// Composite view: every cell shows whichever compartment dominates,
-// blended where they're close. Susceptible is a desaturated tan
-// (background population), infected pops as a hot orange-red wave,
-// recovered settles to a cool teal trail. Watching this view shows
-// the classic Murray "ring-of-fire" pattern: a thin orange wavefront
-// expanding outward, with cool teal recovered territory behind and
-// untouched tan ahead.
-const COL_S = [205, 195, 165]; // tan / dry grass — naive population
-const COL_I = [245, 110,  45]; // hot orange — actively infectious
-const COL_R = [ 80, 175, 175]; // cool teal — burned-out / immune
+// Composite view. Three compartments mapped to a high-contrast palette
+// so each one occupies a different part of the lightness/temperature
+// space rather than three pastel siblings. The eye picks the wave
+// (hot fire) instantly; the susceptible territory stays bright (ready
+// to burn); the recovered trail recedes into deep cool grey-blue
+// (out of the action). Inspired by the visual language of forest-fire
+// satellite imagery: untouched canopy = pale, active fire = orange,
+// burn scar = dark.
+const COL_S = [248, 232, 175]; // pale cream — naive, "ready to burn"
+const COL_I = [255,  85,  35]; // bright fire orange — actively infectious
+const COL_R = [ 36,  50,  85]; // deep navy — burned, dormant, immune
 
 function sirCompositeColor(s, infected, r) {
   // Renormalize so we always blend by the relative shares (each cell
-  // should sum near 1, but stamps and roundoff can push it off; this
-  // keeps the composite stable).
+  // should sum near 1, but stamps and roundoff can push it off).
   const total = Math.max(s + infected + r, 1e-6);
   const ws = s / total;
   const wi = infected / total;
   const wr = r / total;
-  // Boost the Infected contribution — it's the most informative
-  // signal (the wave) but rarely dominates by raw fraction. Squashes
-  // S/R proportionally so the orange wavefront is always readable.
-  const iBoost = Math.min(1, wi * 4);
+  // Boost the Infected contribution heavily — even a 5% I share
+  // saturates the orange channel. Without this the thin wavefront
+  // gets washed out by the surrounding S+R blend.
+  const iBoost = Math.min(1, wi * 6);
   const remaining = 1 - iBoost;
   const sw = ws / Math.max(ws + wr, 1e-6) * remaining;
   const rw = wr / Math.max(ws + wr, 1e-6) * remaining;
@@ -122,7 +122,7 @@ param mobility  slider min 0 max 4 step 0.01 default 0.70 label "MOBILITY"
 // flow back into S. With waning > 0 the model becomes SIRS instead
 // of SIR; the planet can support recurrent epidemic waves rather
 // than a single one-shot burnout. Set to 0 to recover pure SIR.
-param waning    slider min 0 max 0.5 step 0.001 default 0.012 label "WANING (R→S)"
+param waning    slider min 0 max 0.5 step 0.001 default 0.030 label "WANING (R→S)"
 // Background introduction rate — fraction of S converted to I each
 // tick. Re-seeds outbreaks after a quiet stretch without user
 // intervention. Higher than ~0.0001 produces uniform background

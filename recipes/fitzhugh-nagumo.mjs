@@ -34,7 +34,7 @@ export const regime = {
 export const pipelineDsl = `
 recipe "FitzHugh-Nagumo"
 summary "Excitable medium. Fast u spikes through a cubic threshold; slow v recovers and suppresses. Diffusion turns spikes into traveling fronts; an asymmetric seed breaks a front into a rotating spiral."
-recommendedPreset spiral
+recommendedPreset pulses
 grid geodesic tiles 64
 
 const a 0.13
