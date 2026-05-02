@@ -6,7 +6,7 @@
 // =============================================================================
 
 import { Compartment, EditorState } from "@codemirror/state";
-import { EditorView, keymap, lineNumbers, drawSelection, highlightActiveLine, highlightActiveLineGutter } from "@codemirror/view";
+import { EditorView, keymap, lineNumbers, drawSelection, highlightActiveLine, highlightActiveLineGutter, tooltips } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import {
   syntaxHighlighting, indentOnInput, bracketMatching, foldGutter, foldKeymap,
@@ -100,6 +100,23 @@ export function createEditorView({ parent, onApply, onDocChange, language = "jav
           ? createFieldLabExtensions([])
           : [syntaxHighlighting(fieldLabHighlight), javascript()]),
         ...(isFieldLab ? [dslHoverTooltip(), dslAutocomplete()] : []),
+        // Tell CM the tooltip's available space is the floating-window
+        // body (which has overflow:hidden), not the viewport. Without
+        // this, hovering near the top of the editor places the tooltip
+        // above it — and it gets clipped by the window chrome since
+        // `.win__body` overflow:hidden swallows anything that extends
+        // out the top. With this, CM flips to below when there's no
+        // room above within the window's body.
+        tooltips({
+          tooltipSpace: (view) => {
+            const win = view.dom.closest(".win__body");
+            if (win) return win.getBoundingClientRect();
+            return {
+              top: 0, left: 0,
+              bottom: window.innerHeight, right: window.innerWidth,
+            };
+          },
+        }),
         keymap.of([
           {
             key: "Mod-Enter",
