@@ -68,6 +68,16 @@ param gamma     slider min 0 max 2 step 0.01 default 0.40 label "γ (RECOVER)"
 // Mobility of infected — how fast the outbreak diffuses across cells.
 // In real-world terms: how mixed the population is.
 param mobility  slider min 0 max 4 step 0.01 default 0.60 label "MOBILITY"
+// Waning immunity — recovered cells lose immunity at this rate and
+// flow back into S. With waning > 0 the model becomes SIRS instead
+// of SIR; the planet can support recurrent epidemic waves rather
+// than a single one-shot burnout. Default is small but nonzero so
+// the recipe stays alive past the first wave.
+param waning    slider min 0 max 0.5 step 0.001 default 0.025 label "WANING (R→S)"
+// Background introduction rate — small fraction of S converted to
+// I each tick. Ensures a re-seeded outbreak after a quiet stretch
+// without needing user intervention.
+param immigration slider min 0 max 0.001 step 0.00002 default 0.00005 label "IMMIGRATE"
 // Time scaling.
 param rate      slider min 1 max 100 step 1 default 30 label "RATE"
 
@@ -138,15 +148,18 @@ stage spread "Spatial mobility of infected" {
   diffuse I amount mobility * 0.18 * dt * rate
 }
 
-stage react "S→I→R reaction" {
+stage react "S→I→R(→S) reaction" {
   reads S, I, R
   writes S, I, R
   cell {
-    let infect  = beta * S * I
-    let recover = gamma * I
-    add S = -infect            * dt * rate
-    add I = (infect - recover) * dt * rate
-    add R = recover            * dt * rate
+    let infect    = beta * S * I
+    let recover   = gamma * I
+    let wane      = waning * R
+    let reseeding = immigration * S
+    // SIR core (with waning + reseeding making it SIRS-with-import)
+    add S = (-infect + wane - reseeding) * dt * rate
+    add I = (infect - recover + reseeding) * dt * rate
+    add R = (recover - wane)              * dt * rate
   }
 }
 

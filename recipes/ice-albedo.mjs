@@ -60,7 +60,7 @@ use clock dt, frame
 use geo lon, lat, x, y, i, N, PI, TAU
 use sim cell, diffuse
 use init fill, spot, eachCell
-use core clamp, smoothstep, max, min, abs, hypot, cos, sin, exp, pow, cellNoise
+use core clamp, smoothstep, max, min, abs, hypot, cos, sin, exp, pow, cellNoise, cellRand
 
 // T: surface temperature, normalized so 0 ≈ freezing point.
 // albedo: derived field — recomputed each tick from T. Useful as its
@@ -77,7 +77,17 @@ param greenhouse  slider min 0.5 max 2  step 0.01 default 1.10 label "GREENHOUSE
 param emissivity  slider min 0    max 4 step 0.01 default 1.20 label "EMISSIVITY"
 // Heat conduction across the surface. Higher = sharper smoothing of
 // temperature gradients, less spatial structure.
-param diffusion   slider min 0    max 4 step 0.01 default 0.60 label "DIFFUSION"
+param diffusion   slider min 0    max 4 step 0.01 default 0.40 label "DIFFUSION"
+// Slow Milankovitch-like solar oscillation. Sets the system breathing
+// across the bistability — at moderate amplitude, the planet flips
+// between warm and snowball every few orbits, and you can watch the
+// ice line march around the sphere. 0 = constant solar (equilibrium).
+param orbital     slider min 0    max 0.5 step 0.005 default 0.18 label "ORBITAL VAR"
+// Period of the orbital variation in frames. Lower = faster cycle.
+param orbitalRate slider min 100  max 5000 step 50 default 1200 label "ORBIT FRAMES"
+// Volcanic / stochastic per-cell forcing. Random thermal kicks each
+// tick — keeps the system stirred even at zero orbital variation.
+param volcanic    slider min 0    max 0.5 step 0.005 default 0.04 label "VOLCANIC"
 // Time scaling. Climate responds slowly relative to per-frame sim — let
 // users speed it up if they want to see equilibration faster.
 param rate        slider min 1    max 100 step 1  default 30   label "RATE"
@@ -134,16 +144,22 @@ stage radiate "Solar absorption + thermal emission" {
     // ice-edge transition is.
     let frozen = 1 - smoothstep(freezePoint - eps, freezePoint + eps, T)
     let alb    = albedoOcean + (albedoIce - albedoOcean) * frozen
+    // Slowly-varying solar (Milankovitch-flavored). The recipe runs
+    // continuously even at low solar — no static equilibrium.
+    let solarMod   = solar * (1 + orbital * sin(frame / orbitalRate))
     // Solar input falls off toward the poles; cos(lat) peaks at the
     // equator. \`max(0, ...)\` because cos can go slightly negative on
     // the curved geodesic representation in WGSL float math.
-    let insolation = max(0, solar * cos(lat))
+    let insolation = max(0, solarMod * cos(lat))
     let absorbed   = greenhouse * insolation * (1 - alb)
     // Linear emission instead of Stefan-Boltzmann's T^4 — keeps the
     // bistability structure but stays well within float precision and
     // doesn't need tiny dt to integrate stably.
     let emitted = emissivity * (T + 0.4)
-    add T = (absorbed - emitted) * dt * rate
+    // Volcanic / stochastic per-cell kicks. Keeps the system from
+    // settling perfectly even at zero orbital variation.
+    let volcanism = cellRand(frame) * volcanic
+    add T = (absorbed - emitted + volcanism) * dt * rate
     set albedo = alb
   }
 }
