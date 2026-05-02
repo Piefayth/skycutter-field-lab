@@ -4,6 +4,7 @@ import {
   compileWebGpuGeodesicCellStage,
   compileWebGpuGeodesicEachStage,
   compileWebGpuGeodesicEventStage,
+  compileWebGpuGeodesicPipeline,
 } from "./webgpu-geodesic-compiler.mjs";
 import { pipelineDsl as weatherDsl } from "../recipes/weather.mjs";
 
@@ -187,6 +188,14 @@ test("weather cell stages compile to WebGPU geodesic WGSL", () => {
       assert(pass.source.includes("outputField[cell] = outValue;"), `${stage.id}:${pass.field} missing writeback`);
     }
   }
+});
+
+test("compiles a full DSL pipeline into stage passes and event counters", () => {
+  const recipe = compileDsl(weatherDsl);
+  const compiled = compileWebGpuGeodesicPipeline(recipe.dsl);
+  assert(compiled.stages.length === recipe.dsl.stages.length, "stage count mismatch");
+  assert(compiled.stages.every((stage) => Array.isArray(stage.passes)), "stage passes missing");
+  assert(Array.isArray(compiled.eventCounters), "event counters missing");
 });
 
 function test(name, fn) {

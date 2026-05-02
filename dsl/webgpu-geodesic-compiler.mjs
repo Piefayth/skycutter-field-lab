@@ -7,6 +7,66 @@
 // textures. Stencil primitives (wind, advect, reductions) stay hand-written.
 // =============================================================================
 
+export function compileWebGpuGeodesicPipeline(dsl = {}) {
+  const stages = (dsl.stages ?? []).map((stage) => ({
+    id: stage.id,
+    name: stage.name,
+    passes: compileWebGpuGeodesicStage(stage, dsl),
+  }));
+  const eventCounters = stages.flatMap((stage) => stage.passes)
+    .filter((pass) => pass.eventCounter)
+    .map((pass) => pass.eventCounter);
+  return { stages, eventCounters };
+}
+
+export function compileWebGpuGeodesicStage(stage, dsl = {}) {
+  const statements = stage.body?.statements ?? [];
+  if (statements.length === 1 && statements[0].type === "cell") {
+    return compileWebGpuGeodesicCellStage(stage, dsl);
+  }
+  if (statements.length === 1 && statements[0].type === "each") {
+    return compileWebGpuGeodesicEachStage(stage, dsl);
+  }
+  if (statements.length === 1 && statements[0].type === "event") {
+    return compileWebGpuGeodesicEventStage(stage, dsl);
+  }
+  const passes = [];
+  for (const statement of statements) {
+    if (statement.type === "diffuse") {
+      passes.push({ kind: "diffuse", field: statement.field, amount: statement.amount });
+    } else if (statement.type === "clamp") {
+      passes.push({ kind: "clamp", field: statement.field, lo: statement.lo, hi: statement.hi });
+    } else if (statement.type === "wind") {
+      passes.push({
+        kind: "wind",
+        pressure: statement.pressure,
+        windU: statement.windU,
+        windV: statement.windV,
+        lift: statement.lift,
+        strength: statement.strength,
+      });
+    } else if (statement.type === "advect") {
+      passes.push({
+        kind: "advect",
+        field: statement.field,
+        windU: statement.windU,
+        windV: statement.windV,
+        dt: statement.dt,
+      });
+    } else if (statement.type === "normalize") {
+      passes.push({
+        kind: "normalize",
+        field: statement.field,
+        damping: statement.damping,
+        condition: statement.condition,
+      });
+    } else {
+      throw new Error(`${stage.id}: WebGPU geodesic primitive ${statement.type} is not supported yet`);
+    }
+  }
+  return passes;
+}
+
 export function compileWebGpuGeodesicCellStage(stage, dsl = {}) {
   const statements = stage?.body?.statements ?? [];
   if (statements.length !== 1 || statements[0].type !== "cell") {

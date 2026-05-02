@@ -16,6 +16,7 @@
 
 import { StreamLanguage, LanguageSupport, syntaxHighlighting, HighlightStyle } from "@codemirror/language";
 import { Tag, tags as t } from "@lezer/highlight";
+import { extractDslNames } from "../dsl/introspect.mjs";
 import { createFieldColorPalette, fieldCssColor, fieldCssTint } from "./field-colors.mjs";
 
 // Recipe-identity declarations. One per line.
@@ -178,49 +179,18 @@ export function createFieldLabExtensions(fieldNames = [], sourceNames = [], immu
 }
 
 export function extractDslFieldNames(source) {
-  return extractTopLevelDeclNames(source, /^field\b(.*)$/);
+  return extractDslNames(source).fields;
 }
 
 export function extractDslSourceNames(source) {
-  return extractTopLevelDeclNames(source, /^source\b(.*)$/);
+  return extractDslNames(source).sources;
 }
 
 // Names recipe authors declared as `param X ...`, `const X ...`, or
 // `planet X ...`. After bare-name DSL, these resolve as bare identifiers
 // and need bold styling distinct from regular locals/variableNames.
 export function extractDslImmutableNames(source) {
-  const names = new Set();
-  const text = String(source ?? "");
-  for (const line of text.split(/\r?\n/)) {
-    const clean = line.replace(/\/\/.*$/, "").trim();
-    let match = /^param\s+([A-Za-z_$][A-Za-z0-9_$]*)\b/.exec(clean);
-    if (match) { names.add(match[1]); continue; }
-    match = /^const\s+([A-Za-z_$][A-Za-z0-9_$]*)\b/.exec(clean);
-    if (match) { names.add(match[1]); continue; }
-    match = /^planet\s+([A-Za-z_$][A-Za-z0-9_$]*)\b/.exec(clean);
-    if (match) { names.add(match[1]); continue; }
-  }
-  return [...names];
-}
-
-function extractTopLevelDeclNames(source, lineRegex) {
-  const names = new Set();
-  const text = String(source ?? "");
-  for (const line of text.split(/\r?\n/)) {
-    const clean = line.replace(/\/\/.*$/, "").trim();
-    const match = lineRegex.exec(clean);
-    if (!match) continue;
-    for (const id of match[1].matchAll(/[A-Za-z_$][A-Za-z0-9_$]*/g)) {
-      const word = id[0];
-      // MODIFIER_KEYWORDS still skipped because trailing-arg keywords
-      // like `lon`/`lat`/`rx`/`ry` aren't field names. Builtin filtering
-      // dropped — recipes can declare `field u, v` (gray-scott, BZ) or
-      // `field W` (inverter-front) and those should make it into the
-      // extracted set so the tokenizer can colour them as fields.
-      if (!MODIFIER_KEYWORDS.has(word)) names.add(word);
-    }
-  }
-  return [...names];
+  return extractDslNames(source).immutables;
 }
 
 export function fieldNameKey(fieldNames = [], sourceNames = [], immutableNames = []) {

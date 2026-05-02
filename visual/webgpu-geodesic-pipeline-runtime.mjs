@@ -1,9 +1,7 @@
 import { createGeodesicGrid } from "../kernel/geodesic-grid.mjs";
 import {
   buildWebGpuGeodesicUniforms,
-  compileWebGpuGeodesicCellStage,
-  compileWebGpuGeodesicEachStage,
-  compileWebGpuGeodesicEventStage,
+  compileWebGpuGeodesicPipeline,
 } from "../dsl/webgpu-geodesic-compiler.mjs";
 import { createWebGpuGeodesicRuntime } from "./webgpu-geodesic-runtime.mjs";
 
@@ -31,10 +29,7 @@ export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGri
   const grid = providedGrid ?? createGeodesicGrid({ frequency: dsl.grid.frequency ?? 48 });
   const fieldNames = recipeFieldNames(dsl);
   const runtime = await createWebGpuGeodesicRuntime({ grid, fieldNames });
-  const stages = compileStageList(dsl);
-  const eventCounters = stages.flatMap((stage) => stage.passes)
-    .filter((pass) => pass.eventCounter)
-    .map((pass) => pass.eventCounter);
+  const { stages, eventCounters } = compileWebGpuGeodesicPipeline(dsl);
   const consts = Object.fromEntries((dsl.constants ?? []).map((decl) => [decl.name, decl.value]));
   const planet = dsl.planet ?? {};
 
@@ -123,62 +118,6 @@ export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGri
       runtime.dispose();
     },
   };
-}
-
-function compileStageList(dsl) {
-  return (dsl.stages ?? []).map((stage) => ({
-    id: stage.id,
-    name: stage.name,
-    passes: compileStage(stage, dsl),
-  }));
-}
-
-function compileStage(stage, dsl) {
-  const statements = stage.body?.statements ?? [];
-  if (statements.length === 1 && statements[0].type === "cell") {
-    return compileWebGpuGeodesicCellStage(stage, dsl);
-  }
-  if (statements.length === 1 && statements[0].type === "each") {
-    return compileWebGpuGeodesicEachStage(stage, dsl);
-  }
-  if (statements.length === 1 && statements[0].type === "event") {
-    return compileWebGpuGeodesicEventStage(stage, dsl);
-  }
-  const passes = [];
-  for (const statement of statements) {
-    if (statement.type === "diffuse") {
-      passes.push({ kind: "diffuse", field: statement.field, amount: statement.amount });
-    } else if (statement.type === "clamp") {
-      passes.push({ kind: "clamp", field: statement.field, lo: statement.lo, hi: statement.hi });
-    } else if (statement.type === "wind") {
-      passes.push({
-        kind: "wind",
-        pressure: statement.pressure,
-        windU: statement.windU,
-        windV: statement.windV,
-        lift: statement.lift,
-        strength: statement.strength,
-      });
-    } else if (statement.type === "advect") {
-      passes.push({
-        kind: "advect",
-        field: statement.field,
-        windU: statement.windU,
-        windV: statement.windV,
-        dt: statement.dt,
-      });
-    } else if (statement.type === "normalize") {
-      passes.push({
-        kind: "normalize",
-        field: statement.field,
-        damping: statement.damping,
-        condition: statement.condition,
-      });
-    } else {
-      throw new Error(`${stage.id}: WebGPU geodesic primitive ${statement.type} is not supported yet`);
-    }
-  }
-  return passes;
 }
 
 function recipeFieldNames(dsl) {

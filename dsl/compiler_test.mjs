@@ -1,4 +1,5 @@
 import { compileDsl, diagnoseDsl, parseStages } from "./compiler.mjs";
+import { extractDslNames } from "./introspect.mjs";
 
 const tests = [];
 
@@ -61,6 +62,29 @@ stage seed "Seed" {
   assert(recipe.dsl.grid.kind === "geodesic", `expected geodesic grid, got ${recipe.dsl.grid.kind}`);
   assert(recipe.dsl.grid.frequency === 48, `expected frequency 48, got ${recipe.dsl.grid.frequency}`);
   assert(recipe.dsl.grid.tiles === 48, `expected tiles 48, got ${recipe.dsl.grid.tiles}`);
+});
+
+test("shared DSL introspection extracts editor-visible names", () => {
+  const names = extractDslNames(`
+recipe "Names"
+planet radius 1
+const gain 0.5
+field pressure, cloud
+source heatSource
+param enabled boolean default true
+use sim cell
+
+stage tick "Tick" {
+  reads pressure, heatSource
+  writes pressure
+  cell {
+    add pressure = heatSource * gain
+  }
+}
+`);
+  assertDeep(names.fields, ["pressure", "cloud"], "fields");
+  assertDeep(names.sources, ["heatSource"], "sources");
+  assertDeep(names.immutables, ["enabled", "gain", "radius"], "immutables");
 });
 
 test("block parser ignores DSL keywords in strings and comments", () => {
