@@ -90,10 +90,21 @@ field u, v, w
 
 setting simRateHz slider min 0 max 360 step 1 default 60 label "SIM RATE"
 param rate slider min 1 max 100 step 1 default 30 label "RATE"
-param diffU slider min 0 max 4 step 0.05 default 1.0 label "DIFF U"
-param diffV slider min 0 max 4 step 0.05 default 0.5 label "DIFF V"
-param diffW slider min 0 max 4 step 0.05 default 0.15 label "DIFF W"
-param threshold slider min 0 max 0.5 step 0.01 default 0.10 label "THRESH"
+param diffU slider min 0 max 4 step 0.05 default 0.55 label "DIFF U"
+param diffV slider min 0 max 4 step 0.05 default 0.30 label "DIFF V"
+param diffW slider min 0 max 4 step 0.05 default 0.10 label "DIFF W"
+// THRESH is the unstable middle root of the cubic u(1−u)(u−T). When
+// negative, u=0 is a destabilized rest state — even a tiny seed grows
+// into a wave instead of decaying. When positive (T > 0), the cubic
+// is excitable but not auto-oscillating, so patterns fizzle once
+// active fronts pass. Default −0.05 puts the system in the auto-
+// oscillating regime; drag positive for "fire-once-then-quiet."
+param threshold slider min -0.3 max 0.5 step 0.01 default -0.05 label "THRESH"
+// Constant excitatory drive pushed into u every tick. Combined with
+// the negative threshold, this is what keeps the system breathing
+// indefinitely instead of relaxing to silence — a slow leak of energy
+// in lieu of a chemistry that's "actually being fed."
+param drive slider min 0 max 0.2 step 0.001 default 0.025 label "DRIVE"
 param eps1Mul slider min 0.1 max 5 step 0.05 default 1.0 label "EPS1·"
 param eps2Mul slider min 0.1 max 5 step 0.05 default 1.0 label "EPS2·"
 param wCoupling slider min 0 max 2 step 0.05 default 0.55 label "W→U"
@@ -168,7 +179,11 @@ stage react "BZ reaction (u fast, v medium, w slow)" {
     let cubic = u * (1 - u) * (u - threshold)
     let inhibit = v * vDamping
     let slowSuppress = w * wCoupling
-    add u = (cubic - inhibit - slowSuppress) * dt * rate
+    // \`drive\` is the difference between an excitable medium that
+    // fires once on a seed and quiesces (drive=0) and a sustained
+    // chemical clock that breathes indefinitely (drive>0). At default
+    // it's a small but persistent push that keeps the system oscillating.
+    add u = (cubic - inhibit - slowSuppress + drive) * dt * rate
     add v = eps1 * eps1Mul * (u - v) * dt * rate
     add w = eps2 * eps2Mul * (v - w) * dt * rate
   }
