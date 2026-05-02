@@ -49,6 +49,12 @@
       "name": "Klausmeier vegetation (example)",
       "path": "recipes/klausmeier.mjs",
       "summary": "Semi-arid biomass-water dynamics. Vegetation self-organizes into stripes perpendicular to the slope (Sahelian tiger bush). Drop FLOW SPEED to zero and the same kinetics produce Turing spots."
+    },
+    {
+      "id": "predator-prey",
+      "name": "Predator-prey (example)",
+      "path": "recipes/predator-prey.mjs",
+      "summary": "Rosenzweig-MacArthur with diffusion. Prey colonizes empty cells, predators follow eating, a void trails the predators which is then re-colonized. Sustained chase-wave limit cycle."
     }
   ]
 }
