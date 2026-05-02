@@ -108,27 +108,31 @@ field S, I, R
 
 setting simRateHz slider min 0 max 360 step 1 default 60 label "SIM RATE"
 // Infection rate per S·I contact. Together with gamma sets R0 = β/γ.
-// Default 2.5 gives R0 ≈ 8 — strong epidemic, sharp visible front.
-param beta      slider min 0 max 4 step 0.01 default 2.50 label "β (INFECT)"
+// Default 1.4 gives R0 = 4 — moderate epidemic, visible but stable.
+// Crank to ~3 for an explosive wave; drop below ~0.4 to make the
+// outbreak die in place (R0 < 1).
+param beta      slider min 0 max 4 step 0.01 default 1.40 label "β (INFECT)"
 // Recovery rate. Higher = faster transition out of I, narrower
-// infected band (less time spent in I before reaching R). Slowing
-// gamma fattens the wavefront.
-param gamma     slider min 0 max 2 step 0.01 default 0.30 label "γ (RECOVER)"
+// infected band. 0.35 gives a wavefront ~3 cell-diameters wide.
+param gamma     slider min 0 max 2 step 0.01 default 0.35 label "γ (RECOVER)"
 // Mobility of infected — how fast the outbreak diffuses across cells.
-// In real-world terms: how mixed the population is. Higher = faster-
-// moving wavefront, more dramatic ring-of-fire visual.
-param mobility  slider min 0 max 4 step 0.01 default 1.20 label "MOBILITY"
+// In real-world terms: how mixed the population is.
+param mobility  slider min 0 max 4 step 0.01 default 0.70 label "MOBILITY"
 // Waning immunity — recovered cells lose immunity at this rate and
 // flow back into S. With waning > 0 the model becomes SIRS instead
 // of SIR; the planet can support recurrent epidemic waves rather
 // than a single one-shot burnout. Set to 0 to recover pure SIR.
-param waning    slider min 0 max 0.5 step 0.001 default 0.02 label "WANING (R→S)"
-// Background introduction rate — small fraction of S converted to
-// I each tick. Ensures a re-seeded outbreak after a quiet stretch
-// without needing user intervention. 0 = no spontaneous outbreaks.
-param immigration slider min 0 max 0.001 step 0.00001 default 0.00012 label "IMMIGRATE"
-// Time scaling.
-param rate      slider min 1 max 100 step 1 default 24 label "RATE"
+param waning    slider min 0 max 0.5 step 0.001 default 0.012 label "WANING (R→S)"
+// Background introduction rate — fraction of S converted to I each
+// tick. Re-seeds outbreaks after a quiet stretch without user
+// intervention. Higher than ~0.0001 produces uniform background
+// infection rather than localized waves; default keeps the rare
+// re-seeding flavor without blurring the front.
+param immigration slider min 0 max 0.001 step 0.000005 default 0.000020 label "IMMIGRATE"
+// Time scaling. Effective dt per tick = (1/60)·rate. Keep this and
+// β both modest — \`β·dt·rate\` is the per-tick infect coefficient
+// and must stay well below 1 for stable wavefronts.
+param rate      slider min 1 max 100 step 1 default 12 label "RATE"
 
 stamp seed "Plant outbreak" {
   // Drop a fresh outbreak. Reduces local S to make sure infection
