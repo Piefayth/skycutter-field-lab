@@ -183,10 +183,6 @@ export function smoothstep(edge0, edge1, x) {
   return t * t * (3 - 2 * t);
 }
 
-export function noise2(x, y) {
-  return Math.sin(x * 12.9898 + y * 78.233) * 43758.5453 % 1;
-}
-
 export function hashNoise(i, seed = 0) {
   let x = (i + 1) ^ Math.imul(Math.floor(seed) + 1013904223, 1664525);
   x ^= x >>> 16;
@@ -195,6 +191,53 @@ export function hashNoise(i, seed = 0) {
   x = Math.imul(x, 3266489917);
   x ^= x >>> 16;
   return ((x >>> 0) / 4294967295) * 2 - 1;
+}
+
+// 3D lattice hash for spatial-coherent noise. Mirrors the WGSL impl in
+// `webgpu-geodesic-compiler.mjs`'s `hashLattice` so the JS init runtime
+// and the WGSL stage runtime produce identical values for the same inputs.
+function hashLattice(cx, cy, cz, seed) {
+  let x = Math.imul(cx | 0, 73856093) ^ Math.imul(cy | 0, 19349663) ^ Math.imul(cz | 0, 83492791);
+  x ^= Math.imul((Math.floor(seed) + 1013904223) | 0, 1664525);
+  x ^= x >>> 16;
+  x = Math.imul(x, 2246822519);
+  x ^= x >>> 13;
+  x = Math.imul(x, 3266489917);
+  x ^= x >>> 16;
+  return ((x >>> 0) / 4294967295) * 2 - 1;
+}
+
+// Trilinear-interpolated 3D lattice noise. Returns [-1, 1]. Coords are
+// expected to be on the unit sphere (px, py, pz); the internal `* 4`
+// gives roughly a dozen "bumps" across the sphere at scale 1.
+export function spatialNoise(px, py, pz, seed) {
+  const qx = px * 4 + seed * 0.013;
+  const qy = py * 4 + seed * 0.021;
+  const qz = pz * 4 + seed * 0.034;
+  const bx = Math.floor(qx);
+  const by = Math.floor(qy);
+  const bz = Math.floor(qz);
+  const fx = qx - bx;
+  const fy = qy - by;
+  const fz = qz - bz;
+  const sx = fx * fx * (3 - 2 * fx);
+  const sy = fy * fy * (3 - 2 * fy);
+  const sz = fz * fz * (3 - 2 * fz);
+  const n000 = hashLattice(bx, by, bz, seed);
+  const n100 = hashLattice(bx + 1, by, bz, seed);
+  const n010 = hashLattice(bx, by + 1, bz, seed);
+  const n110 = hashLattice(bx + 1, by + 1, bz, seed);
+  const n001 = hashLattice(bx, by, bz + 1, seed);
+  const n101 = hashLattice(bx + 1, by, bz + 1, seed);
+  const n011 = hashLattice(bx, by + 1, bz + 1, seed);
+  const n111 = hashLattice(bx + 1, by + 1, bz + 1, seed);
+  const nx00 = n000 + (n100 - n000) * sx;
+  const nx10 = n010 + (n110 - n010) * sx;
+  const nx01 = n001 + (n101 - n001) * sx;
+  const nx11 = n011 + (n111 - n011) * sx;
+  const nxy0 = nx00 + (nx10 - nx00) * sy;
+  const nxy1 = nx01 + (nx11 - nx01) * sy;
+  return nxy0 + (nxy1 - nxy0) * sz;
 }
 
 export function mulberry32(seed) {

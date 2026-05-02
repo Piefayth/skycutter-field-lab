@@ -38,7 +38,7 @@ use clock dt, frame
 use geo x, y, i, lon, lat, u, v, px, py, pz, N, PI, TAU
 use sim wind, advect, diffuse, clamp, normalize, cell, event, each
 use init fill, eachCell
-use core clamp, smoothstep, max, min, abs, hypot, noise, sample
+use core clamp, smoothstep, max, min, abs, hypot, cellNoise
 
 field u, v
 
@@ -53,7 +53,7 @@ preset blank "Blank canvas" {
   eachCell {
     let d2 = lon * lon + lat * lat
     when d2 < 0.16 * 0.16 {
-      set v = 0.5 + noise(7) * 0.05
+      set v = 0.5 + cellNoise(7) * 0.05
       set u = 0.5
     }
   }

@@ -3,7 +3,7 @@ import {
   buildWebGpuGeodesicUniforms,
   compileWebGpuGeodesicPipeline,
 } from "../dsl/webgpu-geodesic-compiler.mjs";
-import { clamp, hashNoise, noise2, smoothstep } from "../kernel/kernel.mjs";
+import { clamp, hashNoise, smoothstep, spatialNoise } from "../kernel/kernel.mjs";
 import { createWebGpuGeodesicRuntime } from "./webgpu-geodesic-runtime.mjs";
 
 // =============================================================================
@@ -214,7 +214,11 @@ function evalUniformCall(ast, env) {
   if (name === "exp") return Math.exp(args[0]);
   if (name === "sqrt") return Math.sqrt(args[0]);
   if (name === "pow") return Math.pow(args[0], args[1]);
-  if (name === "noise") return hashNoise(env.frame ?? 0, args[0] ?? 0);
-  if (name === "noise2") return noise2(args[0], args[1]);
+  if (name === "cellNoise") {
+    // Uniform-context call (no per-cell position); fall back to a
+    // deterministic per-seed scalar via the lattice at origin so the
+    // value is stable across frames.
+    return spatialNoise(0, 0, 0, args[0] ?? 0);
+  }
   throw new Error(`unknown primitive uniform function ${name ?? "call"}`);
 }

@@ -1,4 +1,4 @@
-import { TAU, clamp, hashNoise, noise2, smoothstep } from "../kernel/kernel.mjs";
+import { TAU, clamp, smoothstep, spatialNoise } from "../kernel/kernel.mjs";
 
 export function buildDslPresetDecls(presets, dsl) {
   return presets.map((preset) => ({
@@ -224,16 +224,18 @@ function evalInitCall(ast, state, cell) {
   if (name === "exp") return Math.exp(args[0]);
   if (name === "sqrt") return Math.sqrt(args[0]);
   if (name === "pow") return Math.pow(args[0], args[1]);
-  if (name === "noise") return hashNoise(cell?.i ?? 0, args[0] ?? 0);
-  if (name === "noise2") return noise2(args[0], args[1]);
-  if (name === "sample") {
-    const fieldArg = ast.args[0];
-    const fieldName = fieldArg?.type === "Identifier" ? fieldArg.name : null;
-    const arr = fieldName ? state.fields[fieldName] : null;
-    if (state.grid?.kind === "geodesic" && arr && cell) {
-      return arr[cell.i] ?? 0;
-    }
-    throw new Error("init sample() requires a geodesic state and valid field");
+  if (name === "cellNoise") {
+    const seed = args[0] ?? 0;
+    const scale = args.length >= 2 ? args[1] : 1;
+    // Cell context: use the cell's unit-sphere position scaled by `scale`.
+    // No cell context (top-level preset spot args): sample at origin —
+    // the resulting value is stable per (seed, scale) but identical across
+    // any "cells" that would have been involved, which matches the
+    // randomize-by-seed pattern presets typically reach for.
+    const px = (cell?.px ?? 0) * scale;
+    const py = (cell?.py ?? 0) * scale;
+    const pz = (cell?.pz ?? 0) * scale;
+    return spatialNoise(px, py, pz, seed);
   }
   throw new Error(`unknown init function ${name ?? "call"}`);
 }

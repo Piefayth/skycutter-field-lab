@@ -436,7 +436,7 @@ test("cell blocks expose locals, add, set, and when as IR", () => {
 test("cell expressions expose spatial noise as IR", () => {
   const pipeline = compileDsl(`
     use sim cell
-    use core noise
+    use core cellNoise
     use clock frame
     param amp slider min 0 max 1 default 0.1
 
@@ -445,7 +445,7 @@ test("cell expressions expose spatial noise as IR", () => {
       writes moisture
       cell {
         let seed = frame * 131
-        add moisture = noise(seed + 11) * amp
+        add moisture = cellNoise(seed + 11) * amp
       }
     }
   `);
@@ -461,14 +461,14 @@ test("stage cell validation accepts geodesic coordinates", () => {
     use sim cell
     use clock dt, frame
     use geo lon, lat, u, v, px, py, pz, i, N
-    use core sin, cos, noise
+    use core sin, cos, cellNoise
 
     stage waves "Spatial waves" {
       reads A
       writes A
       cell {
         let wave = sin(lon * 3 + lat * 2) + cos(px * 4 + py * 2 + pz)
-        add A = (wave + noise(frame + i) + u + v + N * 0) * dt
+        add A = (wave + cellNoise(frame + i) + u + v + N * 0) * dt
       }
     }
   `);
@@ -498,14 +498,14 @@ test("cell expressions can read recipe constants and planet constants", () => {
 test("each blocks expose stencil reads and side-effect writes as IR", () => {
   const pipeline = compileDsl(`
     use sim each
-    use core sample
+    use core neighborMax
     param threshold slider min 0 max 1 default 0.5
 
     stage mark "Mark" {
       reads W, R
       writes spreadMask
       each {
-        when W < threshold and R <= 0.1 and sample(W, 1, 0) > 0.5 {
+        when W < threshold and R <= 0.1 and neighborMax(W) > 0.5 {
           set spreadMask = 1
         }
       }
@@ -580,19 +580,19 @@ test("validator rejects bad function arity", () => {
   `), "clamp expects 3 args");
 });
 
-test("validator rejects samples of undeclared fields", () => {
+test("validator rejects neighborMax of undeclared fields", () => {
   assertThrows(() => compileDsl(`
     use sim each
-    use core sample
+    use core neighborMax
 
     stage bad "Bad" {
       reads A
       writes A
       each {
-        add A = sample(B, 1, 0)
+        add A = neighborMax(B)
       }
     }
-  `), "sample field references undeclared field B");
+  `), "neighborMax field references undeclared field B");
 });
 
 test("validator rejects per-cell identifiers in primitive uniform expressions", () => {

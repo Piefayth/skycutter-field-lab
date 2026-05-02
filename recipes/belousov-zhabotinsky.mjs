@@ -84,7 +84,7 @@ use clock dt, frame
 use geo x, y, i, lon, lat, px, py, pz, N, PI, TAU
 use sim cell, diffuse, clamp
 use init fill, spot, region, eachCell
-use core clamp, smoothstep, max, min, abs, hypot, noise, noise2
+use core clamp, smoothstep, max, min, abs, hypot, cellNoise
 
 field u, v, w
 
@@ -138,7 +138,7 @@ preset random "Random pulses" {
   fill v 0
   fill w 0
   eachCell {
-    when noise2(lon * 1.8, lat * 1.8) > 0.55 {
+    when cellNoise(11, 0.45) > 0.55 {
       set u = 1
     }
   }

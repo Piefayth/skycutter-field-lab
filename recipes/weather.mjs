@@ -121,7 +121,7 @@ use clock dt, frame
 use geo x, y, i, lon, lat, u, v, px, py, pz, N, PI, TAU
 use sim wind, advect, diffuse, clamp, normalize, cell, event, each
 use init fill, spot, ellipse, eachCell
-use core clamp, smoothstep, max, min, abs, hypot, noise, noise2, sample, sin, asin, cos, exp, pow
+use core clamp, smoothstep, max, min, abs, hypot, cellNoise, sin, asin, cos, exp, pow
 
 field pressure, moisture, cloud, temperature, catalyst, exhaustion
 source moistureSource, heatSource, catalystSource, sinkSource
@@ -210,8 +210,8 @@ preset blank "Blank canvas" {
     let latitude = lat
     let equator = cos(latitude)
     let pole = 1 - max(0, equator)
-    let basin = smoothstep(0.18, 0.82, noise2(x * 11.52 + 31, y * 6.985 - 9) * 0.5 + 0.5)
-    let coast = smoothstep(0.34, 0.62, noise2(x * 23.04 - 4, y * 13.97 + 17) * 0.5 + 0.5)
+    let basin = smoothstep(0.18, 0.82, cellNoise(31, 3) * 0.5 + 0.5)
+    let coast = smoothstep(0.34, 0.62, cellNoise(17, 5) * 0.5 + 0.5)
     let moistureSeed = basin * (0.35 + 0.65 * max(0, equator)) + coast * 0.22
     let heatSeed = 0.78 * max(0, equator) - 0.55 * pole
     let band = exp(-pow(sin(x * TAU * 2.0 + y * 5.715), 2) / 0.018)
@@ -227,8 +227,8 @@ preset weather "Weather cells" {
     let latitude = lat
     let equator = cos(latitude)
     let pole = 1 - max(0, equator)
-    let basin = smoothstep(0.18, 0.82, noise2(x * 11.52 + 31, y * 6.985 - 9) * 0.5 + 0.5)
-    let coast = smoothstep(0.34, 0.62, noise2(x * 23.04 - 4, y * 13.97 + 17) * 0.5 + 0.5)
+    let basin = smoothstep(0.18, 0.82, cellNoise(31, 3) * 0.5 + 0.5)
+    let coast = smoothstep(0.34, 0.62, cellNoise(17, 5) * 0.5 + 0.5)
     let moistureSeed = basin * (0.35 + 0.65 * max(0, equator)) + coast * 0.22
     let heatSeed = 0.78 * max(0, equator) - 0.55 * pole
     let band = exp(-pow(sin(x * TAU * 2.0 + y * 5.715), 2) / 0.018)
@@ -236,9 +236,9 @@ preset weather "Weather cells" {
     set heatSource = heatSeed
     set catalystSource = band * smoothstep(0.15, 0.95, basin)
     set sinkSource = 0.18 + pole * 0.38 + (1 - basin) * 0.16
-    set moisture = 0.26 + 0.12 * noise2(x * 8.96, y * 7.62)
-    set temperature = 0.55 - abs(py) * 0.325 + 0.08 * noise2(x * 5.12 + 8, y * 5.08)
-    set catalyst = 0.08 * noise2(x * 10.24 - 10, y * 5.08 + 20)
+    set moisture = 0.26 + 0.12 * cellNoise(13, 2)
+    set temperature = 0.55 - abs(py) * 0.325 + 0.08 * cellNoise(19, 1.3)
+    set catalyst = 0.08 * cellNoise(23, 2)
   }
   spot pressure lon -PI + TAU * 0.15 lat asin(1 - 2 * (0.42 + 0.08 * sin(0 * 1.7))) radius 24 * PI / 128 amount -0.34
   spot moisture lon -PI + TAU * 0.1890625 lat asin(1 - 2 * (0.45125 + 0.08 * sin(0 * 1.7))) radius 26 * PI / 128 amount 0.14
@@ -257,8 +257,8 @@ preset front "Cold front" {
     let latitude = lat
     let equator = cos(latitude)
     let pole = 1 - max(0, equator)
-    let basin = smoothstep(0.18, 0.82, noise2(x * 11.52 + 31, y * 6.985 - 9) * 0.5 + 0.5)
-    let coast = smoothstep(0.34, 0.62, noise2(x * 23.04 - 4, y * 13.97 + 17) * 0.5 + 0.5)
+    let basin = smoothstep(0.18, 0.82, cellNoise(31, 3) * 0.5 + 0.5)
+    let coast = smoothstep(0.34, 0.62, cellNoise(17, 5) * 0.5 + 0.5)
     let moistureSeed = basin * (0.35 + 0.65 * max(0, equator)) + coast * 0.22
     let heatSeed = 0.78 * max(0, equator) - 0.55 * pole
     let band = exp(-pow(sin(x * TAU * 2.0 + y * 5.715), 2) / 0.018)
@@ -266,10 +266,10 @@ preset front "Cold front" {
     set heatSource = heatSeed
     set catalystSource = band * smoothstep(0.15, 0.95, basin)
     set sinkSource = 0.18 + pole * 0.38 + (1 - basin) * 0.16
-    set moisture = 0.26 + 0.12 * noise2(x * 8.96, y * 7.62)
-    set temperature = 0.55 - abs(py) * 0.325 + 0.08 * noise2(x * 5.12 + 8, y * 5.08)
-    set catalyst = 0.08 * noise2(x * 10.24 - 10, y * 5.08 + 20)
-    set pressure = (x < 0.5 ? 0.5 : -0.45) + 0.06 * noise2(x * 20.48, y * 10.16)
+    set moisture = 0.26 + 0.12 * cellNoise(13, 2)
+    set temperature = 0.55 - abs(py) * 0.325 + 0.08 * cellNoise(19, 1.3)
+    set catalyst = 0.08 * cellNoise(23, 2)
+    set pressure = (x < 0.5 ? 0.5 : -0.45) + 0.06 * cellNoise(29, 5)
     add moisture = x < 0.48 ? 0.42 : 0.12
     add temperature = x < 0.5 ? 0.2 : -0.25
   }
@@ -280,8 +280,8 @@ preset catalystPlume "Catalyst plume" {
     let latitude = lat
     let equator = cos(latitude)
     let pole = 1 - max(0, equator)
-    let basin = smoothstep(0.18, 0.82, noise2(x * 11.52 + 31, y * 6.985 - 9) * 0.5 + 0.5)
-    let coast = smoothstep(0.34, 0.62, noise2(x * 23.04 - 4, y * 13.97 + 17) * 0.5 + 0.5)
+    let basin = smoothstep(0.18, 0.82, cellNoise(31, 3) * 0.5 + 0.5)
+    let coast = smoothstep(0.34, 0.62, cellNoise(17, 5) * 0.5 + 0.5)
     let moistureSeed = basin * (0.35 + 0.65 * max(0, equator)) + coast * 0.22
     let heatSeed = 0.78 * max(0, equator) - 0.55 * pole
     let band = exp(-pow(sin(x * TAU * 2.0 + y * 5.715), 2) / 0.018)
@@ -289,9 +289,9 @@ preset catalystPlume "Catalyst plume" {
     set heatSource = heatSeed
     set catalystSource = band * smoothstep(0.15, 0.95, basin)
     set sinkSource = 0.18 + pole * 0.38 + (1 - basin) * 0.16
-    set moisture = 0.26 + 0.12 * noise2(x * 8.96, y * 7.62)
-    set temperature = 0.55 - abs(py) * 0.325 + 0.08 * noise2(x * 5.12 + 8, y * 5.08)
-    set catalyst = 0.08 * noise2(x * 10.24 - 10, y * 5.08 + 20)
+    set moisture = 0.26 + 0.12 * cellNoise(13, 2)
+    set temperature = 0.55 - abs(py) * 0.325 + 0.08 * cellNoise(19, 1.3)
+    set catalyst = 0.08 * cellNoise(23, 2)
   }
   spot pressure lon -PI + TAU * 0.35 lat 0 radius 24 * PI / 128 amount -1.0
   spot pressure lon -PI + TAU * 0.65 lat 0 radius 30 * PI / 128 amount 0.8
@@ -305,8 +305,8 @@ preset pulse "Storm pulse" {
     let latitude = lat
     let equator = cos(latitude)
     let pole = 1 - max(0, equator)
-    let basin = smoothstep(0.18, 0.82, noise2(x * 11.52 + 31, y * 6.985 - 9) * 0.5 + 0.5)
-    let coast = smoothstep(0.34, 0.62, noise2(x * 23.04 - 4, y * 13.97 + 17) * 0.5 + 0.5)
+    let basin = smoothstep(0.18, 0.82, cellNoise(31, 3) * 0.5 + 0.5)
+    let coast = smoothstep(0.34, 0.62, cellNoise(17, 5) * 0.5 + 0.5)
     let moistureSeed = basin * (0.35 + 0.65 * max(0, equator)) + coast * 0.22
     let heatSeed = 0.78 * max(0, equator) - 0.55 * pole
     let band = exp(-pow(sin(x * TAU * 2.0 + y * 5.715), 2) / 0.018)
@@ -314,9 +314,9 @@ preset pulse "Storm pulse" {
     set heatSource = heatSeed
     set catalystSource = band * smoothstep(0.15, 0.95, basin)
     set sinkSource = 0.18 + pole * 0.38 + (1 - basin) * 0.16
-    set moisture = 0.26 + 0.12 * noise2(x * 8.96, y * 7.62)
-    set temperature = 0.55 - abs(py) * 0.325 + 0.08 * noise2(x * 5.12 + 8, y * 5.08)
-    set catalyst = 0.08 * noise2(x * 10.24 - 10, y * 5.08 + 20)
+    set moisture = 0.26 + 0.12 * cellNoise(13, 2)
+    set temperature = 0.55 - abs(py) * 0.325 + 0.08 * cellNoise(19, 1.3)
+    set catalyst = 0.08 * cellNoise(23, 2)
   }
   spot pressure lon 0 lat 0 radius 34 * PI / 128 amount -0.85
   spot moisture lon 0 lat 0 radius 38 * PI / 128 amount 0.72
@@ -330,8 +330,8 @@ preset boundary "Phase boundary" {
     let latitude = lat
     let equator = cos(latitude)
     let pole = 1 - max(0, equator)
-    let basin = smoothstep(0.18, 0.82, noise2(x * 11.52 + 31, y * 6.985 - 9) * 0.5 + 0.5)
-    let coast = smoothstep(0.34, 0.62, noise2(x * 23.04 - 4, y * 13.97 + 17) * 0.5 + 0.5)
+    let basin = smoothstep(0.18, 0.82, cellNoise(31, 3) * 0.5 + 0.5)
+    let coast = smoothstep(0.34, 0.62, cellNoise(17, 5) * 0.5 + 0.5)
     let moistureSeed = basin * (0.35 + 0.65 * max(0, equator)) + coast * 0.22
     let heatSeed = 0.78 * max(0, equator) - 0.55 * pole
     let band = exp(-pow(sin(x * TAU * 2.0 + y * 5.715), 2) / 0.018)
@@ -339,9 +339,9 @@ preset boundary "Phase boundary" {
     set heatSource = heatSeed
     set catalystSource = band * smoothstep(0.15, 0.95, basin)
     set sinkSource = 0.18 + pole * 0.38 + (1 - basin) * 0.16
-    set moisture = 0.26 + 0.12 * noise2(x * 8.96, y * 7.62)
-    set temperature = 0.55 - abs(py) * 0.325 + 0.08 * noise2(x * 5.12 + 8, y * 5.08)
-    set catalyst = 0.08 * noise2(x * 10.24 - 10, y * 5.08 + 20)
+    set moisture = 0.26 + 0.12 * cellNoise(13, 2)
+    set temperature = 0.55 - abs(py) * 0.325 + 0.08 * cellNoise(19, 1.3)
+    set catalyst = 0.08 * cellNoise(23, 2)
   }
   spot moisture lon -PI + TAU * 0.18 lat 0 radius 18 * PI / 128 amount 0.28
   spot pressure lon -PI + TAU * 0.18 lat asin(-0.15625 * sin(0)) radius 16 * PI / 128 amount 0.45
@@ -371,8 +371,8 @@ preset random "Random blobs" {
     let latitude = lat
     let equator = cos(latitude)
     let pole = 1 - max(0, equator)
-    let basin = smoothstep(0.18, 0.82, noise2(x * 11.52 + 31, y * 6.985 - 9) * 0.5 + 0.5)
-    let coast = smoothstep(0.34, 0.62, noise2(x * 23.04 - 4, y * 13.97 + 17) * 0.5 + 0.5)
+    let basin = smoothstep(0.18, 0.82, cellNoise(31, 3) * 0.5 + 0.5)
+    let coast = smoothstep(0.34, 0.62, cellNoise(17, 5) * 0.5 + 0.5)
     let moistureSeed = basin * (0.35 + 0.65 * max(0, equator)) + coast * 0.22
     let heatSeed = 0.78 * max(0, equator) - 0.55 * pole
     let band = exp(-pow(sin(x * TAU * 2.0 + y * 5.715), 2) / 0.018)
@@ -380,27 +380,27 @@ preset random "Random blobs" {
     set heatSource = heatSeed
     set catalystSource = band * smoothstep(0.15, 0.95, basin)
     set sinkSource = 0.18 + pole * 0.38 + (1 - basin) * 0.16
-    set moisture = 0.26 + 0.12 * noise2(x * 8.96, y * 7.62)
-    set temperature = 0.55 - abs(py) * 0.325 + 0.08 * noise2(x * 5.12 + 8, y * 5.08)
-    set catalyst = 0.08 * noise2(x * 10.24 - 10, y * 5.08 + 20)
+    set moisture = 0.26 + 0.12 * cellNoise(13, 2)
+    set temperature = 0.55 - abs(py) * 0.325 + 0.08 * cellNoise(19, 1.3)
+    set catalyst = 0.08 * cellNoise(23, 2)
   }
-  spot pressure lon -PI + TAU * ((noise(1) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (noise(2) + 1) * 0.5 * 0.7244094488188977)) radius (13 + (noise(3) + 1) * 0.5 * 18) * PI / 128 amount (noise(4) > 0 ? 0.8 : -0.8)
-  spot pressure lon -PI + TAU * ((noise(5) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (noise(6) + 1) * 0.5 * 0.7244094488188977)) radius (13 + (noise(7) + 1) * 0.5 * 18) * PI / 128 amount (noise(8) > 0 ? 0.8 : -0.8)
-  spot pressure lon -PI + TAU * ((noise(9) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (noise(10) + 1) * 0.5 * 0.7244094488188977)) radius (13 + (noise(11) + 1) * 0.5 * 18) * PI / 128 amount (noise(12) > 0 ? 0.8 : -0.8)
-  spot pressure lon -PI + TAU * ((noise(13) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (noise(14) + 1) * 0.5 * 0.7244094488188977)) radius (13 + (noise(15) + 1) * 0.5 * 18) * PI / 128 amount (noise(16) > 0 ? 0.8 : -0.8)
-  spot pressure lon -PI + TAU * ((noise(17) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (noise(18) + 1) * 0.5 * 0.7244094488188977)) radius (13 + (noise(19) + 1) * 0.5 * 18) * PI / 128 amount (noise(20) > 0 ? 0.8 : -0.8)
-  spot pressure lon -PI + TAU * ((noise(21) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (noise(22) + 1) * 0.5 * 0.7244094488188977)) radius (13 + (noise(23) + 1) * 0.5 * 18) * PI / 128 amount (noise(24) > 0 ? 0.8 : -0.8)
-  spot pressure lon -PI + TAU * ((noise(25) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (noise(26) + 1) * 0.5 * 0.7244094488188977)) radius (13 + (noise(27) + 1) * 0.5 * 18) * PI / 128 amount (noise(28) > 0 ? 0.8 : -0.8)
-  spot pressure lon -PI + TAU * ((noise(29) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (noise(30) + 1) * 0.5 * 0.7244094488188977)) radius (13 + (noise(31) + 1) * 0.5 * 18) * PI / 128 amount (noise(32) > 0 ? 0.8 : -0.8)
-  spot pressure lon -PI + TAU * ((noise(33) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (noise(34) + 1) * 0.5 * 0.7244094488188977)) radius (13 + (noise(35) + 1) * 0.5 * 18) * PI / 128 amount (noise(36) > 0 ? 0.8 : -0.8)
-  spot moisture lon -PI + TAU * ((noise(37) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (noise(38) + 1) * 0.5 * 0.7244094488188977)) radius (18 + (noise(39) + 1) * 0.5 * 20) * PI / 128 amount 0.35 + (noise(40) + 1) * 0.5 * 0.4
-  spot moisture lon -PI + TAU * ((noise(41) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (noise(42) + 1) * 0.5 * 0.7244094488188977)) radius (18 + (noise(43) + 1) * 0.5 * 20) * PI / 128 amount 0.35 + (noise(44) + 1) * 0.5 * 0.4
-  spot moisture lon -PI + TAU * ((noise(45) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (noise(46) + 1) * 0.5 * 0.7244094488188977)) radius (18 + (noise(47) + 1) * 0.5 * 20) * PI / 128 amount 0.35 + (noise(48) + 1) * 0.5 * 0.4
-  spot moisture lon -PI + TAU * ((noise(49) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (noise(50) + 1) * 0.5 * 0.7244094488188977)) radius (18 + (noise(51) + 1) * 0.5 * 20) * PI / 128 amount 0.35 + (noise(52) + 1) * 0.5 * 0.4
-  spot moisture lon -PI + TAU * ((noise(53) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (noise(54) + 1) * 0.5 * 0.7244094488188977)) radius (18 + (noise(55) + 1) * 0.5 * 20) * PI / 128 amount 0.35 + (noise(56) + 1) * 0.5 * 0.4
-  spot moisture lon -PI + TAU * ((noise(57) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (noise(58) + 1) * 0.5 * 0.7244094488188977)) radius (18 + (noise(59) + 1) * 0.5 * 20) * PI / 128 amount 0.35 + (noise(60) + 1) * 0.5 * 0.4
-  spot moisture lon -PI + TAU * ((noise(61) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (noise(62) + 1) * 0.5 * 0.7244094488188977)) radius (18 + (noise(63) + 1) * 0.5 * 20) * PI / 128 amount 0.35 + (noise(64) + 1) * 0.5 * 0.4
-  spot moisture lon -PI + TAU * ((noise(65) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (noise(66) + 1) * 0.5 * 0.7244094488188977)) radius (18 + (noise(67) + 1) * 0.5 * 20) * PI / 128 amount 0.35 + (noise(68) + 1) * 0.5 * 0.4
+  spot pressure lon -PI + TAU * ((cellNoise(1) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (cellNoise(2) + 1) * 0.5 * 0.7244094488188977)) radius (13 + (cellNoise(3) + 1) * 0.5 * 18) * PI / 128 amount (cellNoise(4) > 0 ? 0.8 : -0.8)
+  spot pressure lon -PI + TAU * ((cellNoise(5) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (cellNoise(6) + 1) * 0.5 * 0.7244094488188977)) radius (13 + (cellNoise(7) + 1) * 0.5 * 18) * PI / 128 amount (cellNoise(8) > 0 ? 0.8 : -0.8)
+  spot pressure lon -PI + TAU * ((cellNoise(9) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (cellNoise(10) + 1) * 0.5 * 0.7244094488188977)) radius (13 + (cellNoise(11) + 1) * 0.5 * 18) * PI / 128 amount (cellNoise(12) > 0 ? 0.8 : -0.8)
+  spot pressure lon -PI + TAU * ((cellNoise(13) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (cellNoise(14) + 1) * 0.5 * 0.7244094488188977)) radius (13 + (cellNoise(15) + 1) * 0.5 * 18) * PI / 128 amount (cellNoise(16) > 0 ? 0.8 : -0.8)
+  spot pressure lon -PI + TAU * ((cellNoise(17) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (cellNoise(18) + 1) * 0.5 * 0.7244094488188977)) radius (13 + (cellNoise(19) + 1) * 0.5 * 18) * PI / 128 amount (cellNoise(20) > 0 ? 0.8 : -0.8)
+  spot pressure lon -PI + TAU * ((cellNoise(21) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (cellNoise(22) + 1) * 0.5 * 0.7244094488188977)) radius (13 + (cellNoise(23) + 1) * 0.5 * 18) * PI / 128 amount (cellNoise(24) > 0 ? 0.8 : -0.8)
+  spot pressure lon -PI + TAU * ((cellNoise(25) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (cellNoise(26) + 1) * 0.5 * 0.7244094488188977)) radius (13 + (cellNoise(27) + 1) * 0.5 * 18) * PI / 128 amount (cellNoise(28) > 0 ? 0.8 : -0.8)
+  spot pressure lon -PI + TAU * ((cellNoise(29) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (cellNoise(30) + 1) * 0.5 * 0.7244094488188977)) radius (13 + (cellNoise(31) + 1) * 0.5 * 18) * PI / 128 amount (cellNoise(32) > 0 ? 0.8 : -0.8)
+  spot pressure lon -PI + TAU * ((cellNoise(33) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (cellNoise(34) + 1) * 0.5 * 0.7244094488188977)) radius (13 + (cellNoise(35) + 1) * 0.5 * 18) * PI / 128 amount (cellNoise(36) > 0 ? 0.8 : -0.8)
+  spot moisture lon -PI + TAU * ((cellNoise(37) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (cellNoise(38) + 1) * 0.5 * 0.7244094488188977)) radius (18 + (cellNoise(39) + 1) * 0.5 * 20) * PI / 128 amount 0.35 + (cellNoise(40) + 1) * 0.5 * 0.4
+  spot moisture lon -PI + TAU * ((cellNoise(41) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (cellNoise(42) + 1) * 0.5 * 0.7244094488188977)) radius (18 + (cellNoise(43) + 1) * 0.5 * 20) * PI / 128 amount 0.35 + (cellNoise(44) + 1) * 0.5 * 0.4
+  spot moisture lon -PI + TAU * ((cellNoise(45) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (cellNoise(46) + 1) * 0.5 * 0.7244094488188977)) radius (18 + (cellNoise(47) + 1) * 0.5 * 20) * PI / 128 amount 0.35 + (cellNoise(48) + 1) * 0.5 * 0.4
+  spot moisture lon -PI + TAU * ((cellNoise(49) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (cellNoise(50) + 1) * 0.5 * 0.7244094488188977)) radius (18 + (cellNoise(51) + 1) * 0.5 * 20) * PI / 128 amount 0.35 + (cellNoise(52) + 1) * 0.5 * 0.4
+  spot moisture lon -PI + TAU * ((cellNoise(53) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (cellNoise(54) + 1) * 0.5 * 0.7244094488188977)) radius (18 + (cellNoise(55) + 1) * 0.5 * 20) * PI / 128 amount 0.35 + (cellNoise(56) + 1) * 0.5 * 0.4
+  spot moisture lon -PI + TAU * ((cellNoise(57) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (cellNoise(58) + 1) * 0.5 * 0.7244094488188977)) radius (18 + (cellNoise(59) + 1) * 0.5 * 20) * PI / 128 amount 0.35 + (cellNoise(60) + 1) * 0.5 * 0.4
+  spot moisture lon -PI + TAU * ((cellNoise(61) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (cellNoise(62) + 1) * 0.5 * 0.7244094488188977)) radius (18 + (cellNoise(63) + 1) * 0.5 * 20) * PI / 128 amount 0.35 + (cellNoise(64) + 1) * 0.5 * 0.4
+  spot moisture lon -PI + TAU * ((cellNoise(65) + 1) * 0.5) lat asin(1 - 2 * (0.14173228346456693 + (cellNoise(66) + 1) * 0.5 * 0.7244094488188977)) radius (18 + (cellNoise(67) + 1) * 0.5 * 20) * PI / 128 amount 0.35 + (cellNoise(68) + 1) * 0.5 * 0.4
 }
 
 stage forcing "Apply planet forcing" {

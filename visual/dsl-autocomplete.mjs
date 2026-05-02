@@ -50,7 +50,7 @@ const ALL_NAMESPACES = [...new Set(
 
 const NAMESPACE_DOC = {
   sim: "Stage primitives + per-cell control flow (cell/event/each, wind, advect, diffuse, clamp, ...)",
-  core: "Math + neighbor helpers (sin, cos, hypot, smoothstep, sample, neighborMax, ...)",
+  core: "Math + neighbor helpers (sin, cos, hypot, smoothstep, cellNoise, neighborMax, ...)",
   init: "Init verbs for presets and stamps (fill, spot, ellipse, region, copy, eachCell)",
   geo: "Geodesic position builtins (lon, lat, x, y, u, v, px, py, pz, i, PI, TAU, E, N)",
   clock: "Time builtins (dt, frame)",

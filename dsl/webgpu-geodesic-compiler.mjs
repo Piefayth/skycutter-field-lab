@@ -473,7 +473,7 @@ function exprUsesNeighborMax(expr) {
 const RESERVED_IDENTIFIERS = new Set([
   "true", "false", "dt", "frame", "PI", "TAU", "N", "x", "y", "u", "v", "lon", "lat", "px", "py", "pz", "i",
   "params", "consts", "planet",
-  "noise", "neighborMax", "max", "min", "abs", "sin", "asin", "cos", "exp", "sqrt", "pow", "smoothstep", "clamp", "hypot",
+  "cellNoise", "neighborMax", "max", "min", "abs", "sin", "asin", "cos", "exp", "sqrt", "pow", "smoothstep", "clamp", "hypot",
 ]);
 
 function compileActions(actions, ctx) {
@@ -564,8 +564,14 @@ function compileCall(ast, ctx) {
       if (field?.type !== "Identifier") throw new Error("neighborMax(field) requires a field identifier");
       return `neighborMax_${field.name}(cell)`;
     }
-    case "noise":
-      return `spatialNoise(vec3<f32>(px, py, pz), ${args[0]})`;
+    case "cellNoise": {
+      // 1-arg: natural sphere scale. 2-arg: scale-multiplied sphere coords.
+      const scale = args.length >= 2 ? args[1] : null;
+      const coords = scale
+        ? `(vec3<f32>(px, py, pz) * (${scale}))`
+        : `vec3<f32>(px, py, pz)`;
+      return `spatialNoise(${coords}, ${args[0]})`;
+    }
     case "max":
     case "min":
     case "abs":

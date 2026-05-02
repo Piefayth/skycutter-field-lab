@@ -28,7 +28,7 @@ use clock dt, frame
 use geo x, y, i, lon, lat, u, v, px, py, pz, N, PI, TAU
 use sim cell, event, each, diffuse, clamp
 use init fill, region, eachCell
-use core clamp, smoothstep, max, min, abs, hypot, noise, sample
+use core clamp, smoothstep, max, min, abs, hypot, cellNoise
 
 field a
 

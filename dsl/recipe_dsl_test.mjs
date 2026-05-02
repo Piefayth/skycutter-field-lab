@@ -118,7 +118,7 @@ recipe "Init Test"
 use init fill, spot, ellipse, region, eachCell
 use sim cell
 use geo x, y, i, lon, lat, u, v, px, py, pz, N, PI, TAU
-use core noise
+use core cellNoise
 field A, B
 
 preset seeded "Seeded" {
@@ -129,7 +129,7 @@ preset seeded "Seeded" {
   eachCell {
     let dx = lon
     when dx > 0 {
-      add B = noise(2) * 0.1
+      add B = cellNoise(2) * 0.1
     }
   }
 }

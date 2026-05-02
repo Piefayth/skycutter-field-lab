@@ -99,26 +99,47 @@ stage push "Push" {
   assert(pass.source.includes("select(0.75, params.p_gain, params.p_gain == params.p_gain)"), "fallback was dropped");
 });
 
-test("noise lowers to spatial geodesic noise", () => {
+test("cellNoise lowers to spatial geodesic noise", () => {
   const recipe = compileDsl(`
 recipe "Noise"
 use sim cell
 use clock dt, frame
 use geo px, py, pz
-use core noise
+use core cellNoise
 field A
 
 stage push "Push" {
   reads A
   writes A
   cell {
-    add A = noise(7) * dt
+    add A = cellNoise(7) * dt
   }
 }
 `);
   const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
   assert(pass.source.includes("fn spatialNoise"), "spatial noise helper missing");
-  assert(pass.source.includes("spatialNoise(vec3<f32>(px, py, pz), 7.0)"), "noise call did not use position");
+  assert(pass.source.includes("spatialNoise(vec3<f32>(px, py, pz), 7.0)"), "cellNoise call did not use position");
+});
+
+test("cellNoise(seed, scale) emits scaled sphere coords", () => {
+  const recipe = compileDsl(`
+recipe "Scaled noise"
+use sim cell
+use clock dt
+use geo px, py, pz
+use core cellNoise
+field A
+
+stage push "Push" {
+  reads A
+  writes A
+  cell {
+    add A = cellNoise(11, 2.5) * dt
+  }
+}
+`);
+  const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
+  assert(pass.source.includes("spatialNoise((vec3<f32>(px, py, pz) * (2.5"), "scale arg not multiplied into coords");
 });
 
 test("compiles a local event stage to per-field WGSL passes", () => {

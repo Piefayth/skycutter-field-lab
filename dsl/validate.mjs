@@ -127,10 +127,10 @@ export function validateNameUniqueness(schema, stages = []) {
     for (const name of stage.declares ?? []) claim(name, "declared");
   }
   // Builtin names that recipe declarations can never shadow without
-  // breaking semantics: literals (true/false) and the math/sample
-  // helpers that DSL bodies invoke as function calls. Driven by
-  // `RESERVED_NAMES` in dsl-spec — adding a math fn or stencil helper
-  // automatically reserves its name.
+  // breaking semantics: literals (true/false), math fns, and stencil
+  // helpers (neighborMax, ...) that DSL bodies invoke as function
+  // calls. Driven by `RESERVED_NAMES` in dsl-spec — adding a math fn
+  // or stencil helper automatically reserves its name.
   //
   // Geodesic position coordinates (x, y, lon, lat, u, v, px, py, pz, i)
   // and projection constants (PI, TAU, N) are deliberately NOT in the
@@ -467,16 +467,6 @@ function validateExpr(
 }
 
 function validateCall(ast, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers, allowImplicitGeo = true) {
-  if (ast.callee.type === "Identifier" && ast.callee.name === "sample") {
-    requireImport(imports, "core", "sample", label);
-    if (ast.args.length !== 3) throw new Error(`${label}: sample expects 3 arguments`);
-    const [field, dx, dy] = ast.args;
-    if (field.type !== "Identifier") throw new Error(`${label}: sample first argument must be a field name`);
-    requireVisibleField(field.name, visibleFields, label, "sample field");
-    validateExpr(dx, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers, allowImplicitGeo);
-    validateExpr(dy, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers, allowImplicitGeo);
-    return;
-  }
   if (ast.callee.type === "Identifier" && ast.callee.name === "neighborMax") {
     requireImport(imports, "core", "neighborMax", label);
     if (ast.args.length !== 1) throw new Error(`${label}: neighborMax expects 1 argument`);

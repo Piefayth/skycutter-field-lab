@@ -38,7 +38,7 @@ grid geodesic tiles 64
 use clock dt, frame
 use geo x, y, i, lon, lat, u, v, px, py, pz, N, PI, TAU
 use sim wind, advect, diffuse, clamp, normalize, cell, event, each
-use core clamp, smoothstep, max, min, abs, hypot, noise, sample, neighborMax
+use core clamp, smoothstep, max, min, abs, hypot, cellNoise, neighborMax
 use init fill, eachCell
 
 field A, B, W, R, spreadMask

@@ -131,22 +131,13 @@ export const MATH_FUNCTIONS = [
     alsoPrimitive: true,  // `PIPELINE_PRIMITIVES` doesn't list clamp again — this flag carries the dual form.
   },
   {
-    name: "noise",
-    target: "c.noise",
-    arity: [1],
+    name: "cellNoise",
+    target: "c.cellNoise",
+    arity: [1, 2],
     importNamespace: "core",
-    signature: "noise(seed)",
-    doc: "Spatially-coherent 3D hash noise. Uses the cell's (px, py, pz) plus seed. Returns [-1, 1]. Seed by `frame * something` to vary in time.",
-    example: "add moisture = noise(frame * 0.13) * amp * 0.25",
-  },
-  {
-    name: "noise2",
-    target: "c.noise2",
-    arity: [2],
-    importNamespace: "core",
-    signature: "noise2(x, y)",
-    doc: "2D hash noise (preset eachCell only — not available in stage bodies). Use over (lon, lat) for spatially-coherent random init.",
-    example: "set moistureSeed = noise2(lon * 1.4, lat * 1.7)",
+    signature: "cellNoise(seed) | cellNoise(seed, scale)",
+    doc: "Spatially-coherent 3D noise sampled at the cell's unit-sphere position. Geometrically correct on a sphere — no pole distortion. `scale` controls spatial frequency (default 1; higher = finer texture). Returns [-1, 1]. In preset top-level (no cell context), falls back to a deterministic per-seed scalar — useful for randomizing spot positions.",
+    example: "let basin = cellNoise(31, 2.5)\nadd moisture = cellNoise(frame * 0.13) * amp * 0.25",
   },
 ];
 
@@ -157,13 +148,6 @@ export const MATH_FUNCTIONS = [
 // ---------------------------------------------------------------------------
 
 export const STENCIL_HELPERS = [
-  {
-    name: "sample",
-    arity: 3,
-    importNamespace: "core",
-    signature: "sample(field, dx, dy)",
-    doc: "Reads FIELD at the cell's neighbor offset (dx, dy). Used inside `each` blocks for stencil computations.",
-  },
   {
     name: "neighborMax",
     arity: 1,
@@ -364,7 +348,7 @@ export const STAGE_BLOCKS = [
     name: "each",
     importNamespace: "sim",
     signature: "each { ... per-cell side-effect ... }",
-    doc: "Like `cell`, but for stages that READ neighbors via `sample` or `neighborMax`. No event accounting — use for stencil reads that don't fire discrete events.",
+    doc: "Like `cell`, but for stages that READ neighbors via `neighborMax`. No event accounting — use for stencil reads that don't fire discrete events.",
   },
 ];
 
