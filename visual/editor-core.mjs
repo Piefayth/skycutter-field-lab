@@ -102,11 +102,11 @@ export function createEditorView({ parent, onApply, onDocChange, language = "jav
         ...(isFieldLab ? [dslHoverTooltip(), dslAutocomplete()] : []),
         // Mount tooltips into <body> so they escape per-window stacking
         // contexts. Each `.win` sets z-index, which creates a stacking
-        // context — without this, a tooltip belonging to window A would
-        // be drawn behind any window B that's stacked above A, even
-        // with `position: fixed`. Hosting tooltips at body level lets
-        // their CSS z-index actually win.
-        tooltips({ parent: document.body, position: "absolute" }),
+        // context; a `position: fixed` tooltip rendered inside that
+        // context still gets eclipsed by sibling windows. Hosting at
+        // body level + the `.cm-tooltip` z-index in style.css lets it
+        // stack above everything.
+        tooltips({ parent: document.body }),
         keymap.of([
           {
             key: "Mod-Enter",
