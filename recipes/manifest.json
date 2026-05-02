@@ -49,6 +49,18 @@
       "name": "Kuramoto chimera (example)",
       "path": "recipes/kuramoto-chimera.mjs",
       "summary": "Coupled phase oscillators on a sphere. Sakaguchi lag α near π/2 lets sync and chaos coexist; the sphere's closed surface produces rotating-spiral chimera patterns."
+    },
+    {
+      "id": "ice-albedo",
+      "name": "Ice-albedo (example)",
+      "path": "recipes/ice-albedo.mjs",
+      "summary": "Bistable climate. Ice reflects sunlight and stays cold; ocean absorbs it and stays warm. Two stable basins; a perturbation near the threshold can flip the entire planet."
+    },
+    {
+      "id": "sir-epidemic",
+      "name": "SIR epidemic (example)",
+      "path": "recipes/sir-epidemic.mjs",
+      "summary": "Spatial Susceptible-Infected-Recovered model. Outbreak fronts propagate from seed points and leave a recovered trail behind them; β/γ controls wave speed and final attack rate."
     }
   ]
 }

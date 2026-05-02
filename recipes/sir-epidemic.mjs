@@ -1,0 +1,162 @@
+// SIR spatial epidemic — Kendall / Murray model.
+//
+// The classical compartment model lifted to a spatial field: every cell
+// holds three densities — Susceptible, Infected, Recovered — and a
+// person can transition S → I (via local contact) or I → R (recovery).
+// Adding diffusion of I models population mobility: an outbreak in one
+// region spreads to neighbors over time.
+//
+// Equations per cell:
+//   dS/dt = -beta * S * I
+//   dI/dt =  beta * S * I - gamma * I        (+ diffusion of I)
+//   dR/dt =  gamma * I
+//
+// What you see: a traveling wave of infection radiating outward from
+// the seed, leaving a "burnout" trail of recovered behind it. Once
+// the wave passes a region, S has been depleted and the wave can't
+// re-enter — so isolated outbreaks burn through to extinction. R0
+// (= beta / gamma) sets the wave speed and final attack rate.
+//
+// Murray's classic "rabies-fox" application of this model produces a
+// ring of rabid foxes propagating across a continent.
+
+import { ramp, gray } from "../prims/colorers.mjs";
+import { compileDsl } from "../dsl/compiler.mjs";
+
+export const views = [
+  { id: "I",     label: "Infected (I)",     color: ramp("I", [12, 12, 22], [240, 90, 70]) },
+  { id: "R",     label: "Recovered (R)",   color: ramp("R", [16, 22, 28], [120, 200, 240]) },
+  { id: "S",     label: "Susceptible (S)", color: gray("S") },
+];
+
+export const overlays = [];
+
+export const metrics = [
+  { id: "infected",   label: "I",     source: "I",            spark: true, precision: 3 },
+  { id: "recovered",  label: "R",     source: "R",            spark: true, precision: 3 },
+  { id: "susceptible",label: "S",     source: "S",            spark: true, precision: 3 },
+  { id: "outbreak",   label: "OUTBRK", source: "coverage:I:0.05", mini: true, precision: 3 },
+  { id: "fps",        label: "FPS",   source: "fps",          mini: true },
+];
+
+export const regime = {
+  silent: {},
+  intermittent: { outbreak: 0.005 },
+  active: { outbreak: 0.05 },
+  runaway: { outbreak: 0.4 },
+};
+
+export const pipelineDsl = `
+recipe "SIR epidemic"
+summary "Spatial Susceptible-Infected-Recovered model. Outbreak waves propagate from seed points; burnt-out (recovered) regions can't re-infect, so the front always moves outward into susceptible territory. Beta / gamma is the basic reproduction number — slide it past 1.0 and the wave starts to travel."
+recommendedPreset patientZero
+grid geodesic tiles 64
+
+use clock dt, frame
+use geo lon, lat, x, y, i, N, PI, TAU
+use sim cell, diffuse, clamp
+use init fill, spot, eachCell
+use core clamp, smoothstep, max, min, abs, hypot, exp, cellNoise
+
+field S, I, R
+
+setting simRateHz slider min 0 max 360 step 1 default 60 label "SIM RATE"
+// Infection rate per S·I contact. Together with gamma sets R0 = β/γ.
+param beta      slider min 0 max 4 step 0.01 default 1.40 label "β (INFECT)"
+// Recovery rate. Higher = faster transition out of I.
+param gamma     slider min 0 max 2 step 0.01 default 0.40 label "γ (RECOVER)"
+// Mobility of infected — how fast the outbreak diffuses across cells.
+// In real-world terms: how mixed the population is.
+param mobility  slider min 0 max 4 step 0.01 default 0.60 label "MOBILITY"
+// Time scaling.
+param rate      slider min 1 max 100 step 1 default 30 label "RATE"
+
+stamp seed "Plant outbreak" {
+  // Drop a fresh outbreak. Reduces local S to make sure infection
+  // can take hold (otherwise the pulse just decays).
+  spot I lon lon lat lat radius r amount 0.4
+  spot S lon lon lat lat radius r amount -0.3
+}
+
+stamp vaccinate "Vaccinate region" {
+  // Move a chunk of S → R locally. Rapid containment fence.
+  spot R lon lon lat lat radius r amount 0.6
+  spot S lon lon lat lat radius r amount -0.6
+}
+
+stamp barrier "Recovered firewall" {
+  // Pre-immunize a thin band — useful for trying to halt a
+  // propagating wave before it arrives.
+  spot R lon lon lat lat radius r * 0.5 amount 0.85
+  spot S lon lon lat lat radius r * 0.5 amount -0.85
+}
+
+preset patientZero "Single seed" {
+  // Naive population, one infection point near the equator.
+  fill S 0.95
+  fill I 0
+  fill R 0
+  spot I lon 0 lat 0 radius 0.08 amount 0.4
+  spot S lon 0 lat 0 radius 0.08 amount -0.3
+}
+
+preset multiSeed "Three seeds" {
+  // Multiple ignition points — fronts collide where they meet.
+  fill S 0.95
+  fill I 0
+  fill R 0
+  spot I lon -1.5 lat 0.4 radius 0.08 amount 0.4
+  spot S lon -1.5 lat 0.4 radius 0.08 amount -0.3
+  spot I lon 1.5 lat -0.4 radius 0.08 amount 0.4
+  spot S lon 1.5 lat -0.4 radius 0.08 amount -0.3
+  spot I lon 0   lat 1.0 radius 0.08 amount 0.4
+  spot S lon 0   lat 1.0 radius 0.08 amount -0.3
+}
+
+preset preVaccinated "Partial herd immunity" {
+  // ~40% of cells already recovered (vaccinated). Outbreaks have a
+  // hard time propagating — many fronts stall.
+  fill I 0
+  eachCell {
+    let immune = cellNoise(11, 1.5) * 0.5 + 0.5
+    when immune > 0.5 {
+      set R = 0.7
+      set S = 0.3
+    }
+    when immune <= 0.5 {
+      set R = 0
+      set S = 1
+    }
+  }
+  spot I lon 0 lat 0 radius 0.08 amount 0.4
+  spot S lon 0 lat 0 radius 0.08 amount -0.3
+}
+
+stage spread "Spatial mobility of infected" {
+  reads I
+  writes I
+  diffuse I amount mobility * 0.18 * dt * rate
+}
+
+stage react "S→I→R reaction" {
+  reads S, I, R
+  writes S, I, R
+  cell {
+    let infect  = beta * S * I
+    let recover = gamma * I
+    add S = -infect            * dt * rate
+    add I = (infect - recover) * dt * rate
+    add R = recover            * dt * rate
+  }
+}
+
+stage clampPositive "Keep populations non-negative" {
+  reads S, I, R
+  writes S, I, R
+  clamp S 0 1
+  clamp I 0 1
+  clamp R 0 1
+}
+`;
+
+export const pipeline = compileDsl(pipelineDsl);

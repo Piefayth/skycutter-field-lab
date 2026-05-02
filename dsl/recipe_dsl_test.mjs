@@ -5,6 +5,8 @@ import * as inverterFront from "../recipes/inverter-front.mjs";
 import * as fitzhughNagumo from "../recipes/fitzhugh-nagumo.mjs";
 import * as belousovZhabotinsky from "../recipes/belousov-zhabotinsky.mjs";
 import * as kuramotoChimera from "../recipes/kuramoto-chimera.mjs";
+import * as iceAlbedo from "../recipes/ice-albedo.mjs";
+import * as sirEpidemic from "../recipes/sir-epidemic.mjs";
 import * as blank from "../recipes/blank.mjs";
 import { compileDsl, diagnoseDsl, parseStages, parseStamps, parseTopLevelDeclarations } from "./compiler.mjs";
 import { createPipelineMetadata } from "../visual/pipeline-metadata.mjs";
@@ -19,6 +21,8 @@ const recipes = [
   fitzhughNagumo,
   belousovZhabotinsky,
   kuramotoChimera,
+  iceAlbedo,
+  sirEpidemic,
   blank,
 ];
 
