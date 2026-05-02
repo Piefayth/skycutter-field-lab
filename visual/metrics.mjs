@@ -345,11 +345,21 @@ function formatMetricValue(value, decl, values) {
     return `${value ?? 0}`;
   }
   if (!Number.isFinite(value)) return "—";
-  if (Number.isFinite(decl.precision)) return value.toFixed(decl.precision);
+  if (Number.isFinite(decl.precision)) return signPad(value.toFixed(decl.precision));
   if (decl.source === "fps") return value.toFixed(0);
   if (decl.source === "events" || decl.source?.startsWith("event:")) return `${Math.round(value)}`;
-  if (decl.source === "cloudVariance" || decl.source === "variance") return value.toFixed(4);
-  return value.toFixed(3);
+  if (decl.source === "cloudVariance" || decl.source === "variance") return signPad(value.toFixed(4));
+  return signPad(value.toFixed(3));
+}
+
+// Pad non-negative numeric strings with a leading non-breaking space
+// so the metric cell column doesn't reflow by one mono char-width
+// when a value crosses zero. Regular spaces at the start of an
+// element get collapsed by HTML whitespace handling; NBSP is
+// preserved. The strip is monospace + tabular-nums so an NBSP
+// renders at exactly the same width as a minus sign.
+function signPad(text) {
+  return text.startsWith("-") ? text : ` ${text}`;
 }
 
 // Pick the strongest accent for a metric: explicit `decl.color` from the

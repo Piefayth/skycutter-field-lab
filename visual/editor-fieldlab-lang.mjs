@@ -17,7 +17,7 @@
 import { StreamLanguage, LanguageSupport, syntaxHighlighting, HighlightStyle } from "@codemirror/language";
 import { Tag, tags as t } from "@lezer/highlight";
 import { extractDslNames } from "../dsl/introspect.mjs";
-import { createFieldColorPalette, fieldCssColor, fieldCssTint } from "./field-colors.mjs";
+import { createFieldColorPalette, fieldCssColor, fieldCssBgPill } from "./field-colors.mjs";
 
 // Recipe-identity declarations. One per line.
 const RECIPE_KEYWORDS = new Set([
@@ -134,7 +134,16 @@ export const fieldLabHighlight = HighlightStyle.define([
   { tag: t.docComment,                        color: "var(--bone-mute)", fontStyle: "italic" },
   { tag: t.function(t.variableName),          color: "var(--bone-bright)" },
   { tag: t.function(t.propertyName),          color: "var(--bone-bright)" },
-  { tag: t.variableName,                      color: "var(--bone)" },
+  // Note: NO base rule for `t.variableName` here. Field tags (used for
+  // per-name colored field references) are derived as children of
+  // `t.variableName` via `Tag.define(t.variableName)`. If the parent
+  // had a `color` rule here, CodeMirror would emit two competing CSS
+  // classes on the span (one from this style for the variableName
+  // parent, one from the field-specific style with the per-name
+  // color), and cascade order between the two stylesheets would
+  // determine which colour the user actually sees — washing the
+  // per-field colours into bone-tone. Locals fall through to the
+  // editor's inherited foreground colour instead, which IS bone.
   { tag: t.propertyName,                      color: "var(--info)" },
   { tag: t.definition(t.variableName),        color: "var(--bone-bright)" },
   { tag: definitionNameTag,                   color: "var(--bone-bright)", fontWeight: "600" },
@@ -167,9 +176,12 @@ export function createFieldLabExtensions(fieldNames = [], sourceNames = [], immu
   const fieldHighlight = HighlightStyle.define(names.map((name) => ({
     tag: fieldTags.get(name),
     color: fieldCssColor(name, palette),
-    backgroundColor: fieldCssTint(name, 40, palette),
-    borderRadius: "3px",
-    padding: "0 2px",
+    // Subtle pill — text uses the palette's 68% lightness, bg uses 60%
+    // at 18% alpha. The lightness gap between text and bg is what gives
+    // the pill its punch on a dark surround; same-colour text+bg reads
+    // as a washed ghost of the text.
+    backgroundColor: fieldCssBgPill(name, 0.18, palette),
+    borderRadius: "2px",
   })));
   return [
     syntaxHighlighting(fieldLabHighlight),

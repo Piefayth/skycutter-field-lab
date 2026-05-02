@@ -16,14 +16,31 @@ export function createFieldColorPalette(fieldNames = []) {
   for (const name of ordered) {
     const hue = chooseSeparatedHue(hashName(name) % 360, usedHues);
     usedHues.push(hue);
-    palette.set(name, hslToRgb(hue / 360, 0.96, 0.68));
+    const rgb = hslToRgb(hue / 360, 0.96, 0.68);
+    // Store hue alongside RGB so callers building backgrounds can pick
+    // a different lightness without round-tripping through RGB. The
+    // existing `r`/`g`/`b` keys stay flat for back-compat with consumers
+    // that just want the colour.
+    palette.set(name, { hue, r: rgb.r, g: rgb.g, b: rgb.b });
   }
   return palette;
 }
 
 export function fieldRgbForName(name, palette = activePalette) {
   const key = String(name ?? "field");
-  return palette.get(key) ?? standaloneColor(key);
+  const entry = palette.get(key);
+  if (entry) return { r: entry.r, g: entry.g, b: entry.b };
+  return standaloneColor(key);
+}
+
+export function fieldHueFor(name, palette = activePalette) {
+  const key = String(name ?? "field");
+  const entry = palette.get(key);
+  if (entry?.hue !== undefined) return entry.hue;
+  // Fallback when the palette hasn't been populated for this name yet.
+  // Skips chooseSeparatedHue's spreading, but is fine for one-off
+  // standalone callers (graph chip render before recipe load, etc.).
+  return hashName(key) % 360;
 }
 
 export function fieldCssColor(name, palette = activePalette) {
@@ -33,6 +50,18 @@ export function fieldCssColor(name, palette = activePalette) {
 
 export function fieldCssTint(name, mix = 38, palette = activePalette) {
   return `color-mix(in srgb, ${fieldCssColor(name, palette)} ${mix}%, transparent)`;
+}
+
+// Background-pill colour for a field token. Drops lightness from the
+// palette's 68% (used for text) to 52% so the pill reads as a distinct
+// saturated wash on a dark surround instead of a same-colour ghost of
+// the text. `alpha` is the final pill opacity (0..1). 24% alpha tuned
+// for the live editor's 10.5px font — at smaller pixel sizes the pill
+// has less surface area, so it needs more saturation/opacity than the
+// 12px demo to read as the same visual weight.
+export function fieldCssBgPill(name, alpha = 0.24, palette = activePalette) {
+  const hue = fieldHueFor(name, palette);
+  return `hsl(${hue} 96% 52% / ${alpha})`;
 }
 
 function normalizeNames(fieldNames) {
