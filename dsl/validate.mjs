@@ -8,6 +8,7 @@ import {
   STAMP_IDENTIFIERS,
   formatCallee,
 } from "./expr-parser.mjs";
+import { RESERVED_NAMES } from "./dsl-spec.mjs";
 
 const UNIFORM_IDENTIFIERS = new Set(["PI", "TAU"]);
 
@@ -127,22 +128,18 @@ export function validateNameUniqueness(schema, stages = []) {
   }
   // Builtin names that recipe declarations can never shadow without
   // breaking semantics: literals (true/false) and the math/sample
-  // helpers that DSL bodies invoke as function calls.
+  // helpers that DSL bodies invoke as function calls. Driven by
+  // `RESERVED_NAMES` in dsl-spec — adding a math fn or stencil helper
+  // automatically reserves its name.
   //
   // Geodesic position coordinates (x, y, lon, lat, u, v, px, py, pz, i)
-  // and projection constants (PI, TAU, N, W, H, E) are deliberately NOT
-  // reserved — recipes are allowed to declare a `field u` (gray-scott)
-  // or `field W` (inverter-front), in which case a bare reference
-  // resolves to the field. The position coord is then unreachable
-  // inside that recipe's stages, which is the recipe author's choice.
-  const RESERVED = new Set([
-    "true", "false", "null", "undefined",
-    "neighborMax", "sample",
-    "max", "min", "abs", "hypot", "sin", "asin", "cos", "exp", "sqrt", "pow",
-    "smoothstep", "clamp", "noise", "noise2",
-  ]);
+  // and projection constants (PI, TAU, N) are deliberately NOT in the
+  // reserved set — recipes can declare e.g. `field u` (gray-scott) or
+  // `field W` (inverter-front), in which case a bare reference resolves
+  // to the field. The position coord is then unreachable inside that
+  // recipe's stages, which is the recipe author's choice.
   for (const [name, kind] of declaredBy) {
-    if (RESERVED.has(name)) {
+    if (RESERVED_NAMES.has(name)) {
       throw new Error(`Name "${name}" (${kind}) collides with a builtin/reserved identifier; rename it`);
     }
   }

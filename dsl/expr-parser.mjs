@@ -1,4 +1,17 @@
 // Field Lab DSL expression parser.
+//
+// Symbol metadata (math fns, builtins, geo constants) is owned by
+// `dsl-spec.mjs`. The Map / Set exports below are derived projections
+// for the parser's hot path — adding a math function or a builtin only
+// requires editing dsl-spec.mjs.
+
+import {
+  MATH_FUNCTIONS,
+  CLOCK_BUILTINS,
+  GEO_BUILTINS,
+  GEO_CONSTANTS,
+  STAMP_EXTRAS,
+} from "./dsl-spec.mjs";
 
 const EXPR_BINARY_PRECEDENCE = new Map([
   ["??", 1],
@@ -19,43 +32,24 @@ const EXPR_BINARY_PRECEDENCE = new Map([
   ["%", 7],
 ]);
 
-export const EXPR_FUNC_TARGETS = new Map([
-  ["clamp", "c.clamp"],
-  ["smoothstep", "c.smoothstep"],
-  ["max", "c.max"],
-  ["min", "c.min"],
-  ["abs", "c.abs"],
-  ["hypot", "Math.hypot"],
-  ["noise", "c.noise"],
-  ["noise2", "c.noise2"],
-  ["sin", "c.sin"],
-  ["asin", "Math.asin"],
-  ["cos", "c.cos"],
-  ["exp", "c.exp"],
-  ["sqrt", "c.sqrt"],
-  ["pow", "c.pow"],
-]);
+// Math fn → compile-time callee. Derived from MATH_FUNCTIONS in dsl-spec.
+export const EXPR_FUNC_TARGETS = new Map(
+  MATH_FUNCTIONS.map((m) => [m.name, m.target]),
+);
 
-export const EXPR_FUNC_ARITY = new Map([
-  ["clamp", [3]],
-  ["smoothstep", [3]],
-  ["max", [1, 2]],
-  ["min", [1, 2]],
-  ["abs", [1]],
-  ["hypot", [2]],
-  ["noise", [1]],
-  ["noise2", [2]],
-  ["sin", [1]],
-  ["asin", [1]],
-  ["cos", [1]],
-  ["exp", [1]],
-  ["sqrt", [1]],
-  ["pow", [2]],
-]);
+// Math fn → allowed argument counts. Derived from MATH_FUNCTIONS.
+export const EXPR_FUNC_ARITY = new Map(
+  MATH_FUNCTIONS.map((m) => [m.name, m.arity]),
+);
 
-export const CLOCK_IDENTIFIERS = new Set(["dt", "frame"]);
-export const GEO_IDENTIFIERS = new Set(["x", "y", "i", "lon", "lat", "u", "v", "px", "py", "pz", "N", "TAU", "PI"]);
-export const STAMP_IDENTIFIERS = new Set(["r", ...GEO_IDENTIFIERS]);
+export const CLOCK_IDENTIFIERS = new Set(CLOCK_BUILTINS.map((b) => b.name));
+export const GEO_IDENTIFIERS = new Set(
+  [...GEO_BUILTINS, ...GEO_CONSTANTS].map((b) => b.name),
+);
+export const STAMP_IDENTIFIERS = new Set([
+  ...STAMP_EXTRAS.map((s) => s.name),
+  ...GEO_IDENTIFIERS,
+]);
 
 export function tokenizeExpr(source) {
   const tokens = [];
