@@ -1342,6 +1342,142 @@ input[type="range"]::-moz-range-thumb {
 }
 
 /* =============================================================================
+ * DSL HOVER TOOLTIP
+ *
+ * Pops on hover over an identifier in the DSL editor. Reads from
+ * `dsl-symbols.mjs` (catalog) or the live recipe text (declared fields/
+ * params/etc). Aesthetic: same vocabulary as `.win` — ink-850 base,
+ * line-strong border, no rounding, sharp 1px lines. The kind badge
+ * carries semantic colour; everything else is bone tones.
+ * ===========================================================================*/
+
+/* CodeMirror's tooltip wrapper — drop the default white background and
+   let our `.dsl-tooltip` paint the surface. */
+.cm-tooltip:has(.dsl-tooltip) {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+.dsl-tooltip {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--bone);
+  background: var(--ink-850);
+  border: 1px solid var(--line-strong);
+  box-shadow:
+    0 6px 20px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(124, 249, 157, 0.04);
+  max-width: 360px;
+  min-width: 220px;
+  pointer-events: auto;
+}
+
+.dsl-tooltip__head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 6px var(--s-3);
+  background: linear-gradient(180deg, #161c25 0%, #0d1218 100%);
+  border-bottom: 1px solid var(--line);
+}
+
+.dsl-tooltip__title {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--bone-bright);
+  letter-spacing: 0.02em;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dsl-tooltip__kind {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--bone-mute);
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  background: var(--ink-900);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Per-kind accent on the badge — tints kind text without overwhelming. */
+.dsl-tooltip__kind[data-kind="primVerb"]      { color: var(--signal); border-color: var(--signal-dim); }
+.dsl-tooltip__kind[data-kind="actionVerb"]    { color: var(--signal); border-color: var(--signal-dim); }
+.dsl-tooltip__kind[data-kind="initVerb"]      { color: var(--signal); border-color: var(--signal-dim); }
+.dsl-tooltip__kind[data-kind="mathFn"]        { color: var(--bone-bright); }
+.dsl-tooltip__kind[data-kind="mathConst"]     { color: var(--info); }
+.dsl-tooltip__kind[data-kind="builtin"]       { color: var(--info); }
+.dsl-tooltip__kind[data-kind="declKeyword"]   { color: var(--amber); }
+.dsl-tooltip__kind[data-kind="blockKeyword"]  { color: var(--amber); }
+.dsl-tooltip__kind[data-kind="controlKw"]     { color: var(--violet); }
+.dsl-tooltip__kind[data-kind="logicalOp"]     { color: var(--violet); }
+.dsl-tooltip__kind[data-kind="literal"]       { color: var(--info); }
+.dsl-tooltip__kind[data-kind="modifier"]      { color: var(--bone-dim); font-style: italic; }
+.dsl-tooltip__kind[data-kind="field"]         { color: var(--bone-bright); border-color: var(--bone-mute); }
+.dsl-tooltip__kind[data-kind="source"]        { color: var(--bone-bright); border-color: var(--bone-mute); font-style: italic; }
+.dsl-tooltip__kind[data-kind="param"],
+.dsl-tooltip__kind[data-kind="const"],
+.dsl-tooltip__kind[data-kind="planet"]        { color: var(--info); border-color: var(--line-strong); }
+.dsl-tooltip__kind[data-kind="declared"]      { color: var(--violet); }
+
+.dsl-tooltip__body {
+  padding: var(--s-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.dsl-tooltip__sig {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--bone-bright);
+  background: var(--ink-950);
+  border-left: 2px solid var(--signal-dim);
+  padding: 5px 8px;
+  white-space: pre-wrap;
+  font-variant-ligatures: none;
+}
+
+.dsl-tooltip__doc {
+  color: var(--bone);
+}
+
+.dsl-tooltip__import {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--bone-dim);
+  letter-spacing: 0.04em;
+}
+
+.dsl-tooltip__example {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--bone-dim);
+  background: var(--ink-950);
+  border-left: 2px solid var(--bone-mute);
+  padding: 5px 8px;
+  white-space: pre-wrap;
+  font-variant-ligatures: none;
+}
+
+.dsl-tooltip__decl {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--bone-mute);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* =============================================================================
  * PIPELINE GRAPH EDITOR
  *
  * Two stacked panes: pipeline DSL source, then the graph canvas.

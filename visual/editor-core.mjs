@@ -15,6 +15,7 @@ import { javascript } from "@codemirror/lang-javascript";
 import {
   createFieldLabExtensions, fieldLabHighlight, fieldNameKey,
 } from "./editor-fieldlab-lang.mjs";
+import { dslHoverTooltip } from "./dsl-tooltip.mjs";
 
 export const fieldLabTheme = EditorView.theme({
   "&": {
@@ -97,6 +98,7 @@ export function createEditorView({ parent, onApply, onDocChange, language = "jav
         languageCompartment.of(isFieldLab
           ? createFieldLabExtensions([])
           : [syntaxHighlighting(fieldLabHighlight), javascript()]),
+        ...(isFieldLab ? [dslHoverTooltip()] : []),
         keymap.of([
           {
             key: "Mod-Enter",
