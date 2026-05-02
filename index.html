@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Field Lab — Skycutter</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- IBM Plex Sans / Condensed for UI labels; Bitstream Vera Sans Mono
+         for code + numerics is self-hosted under fonts/ via @font-face
+         in style.css. -->
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600&display=swap"
+    />
+    <link rel="stylesheet" href="./style.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+
+          "@codemirror/state": "https://esm.sh/@codemirror/state@6.4.1",
+          "@codemirror/view": "https://esm.sh/@codemirror/view@6.26.3?external=@codemirror/state",
+          "@codemirror/commands": "https://esm.sh/@codemirror/commands@6.5.0?external=@codemirror/state,@codemirror/view,@codemirror/language",
+          "@codemirror/language": "https://esm.sh/@codemirror/language@6.10.1?external=@codemirror/state,@codemirror/view,@lezer/highlight,@lezer/common,@lezer/lr",
+          "@codemirror/autocomplete": "https://esm.sh/@codemirror/autocomplete@6.13.0?external=@codemirror/state,@codemirror/view,@codemirror/language,@codemirror/commands",
+          "@codemirror/lint": "https://esm.sh/@codemirror/lint@6.5.0?external=@codemirror/state,@codemirror/view",
+          "@codemirror/lang-javascript": "https://esm.sh/@codemirror/lang-javascript@6.2.2?external=@codemirror/state,@codemirror/view,@codemirror/language,@codemirror/commands,@codemirror/autocomplete,@codemirror/lint,@lezer/common,@lezer/highlight,@lezer/javascript,@lezer/lr",
+
+          "@lezer/common": "https://esm.sh/@lezer/common@1.2.1",
+          "@lezer/highlight": "https://esm.sh/@lezer/highlight@1.2.0?external=@lezer/common",
+          "@lezer/javascript": "https://esm.sh/@lezer/javascript@1.4.17?external=@lezer/common,@lezer/highlight,@lezer/lr",
+          "@lezer/lr": "https://esm.sh/@lezer/lr@1.4.2?external=@lezer/common"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div class="grain" aria-hidden="true"></div>
+    <div class="scanlines" aria-hidden="true"></div>
+
+    <!-- Top menu bar — populated by visual/menu.mjs at boot. File menu
+         carries recipe selection; Window menu toggles the Pipeline pane. -->
+    <div id="menuBar" class="menu-bar-host"></div>
+
+    <header class="lab-header">
+      <div class="lab-header__metrics" id="metricsStrip">
+        <div class="metric-cell" data-metric="cloud">
+          <span class="metric-cell__label">CLOUD</span>
+          <canvas class="metric-cell__spark" data-spark="cloud" width="80" height="20"></canvas>
+          <span class="metric-cell__num" id="metricCloud">—</span>
+        </div>
+        <div class="metric-cell" data-metric="variance">
+          <span class="metric-cell__label">VAR σ²</span>
+          <canvas class="metric-cell__spark" data-spark="variance" width="80" height="20"></canvas>
+          <span class="metric-cell__num" id="metricVariance">—</span>
+        </div>
+        <div class="metric-cell" data-metric="events">
+          <span class="metric-cell__label">EVENTS</span>
+          <canvas class="metric-cell__spark" data-spark="events" width="80" height="20"></canvas>
+          <span class="metric-cell__num" id="metricEvents">—</span>
+        </div>
+        <div class="metric-cell" data-metric="active">
+          <span class="metric-cell__label">ACTIVE</span>
+          <canvas class="metric-cell__spark" data-spark="active" width="80" height="20"></canvas>
+          <span class="metric-cell__num" id="metricActive">—</span>
+        </div>
+        <div class="metric-cell metric-cell--mini" data-metric="wind">
+          <span class="metric-cell__label">WIND</span>
+          <span class="metric-cell__num" id="metricWind">—</span>
+        </div>
+        <div class="metric-cell metric-cell--mini" data-metric="growth">
+          <span class="metric-cell__label">G/T</span>
+          <span class="metric-cell__num" id="metricGrowth">—</span>
+        </div>
+        <div class="metric-cell metric-cell--mini" data-metric="fps">
+          <span class="metric-cell__label">FPS</span>
+          <span class="metric-cell__num" id="metricFps">—</span>
+        </div>
+        <div class="metric-cell metric-cell--mini metric-cell--hidden" data-metric="activity">
+          <span class="metric-cell__label">δ45</span>
+          <span class="metric-cell__num" id="metricActivity">—</span>
+        </div>
+        <div class="regime" id="regimeIndicator" data-regime="idle" title="Phase-boundary classifier: SILENT (no events, low variance) → INTRMT (some events / low variance) → ACTIVE (events firing or variance > 0.012) → RUNAWAY (events > 5000/tick or active-area > 0.6). Heuristic; thresholds tuned for the weather pipeline.">
+          <span class="regime__legend">REGIME</span>
+          <span class="regime__seg regime__seg--silent">SILENT</span>
+          <span class="regime__seg regime__seg--inter">INTRMT</span>
+          <span class="regime__seg regime__seg--active">ACTIVE</span>
+          <span class="regime__seg regime__seg--runaway">RUNAWY</span>
+        </div>
+      </div>
+    </header>
+
+    <main id="app">
+      <div class="viewport-frame">
+        <canvas id="viewport"></canvas>
+        <div class="viewport-corner viewport-corner--tl"></div>
+        <div class="viewport-corner viewport-corner--tr"></div>
+        <div class="viewport-corner viewport-corner--bl"></div>
+        <div class="viewport-corner viewport-corner--br"></div>
+        <div id="probe" class="probe"><div class="probe__empty">probe empty</div></div>
+      </div>
+
+      <aside id="panel" aria-label="Field controls">
+        <!-- Recipe selection lives in the top menu bar's File menu now;
+             the side panel only carries play-time controls. The hidden
+             <select> stays as the canonical state holder so the menu and
+             any URL-driven swap continue to round-trip through one
+             change-event channel. -->
+        <select id="recipeSelect" class="visually-hidden" aria-hidden="true" tabindex="-1"></select>
+
+        <section class="lab-section" data-section="init">
+          <header class="lab-section__head">
+            <span class="lab-section__idx">[ 02 ]</span>
+            <h2>INIT</h2>
+            <span class="lab-section__rule"></span>
+          </header>
+          <div class="lab-section__body">
+            <div class="control-row">
+              <label for="presetSelect">Preset</label>
+              <!-- options populated from the active recipe's `presets[]`
+                   declarations by visual/recipes.mjs::populatePresetSelect. -->
+              <select id="presetSelect"></select>
+            </div>
+            <div class="button-row">
+              <button id="pauseButton" class="btn btn--primary">Pause</button>
+              <button id="stepButton" class="btn">Step</button>
+              <button id="resetButton" class="btn">Reset</button>
+              <button id="randomButton" class="btn">Random</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="lab-section" data-section="render">
+          <header class="lab-section__head">
+            <span class="lab-section__idx">[ 03 ]</span>
+            <h2>RENDER</h2>
+            <span class="lab-section__rule"></span>
+          </header>
+          <div class="lab-section__body">
+            <div class="control-row">
+              <label for="viewSelect">View</label>
+              <select id="viewSelect"></select>
+            </div>
+            <!-- Per-recipe overlay toggles (e.g. wind arrows). Empty
+                 when the recipe declares no overlays. -->
+            <div id="overlaysGrid" class="toggle-grid"></div>
+            <!-- App-level paint UI toggle. Lives here (vs. with recipe
+                 parameters) because it's a UX preference, not a recipe
+                 input. -->
+            <div class="toggle-grid paint-toggle">
+              <label><input id="autoPausePaint" type="checkbox" /><span>pause on paint</span></label>
+            </div>
+          </div>
+        </section>
+
+        <section class="lab-section lab-section--collapse" data-section="parameters">
+          <header class="lab-section__head">
+            <span class="lab-section__idx">[ 04 ]</span>
+            <h2>PARAMETERS</h2>
+            <span class="lab-section__rule"></span>
+            <button class="lab-section__chev" aria-label="Toggle"></button>
+          </header>
+          <div class="lab-section__body">
+            <!--
+              Recipe parameters. Number-typed render as sliders;
+              boolean-typed render as checkboxes. visual/controls.mjs
+              populates from the active recipe's `parameters[]`
+              declarations + any user-added entries persisted under
+              `recipes.{id}.parametersAdded`.
+            -->
+            <div id="parametersGrid" class="parameter-grid"></div>
+          </div>
+        </section>
+
+        <section class="lab-section lab-section--collapse" data-section="stamps">
+          <header class="lab-section__head">
+            <span class="lab-section__idx">[ 05 ]</span>
+            <h2>STAMPS</h2>
+            <span class="lab-section__rule"></span>
+            <button class="lab-section__chev" aria-label="Toggle"></button>
+          </header>
+          <div class="lab-section__body">
+            <!--
+              Dynamic stamp picker. `#brushSelect`'s options are built
+              from the active recipe's `stamps[]` declarations. Left-click
+              on the canvas always paints with the selected brush — no
+              mode toggle, no shift modifier. The recipes module
+              auto-collapses this whole section when the active recipe
+              declares an empty stamps[] array.
+            -->
+            <div class="control-row">
+              <label for="brushSelect">Stamp</label>
+              <select id="brushSelect"></select>
+            </div>
+            <!--
+              Brush radius is part of the app's paint UI; lives outside
+              the recipe-controlled parameters surface so painting works
+              the same regardless of recipe. Same .param--number row
+              shape as a recipe-declared number parameter.
+            -->
+            <div class="param param--number">
+              <label>RADIUS <span id="brushOut" class="param__val"></span></label>
+              <input id="brushRadius" type="range" min="0.05" max="0.7" step="0.01" value="0.25" />
+            </div>
+          </div>
+        </section>
+
+      </aside>
+
+      <!-- Floating authoring windows mount here. visual/boot.mjs creates
+           DSL-first recipe windows at runtime; each is positioned
+           absolutely over the viewport. -->
+      <div id="windowLayer" class="window-layer"></div>
+    </main>
+
+    <div id="stats" class="stats">frame 0</div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

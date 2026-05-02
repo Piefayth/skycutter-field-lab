@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Field Lab WebGPU Geodesic</title>
+  </head>
+  <body>
+    <pre id="result">running...</pre>
+    <script type="module">
+      import { runWebGpuGeodesicChecks } from "./visual/webgpu-geodesic-harness.mjs";
+
+      const resultEl = document.querySelector("#result");
+      try {
+        const result = await runWebGpuGeodesicChecks();
+        resultEl.textContent = JSON.stringify(result, null, 2);
+        if (!result.ok) document.body.dataset.failed = "true";
+      } catch (error) {
+        resultEl.textContent = error.stack ?? error.message;
+        document.body.dataset.failed = "true";
+      }
+    </script>
+  </body>
+</html>

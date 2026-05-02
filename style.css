@@ -1,0 +1,2470 @@
+/* =============================================================================
+ * Field Lab — scientific-instrument aesthetic.
+ *
+ * Bitstream Vera Sans Mono for code + numerics (self-hosted under
+ * fonts/); IBM Plex Sans / Condensed for UI labels. Deep-ink dark base;
+ * single phosphor-green signal accent. Sharp 1px borders, register
+ * marks at section corners, subtle grain + scanline atmosphere.
+ * ===========================================================================*/
+
+@font-face {
+  font-family: "Bitstream Vera Sans Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: local("Bitstream Vera Sans Mono"),
+       url("./fonts/VeraMono.woff") format("woff");
+}
+@font-face {
+  font-family: "Bitstream Vera Sans Mono";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: local("Bitstream Vera Sans Mono Italic"),
+       url("./fonts/VeraMono-Italic.woff") format("woff");
+}
+@font-face {
+  font-family: "Bitstream Vera Sans Mono";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: local("Bitstream Vera Sans Mono Bold"),
+       url("./fonts/VeraMono-Bold.woff") format("woff");
+}
+@font-face {
+  font-family: "Bitstream Vera Sans Mono";
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+  src: local("Bitstream Vera Sans Mono Bold Italic"),
+       url("./fonts/VeraMono-Bold-Italic.woff") format("woff");
+}
+
+:root {
+  /* Type */
+  --font-mono: "Bitstream Vera Sans Mono", ui-monospace, "Menlo", "Consolas", monospace;
+  --font-sans: "IBM Plex Sans", -apple-system, system-ui, sans-serif;
+  --font-cond: "IBM Plex Sans Condensed", "IBM Plex Sans", sans-serif;
+
+  /* Color palette */
+  --ink-950: #06080c;
+  --ink-900: #0a0d12;
+  --ink-850: #0d1117;
+  --ink-800: #11151c;
+  --ink-700: #161c26;
+  --ink-600: #1c2330;
+  --ink-500: #232b3b;
+  --line: #232c3a;
+  --line-strong: #354156;
+  --bone: #d8d4c4;
+  --bone-bright: #f0eada;
+  --bone-dim: #97928a;
+  --bone-mute: #5a584f;
+  --signal: #7cf99d;
+  --signal-glow: rgba(124, 249, 157, 0.32);
+  --signal-dim: #4a8a5e;
+  --signal-trace: rgba(124, 249, 157, 0.55);
+  --amber: #ffb454;
+  --amber-trace: rgba(255, 180, 84, 0.6);
+  --warn: #ff8c5c;
+  --danger: #ff5050;
+  --danger-trace: rgba(255, 80, 80, 0.55);
+  --info: #5ec9ff;
+  --info-trace: rgba(94, 201, 255, 0.55);
+  --violet: #b69cff;
+
+  /* Spacing */
+  --s-0: 2px;
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 28px;
+
+  --panel-w: 380px;
+  --header-h: 60px;
+  --menubar-h: 26px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--ink-950);
+  color: var(--bone);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.45;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  display: grid;
+  grid-template-rows: var(--menubar-h) var(--header-h) 1fr;
+}
+
+button { font-family: inherit; }
+
+/* ATMOSPHERE: grain + horizontal scanlines */
+
+.grain {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  opacity: 0.06;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)' opacity='0.92'/></svg>");
+}
+
+.scanlines {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9998;
+  opacity: 0.4;
+  background-image: repeating-linear-gradient(
+    180deg,
+    transparent 0px,
+    transparent 2px,
+    rgba(255, 255, 255, 0.012) 2px,
+    rgba(255, 255, 255, 0.012) 3px
+  );
+}
+
+/* HEADER */
+
+.lab-header {
+  display: flex;
+  align-items: stretch;
+  background: linear-gradient(180deg, #0d1219 0%, #08090e 100%);
+  border-bottom: 1px solid var(--line);
+  position: relative;
+  z-index: 5;
+}
+
+.lab-header::after {
+  content: "";
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(124, 249, 157, 0.35) 30%,
+    rgba(124, 249, 157, 0.5) 50%,
+    rgba(124, 249, 157, 0.35) 70%,
+    transparent 100%
+  );
+}
+
+.lab-header__title {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  border-right: 1px solid var(--line);
+  padding: 0 var(--s-5);
+}
+
+.lab-header__mark {
+  color: var(--signal);
+  text-shadow: 0 0 10px var(--signal-glow);
+}
+
+.lab-header__sep { color: var(--bone-mute); margin: 0 var(--s-1); }
+.lab-header__lab { color: var(--bone); letter-spacing: 0.18em; }
+
+.lab-header__rev {
+  margin-left: auto;
+  color: var(--bone-mute);
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  padding-left: var(--s-3);
+}
+
+.lab-header__metrics {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  flex: 1;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  padding: 8px var(--s-3);
+}
+
+.lab-header__metrics::-webkit-scrollbar { height: 2px; }
+.lab-header__metrics::-webkit-scrollbar-thumb { background: var(--line-strong); }
+
+.metric-cell {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  grid-template-areas:
+    "label spark"
+    "num   spark";
+  align-items: center;
+  gap: 1px var(--s-2);
+  min-width: 132px;
+  padding: 0 var(--s-3);
+  border-right: 1px solid var(--line);
+  flex-shrink: 0;
+}
+
+.metric-cell--mini {
+  grid-template-columns: auto;
+  grid-template-rows: auto auto;
+  grid-template-areas: "label" "num";
+  min-width: 56px;
+  text-align: left;
+}
+
+.metric-cell--hidden { display: none; }
+
+.metric-cell__label {
+  grid-area: label;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  color: var(--bone-mute);
+  text-transform: uppercase;
+}
+
+.metric-cell__num {
+  grid-area: num;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--bone-bright);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
+}
+
+.metric-cell--mini .metric-cell__num { font-size: 12px; }
+
+.metric-cell__spark {
+  grid-area: spark;
+  display: block;
+  align-self: center;
+  /* Lock the rendered size so the bitmap can be HiDPI-scaled without
+   * also changing the canvas's intrinsic CSS size. Without this, setting
+   * `canvas.width` (the bitmap dim) also grows the rendered width since
+   * the canvas has no CSS sizing — and the strip's flex layout then
+   * grows the cells, which (if you ever resync the bitmap to the new
+   * clientWidth) starts an exponential blow-up into a horizontal scroll. */
+  width: 80px;
+  height: 20px;
+  justify-self: start;
+}
+
+/* REGIME LED-strip */
+
+.regime {
+  display: flex;
+  align-self: stretch;
+  margin: 8px 0 8px var(--s-3);
+  border: 1px solid var(--line);
+  background: var(--ink-850);
+  flex-shrink: 0;
+  position: relative;
+}
+
+.regime__legend {
+  position: absolute;
+  top: -10px;
+  left: 0;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.2em;
+  color: var(--bone-mute);
+  cursor: help;
+}
+
+.regime__legend:hover {
+  color: var(--bone-dim);
+}
+
+.regime__seg {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  padding: 0 var(--s-3);
+  display: flex;
+  align-items: center;
+  color: var(--bone-mute);
+  border-right: 1px solid var(--line);
+  background: var(--ink-850);
+  position: relative;
+  white-space: nowrap;
+}
+
+.regime__seg:last-child { border-right: none; }
+
+.regime[data-regime="silent"] .regime__seg--silent {
+  color: var(--info);
+  background: rgba(94, 201, 255, 0.1);
+  text-shadow: 0 0 6px rgba(94, 201, 255, 0.45);
+}
+.regime[data-regime="intermittent"] .regime__seg--inter {
+  color: var(--signal);
+  background: rgba(124, 249, 157, 0.1);
+  text-shadow: 0 0 6px var(--signal-glow);
+}
+.regime[data-regime="active"] .regime__seg--active {
+  color: var(--amber);
+  background: rgba(255, 180, 84, 0.12);
+  text-shadow: 0 0 6px rgba(255, 180, 84, 0.45);
+}
+.regime[data-regime="runaway"] .regime__seg--runaway {
+  color: var(--danger);
+  background: rgba(255, 80, 80, 0.16);
+  text-shadow: 0 0 8px var(--danger-trace);
+  animation: regime-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes regime-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
+}
+
+/* MAIN: viewport + side panel */
+
+#app {
+  position: relative;
+  display: grid;
+  /* `minmax(0, 1fr)` lets the viewport column shrink below its intrinsic
+     min-content width when the left dock widens. Without it, browsers
+     honour the auto min on `1fr`, refuse to collapse the viewport, and
+     either overflow the right panel offscreen or shrink it to make
+     room — both wrong. The right panel stays pinned at `--panel-w`. */
+  grid-template-columns: var(--left-dock-w, 0px) minmax(0, 1fr) var(--panel-w);
+  overflow: hidden;
+  min-height: 0;
+}
+
+.viewport-frame {
+  position: relative;
+  display: block;
+  background: var(--ink-950);
+  overflow: hidden;
+  /* Belt-and-braces: also reset min-width here so the column shrink
+     defined by `minmax(0, 1fr)` actually reaches the canvas. */
+  min-width: 0;
+  /* Pin to the auto-sized middle column. Without explicit placement,
+     auto-placement would put viewport-frame into column 1 (the left
+     dock track), shoving #panel into the 1fr column where it'd shrink
+     under the panel-w track that nothing's claiming. */
+  grid-column: 2;
+}
+
+#viewport {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.viewport-corner {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--line-strong);
+  pointer-events: none;
+}
+
+.viewport-corner--tl { top: 8px; left: 8px; border-right: 0; border-bottom: 0; }
+.viewport-corner--tr { top: 8px; right: 8px; border-left: 0; border-bottom: 0; }
+.viewport-corner--bl { bottom: 8px; left: 8px; border-right: 0; border-top: 0; }
+.viewport-corner--br { bottom: 8px; right: 8px; border-left: 0; border-top: 0; }
+
+#panel {
+  background: var(--ink-900);
+  border-left: 1px solid var(--line);
+  overflow-y: auto;
+  padding: var(--s-3) var(--s-4) var(--s-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  scrollbar-width: thin;
+  /* Pin to the rightmost column so the fixed `--panel-w` track owns
+     this element. */
+  grid-column: 3;
+}
+
+#panel::-webkit-scrollbar { width: 6px; }
+#panel::-webkit-scrollbar-track { background: transparent; }
+#panel::-webkit-scrollbar-thumb { background: var(--line-strong); }
+#panel::-webkit-scrollbar-thumb:hover { background: var(--bone-mute); }
+
+/* SECTIONS */
+
+.lab-section {
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, var(--ink-800) 0%, var(--ink-850) 100%);
+  position: relative;
+}
+
+.lab-section::before,
+.lab-section::after {
+  content: "";
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  border: 1px solid var(--line-strong);
+  pointer-events: none;
+}
+
+.lab-section::before { top: -3px; left: -3px; border-bottom: 0; border-right: 0; }
+.lab-section::after { bottom: -3px; right: -3px; border-top: 0; border-left: 0; }
+
+.lab-section__head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 6px var(--s-3);
+  border-bottom: 1px solid var(--line);
+  background: var(--ink-700);
+  user-select: none;
+}
+
+.lab-section--collapse > .lab-section__head { cursor: pointer; }
+
+.lab-section__idx {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--bone-mute);
+  letter-spacing: 0.1em;
+}
+
+.lab-section__head h2 {
+  margin: 0;
+  font-family: var(--font-cond);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  color: var(--bone-bright);
+  text-transform: uppercase;
+}
+
+.lab-section__rule {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, var(--line) 0%, transparent 100%);
+  margin: 0 var(--s-2);
+}
+
+.lab-section__chev {
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--line);
+  background: var(--ink-850);
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+  padding: 0;
+  border-radius: 0;
+}
+
+.lab-section__chev::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 5px;
+  height: 5px;
+  border-bottom: 1px solid var(--bone);
+  border-right: 1px solid var(--bone);
+  transform: rotate(45deg) translate(-1px, -1px);
+  transition: transform 0.2s ease;
+}
+
+.lab-section--collapsed .lab-section__chev::before {
+  transform: rotate(-45deg) translate(-1px, 1px);
+}
+
+.lab-section__body {
+  padding: var(--s-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.lab-section__body--tight { padding: var(--s-2); }
+
+.lab-section--collapsed .lab-section__body { display: none; }
+
+/* Locked = the active recipe declared this section's surface as
+ * explicitly empty (e.g. `stamps: []`). The body is forced collapsed
+ * and the chevron + head are non-interactive — no point letting the
+ * user expand a section that has nothing to show. The whole section
+ * is dimmed so it reads as "intentionally not part of this recipe"
+ * rather than "broken or loading". */
+.lab-section--locked {
+  opacity: 0.42;
+  pointer-events: none;
+}
+.lab-section--locked .lab-section__chev::before {
+  /* Replace the chevron arrow with a small dash to read as "off". */
+  transform: none;
+  width: 6px;
+  height: 0;
+  border: 0;
+  border-top: 1px solid var(--bone-mute);
+}
+.lab-section--locked .lab-section__head { cursor: default; }
+.lab-section--locked .lab-section__body { display: none; }
+
+/* CONTROLS */
+
+.control-row {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  align-items: center;
+  gap: var(--s-2);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--bone-dim);
+  text-transform: uppercase;
+}
+
+.control-row label { text-align: left; }
+
+select,
+input[type="text"],
+input[type="number"] {
+  width: 100%;
+  background: var(--ink-950);
+  color: var(--bone-bright);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 6px 28px 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  outline: none;
+  letter-spacing: 0.04em;
+}
+
+select:focus,
+input:focus {
+  border-color: var(--signal);
+  box-shadow: 0 0 0 1px rgba(124, 249, 157, 0.25);
+}
+
+select {
+  appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--bone-dim) 50%),
+    linear-gradient(135deg, var(--bone-dim) 50%, transparent 50%);
+  background-position: calc(100% - 14px) center, calc(100% - 9px) center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+/* TOGGLES */
+
+.toggle-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px var(--s-2);
+}
+
+.toggle-grid label {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--bone-dim);
+  cursor: pointer;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  text-transform: uppercase;
+}
+
+.toggle-grid label:hover {
+  background: var(--ink-700);
+  color: var(--bone);
+}
+
+.toggle-grid input[type="checkbox"] {
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  background: var(--ink-950);
+  border: 1px solid var(--line-strong);
+  margin: 0;
+  position: relative;
+  cursor: pointer;
+  flex-shrink: 0;
+  border-radius: 0;
+}
+
+.toggle-grid input[type="checkbox"]:checked {
+  background: var(--signal);
+  border-color: var(--signal);
+  box-shadow: 0 0 6px -1px var(--signal-glow);
+}
+
+.toggle-grid input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 4px;
+  height: 7px;
+  border-bottom: 1.5px solid var(--ink-950);
+  border-right: 1.5px solid var(--ink-950);
+  transform: rotate(45deg) translate(-1px, -1px);
+}
+
+.toggle-grid label:has(input:checked) {
+  color: var(--bone-bright);
+}
+
+.toggle-grid label span { line-height: 1; }
+
+.paint-toggle { grid-template-columns: 1fr 1fr; }
+
+/* PARAMETERS — number-type renders as a slider row, boolean-type as a
+   checkbox row. Both share the .param wrapper. The grid lays them out
+   in a single column so checkbox rows align cleanly with their labels;
+   number-typed sliders span the row width. */
+
+.parameter-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.param--number {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.param--number > label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  color: var(--bone-mute);
+  text-transform: uppercase;
+}
+
+.param--boolean {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--bone);
+}
+
+.param--boolean input[type="checkbox"] {
+  width: 12px;
+  height: 12px;
+  margin: 0;
+  appearance: none;
+  background: var(--ink-950);
+  border: 1px solid var(--line-strong);
+  position: relative;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.param--boolean input[type="checkbox"]:checked {
+  background: var(--signal);
+  border-color: var(--signal);
+}
+
+.param--boolean input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 4px;
+  height: 7px;
+  border-bottom: 1.5px solid var(--ink-950);
+  border-right: 1.5px solid var(--ink-950);
+  transform: rotate(45deg) translate(-1px, -1px);
+}
+
+.param__val {
+  font-size: 11px;
+  color: var(--bone-bright);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+input[type="range"] {
+  appearance: none;
+  width: 100%;
+  height: 14px;
+  background: transparent;
+  border: 0;
+  margin: 0;
+  cursor: pointer;
+  padding: 0;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 2px;
+  background: var(--line-strong);
+  border: 0;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 10px;
+  height: 12px;
+  background: var(--signal);
+  border: 0;
+  margin-top: -5px;
+  box-shadow: 0 0 5px -1px var(--signal-glow);
+  cursor: pointer;
+  border-radius: 0;
+}
+
+input[type="range"]:focus::-webkit-slider-thumb {
+  box-shadow: 0 0 8px var(--signal-glow);
+}
+
+input[type="range"]::-moz-range-track {
+  height: 2px;
+  background: var(--line-strong);
+  border: 0;
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 10px;
+  height: 12px;
+  background: var(--signal);
+  border: 0;
+  box-shadow: 0 0 5px -1px var(--signal-glow);
+  border-radius: 0;
+}
+
+/* BUTTONS */
+
+.button-row {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.btn {
+  flex: 1 1 0;
+  background: var(--ink-700);
+  color: var(--bone);
+  border: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  padding: 6px 8px;
+  cursor: pointer;
+  text-transform: uppercase;
+  border-radius: 0;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  white-space: nowrap;
+}
+
+.btn:hover {
+  background: var(--ink-600);
+  border-color: var(--line-strong);
+  color: var(--bone-bright);
+}
+
+.btn:focus-visible {
+  outline: 1px solid var(--signal);
+  outline-offset: 1px;
+}
+
+.btn:active { background: var(--ink-500); }
+
+.btn--primary {
+  border-color: var(--signal-dim);
+  color: var(--signal);
+}
+
+.btn--primary:hover {
+  background: rgba(124, 249, 157, 0.08);
+  border-color: var(--signal);
+  color: var(--signal);
+}
+
+.btn--danger {
+  border-color: rgba(255, 80, 80, 0.4);
+  color: var(--danger);
+}
+
+.btn--danger:hover {
+  background: rgba(255, 80, 80, 0.06);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* =============================================================================
+ * MENU BAR
+ * ===========================================================================*/
+
+.menu-bar {
+  display: flex;
+  align-items: stretch;
+  height: var(--menubar-h);
+  background: linear-gradient(180deg, #0c1117 0%, #060a10 100%);
+  border-bottom: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--bone-dim);
+  user-select: none;
+  position: relative;
+  /* Above any floating window. The window manager increments z-index
+     on every click starting at 100; menus need to escape that
+     stacking range so File / Window dropdowns can paint on top of an
+     active pipeline window. */
+  z-index: 9000;
+}
+
+.menu-bar__brand {
+  display: flex;
+  align-items: center;
+  padding: 0 var(--s-4) 0 var(--s-5);
+  font-weight: 500;
+  color: var(--signal);
+  letter-spacing: 0.18em;
+  border-right: 1px solid var(--line);
+  text-shadow: 0 0 8px var(--signal-glow);
+}
+
+.menu-bar__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+.menu-bar__rev {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--s-4);
+  color: var(--bone-mute);
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  border-left: 1px solid var(--line);
+}
+
+.menu {
+  position: relative;
+}
+
+.menu__trigger {
+  background: transparent;
+  border: 0;
+  padding: 0 var(--s-3);
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+  height: 100%;
+}
+
+.menu__trigger:hover { color: var(--bone-bright); }
+.menu--open > .menu__trigger {
+  background: var(--ink-700);
+  color: var(--bone-bright);
+}
+
+.menu__panel {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  min-width: 200px;
+  padding: 4px 0;
+  background: var(--ink-850);
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5);
+  z-index: 100;
+}
+
+.menu--open > .menu__panel { display: flex; flex-direction: column; }
+
+.menu__item,
+.submenu__trigger {
+  display: block;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  padding: 5px var(--s-3);
+  text-align: left;
+  font: inherit;
+  letter-spacing: 0.08em;
+  text-transform: none;
+  color: var(--bone-dim);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.menu__item:hover,
+.submenu__trigger:hover {
+  background: var(--ink-700);
+  color: var(--bone-bright);
+}
+
+.menu__item--checked { color: var(--signal); }
+.menu__item--checked:hover { color: var(--signal); }
+
+.submenu { position: relative; }
+
+.submenu__panel {
+  display: none;
+  position: absolute;
+  top: 0;
+  left: 100%;
+  min-width: 200px;
+  padding: 4px 0;
+  background: var(--ink-850);
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5);
+}
+
+.submenu--open > .submenu__panel { display: flex; flex-direction: column; }
+
+/* =============================================================================
+ * FLOATING WINDOWS
+ * ===========================================================================*/
+
+.window-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.win {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  background: var(--ink-850);
+  border: 1px solid var(--line-strong);
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(124, 249, 157, 0.04);
+  pointer-events: auto;
+  min-width: 240px;
+  min-height: 160px;
+  font-family: var(--font-sans);
+}
+
+.win__head {
+  display: flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 4px 0 var(--s-3);
+  background: linear-gradient(180deg, #161c25 0%, #0d1218 100%);
+  border-bottom: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--bone-dim);
+  cursor: grab;
+  user-select: none;
+}
+
+.win__head:active { cursor: grabbing; }
+
+.win__title {
+  color: var(--bone);
+  flex: 1;
+  /* Clamp to one line so docked windows of varying title length keep
+     a consistent height — overflow truncates rather than wrapping. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.win__buttons { display: flex; gap: 1px; }
+
+.win__btn {
+  background: transparent;
+  border: 0;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--bone-mute);
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+
+.win__btn:hover { background: var(--ink-700); color: var(--bone); }
+.win__btn--close:hover { background: var(--danger); color: var(--ink-950); }
+
+.win__body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: var(--s-3);
+  gap: var(--s-2);
+  overflow: hidden;
+  min-height: 0;
+}
+
+.win--minimized .win__body { display: none; }
+
+/* Docked: minimized windows pile in a row at the bottom-right. The
+   titlebar gets a subtle phosphor underline so the dock reads as a
+   discrete strip, not a stack of orphaned headers.
+
+   The min-width / min-height resets here are load-bearing: `.win`
+   declares `min-width: 240px; min-height: 160px` for floating
+   windows, which silently wins over the inline `width: 200px`
+   the dock layout sets — minimized windows would render 240×160
+   instead of 200×24, overlapping each other and crowding the
+   panel. Resetting the mins lets the dock dimensions actually take
+   effect. */
+.win--minimized {
+  min-width: 0;
+  min-height: 0;
+  height: auto !important;
+  border-color: var(--line);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+}
+
+.win--minimized .win__head {
+  border-bottom: 1px solid var(--signal-dim);
+  background: linear-gradient(180deg, #0e1421 0%, #0a0f17 100%);
+}
+
+.win--minimized:hover .win__head {
+  border-bottom-color: var(--signal);
+  color: var(--bone);
+}
+
+/* Dock-left: window pinned to the left edge of the window layer as a
+   full-height column. Inline `left/top/bottom/width` come from
+   applyDockedLeftLayout(); this rule resets the base min-height so the
+   `bottom: 0` stretch actually fills, drops the float drop-shadow
+   (looks weird flush against an edge), and squares off the left border
+   so the column reads as part of the chrome. */
+.win--docked-left {
+  min-height: 0;
+  border-left: 0;
+  border-radius: 0;
+  box-shadow:
+    8px 0 16px rgba(0, 0, 0, 0.45),
+    0 0 0 1px rgba(124, 249, 157, 0.04);
+}
+
+.win--docked-left .win__head {
+  border-bottom-color: var(--signal-dim);
+}
+
+/* Resize grip behaves as width-only when the window is docked left:
+   change the cursor + the diagonal stripe gets a vertical hint. */
+.win--docked-left .win__grip {
+  cursor: e-resize;
+  background:
+    linear-gradient(90deg,
+      transparent 0%,
+      transparent 50%,
+      var(--bone-mute) 50%,
+      var(--bone-mute) 60%,
+      transparent 60%,
+      transparent 80%,
+      var(--bone-mute) 80%,
+      var(--bone-mute) 90%,
+      transparent 90%);
+}
+
+.win__grip {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 12px;
+  height: 12px;
+  cursor: se-resize;
+  background:
+    linear-gradient(135deg,
+      transparent 0%,
+      transparent 40%,
+      var(--bone-mute) 40%,
+      var(--bone-mute) 50%,
+      transparent 50%,
+      transparent 60%,
+      var(--bone-mute) 60%,
+      var(--bone-mute) 70%,
+      transparent 70%);
+  opacity: 0.5;
+}
+
+.win__grip:hover { opacity: 1; }
+
+/* =============================================================================
+ * MODALS
+ * ===========================================================================*/
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(6, 8, 12, 0.55);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  outline: none;
+}
+
+.modal {
+  min-width: 360px;
+  max-width: min(520px, 92vw);
+  background: var(--ink-850);
+  border: 1px solid var(--line-strong);
+  box-shadow:
+    0 18px 48px rgba(0, 0, 0, 0.65),
+    0 0 0 1px rgba(124, 249, 157, 0.08);
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-sans);
+}
+
+.modal__head {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--bone);
+  padding: 8px var(--s-4);
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(180deg, #161c25 0%, #0d1218 100%);
+}
+
+.modal__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-4);
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  color: var(--bone-dim);
+}
+
+.modal__label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--bone-dim);
+}
+
+.modal__input {
+  width: 100%;
+  background: var(--ink-950);
+  color: var(--bone-bright);
+  border: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 6px 8px;
+  outline: none;
+  border-radius: 0;
+}
+
+.modal__input:focus {
+  border-color: var(--signal-dim);
+  box-shadow: inset 0 0 0 1px rgba(124, 249, 157, 0.16);
+}
+
+.modal__status {
+  min-height: 14px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--bone-mute);
+}
+
+.modal__status.is-error {
+  color: var(--warn);
+}
+
+.modal__message {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--bone);
+  line-height: 1.5;
+}
+
+.modal__buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-4) var(--s-3);
+  border-top: 1px solid var(--line);
+  background: var(--ink-900);
+}
+
+/* =============================================================================
+ * TOASTS — anchored top-right, slide in, auto-dismiss.
+ * ===========================================================================*/
+
+.toast-root {
+  position: fixed;
+  top: calc(var(--menubar-h) + var(--header-h) + var(--s-2));
+  right: var(--s-3);
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  pointer-events: none;
+  max-width: 380px;
+}
+
+.toast {
+  pointer-events: auto;
+  cursor: pointer;
+  background: var(--ink-850);
+  border: 1px solid var(--line-strong);
+  border-left: 3px solid var(--signal);
+  color: var(--bone);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 8px 12px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55);
+  transform: translateX(110%);
+  transition: transform 200ms ease-out, opacity 180ms ease-out;
+  opacity: 0;
+}
+
+.toast--enter { transform: translateX(0); opacity: 1; }
+.toast--leave { opacity: 0; transform: translateX(20%); }
+
+.toast--warn  { border-left-color: var(--amber); color: var(--bone); }
+.toast--error { border-left-color: var(--danger); color: var(--warn); }
+
+.modal__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Side-panel "+ New knob/toggle" affordance. Pinned at the top of the
+   knobs / toggles grid; styled as a low-key dashed button so it reads
+   as an editor action and not as a recipe control itself. */
+.control-add-btn {
+  display: block;
+  width: 100%;
+  background: transparent;
+  border: 1px dashed var(--line-strong);
+  color: var(--bone-mute);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding: 5px 8px;
+  cursor: pointer;
+  margin-bottom: 6px;
+}
+
+.control-add-btn:hover {
+  color: var(--signal);
+  border-color: var(--signal-dim);
+  background: rgba(124, 249, 157, 0.04);
+}
+
+/* Inline delete affordance shown next to user-added knobs / toggles
+   only. Recipe-shipped controls don't render this button. */
+.control-delete-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--bone-mute);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.control-delete-btn:hover {
+  color: var(--ink-950);
+  background: var(--danger);
+  border-color: var(--danger);
+}
+
+/* User-added parameter rows get a phosphor-green left rule; the param
+   value / label pushes off to the left, leaving the delete button
+   right-aligned. */
+.param--user-added {
+  border-left: 2px solid var(--signal-dim);
+  padding-left: 4px;
+}
+
+.param--user-added > label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.param--user-added.param--number .param__val,
+.param--user-added.param--boolean span {
+  margin-right: auto;
+}
+
+/* =============================================================================
+ * PIPELINE GRAPH EDITOR
+ *
+ * Two stacked panes: pipeline DSL source, then the graph canvas.
+ *
+ * Graph reads as a schematic, not a flowchart:
+ *   - canvas backdrop is a single bone-mute graticule (no signal-green
+ *     in the grid, so wires read as the only "live" thing)
+ *   - depth-tick numerals along the top edge label the topo columns
+ *   - node cards mirror .lab-section grammar — corner register marks,
+ *     flat ink-700 head bar, [N.NN] + condensed-uppercase title +
+ *     gradient rule, ink-850 body
+ *   - outputs render as field-coloured chips from the generated field
+ *     palette the probe/editor also use (P / M / C dots, not comma-text)
+ *   - ports are hollow terminal blocks; they fill only when their wire
+ *     is touched/selected
+ *   - touched wires brighten with phosphor bloom + a slow stroke-
+ *     dashoffset march that says "data flowing"
+ * ===========================================================================*/
+
+.pg-root {
+  display: grid;
+  grid-template-rows: minmax(0, 1.25fr) minmax(0, 1fr);
+  gap: 0;
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.pg-dsl-pane {
+  display: grid;
+  grid-template-rows: auto minmax(120px, 1fr) auto auto;
+  gap: 6px;
+  min-height: 0;
+  overflow: hidden;
+  padding: 8px 10px;
+  background: var(--ink-900);
+  border: 1px solid var(--line);
+  border-bottom: 0;
+}
+
+.pg-dsl-pane__header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pg-dsl-pane__title {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--signal-trace);
+  white-space: nowrap;
+}
+
+.pg-dsl-pane__status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--bone-mute);
+  text-align: right;
+}
+
+.pg-dsl-pane__status.is-error {
+  color: var(--danger);
+}
+
+.pg-dsl-pane__cm {
+  min-height: 0;
+  border: 1px solid var(--line);
+  background: var(--ink-950);
+  overflow: hidden;
+}
+
+.pg-dsl-pane__cm:focus-within {
+  border-color: var(--signal-dim);
+  box-shadow: inset 0 0 0 1px rgba(124, 249, 157, 0.12);
+}
+
+.pg-dsl-pane__cm .cm-editor {
+  height: 100%;
+  min-height: 0;
+}
+
+.pg-dsl-pane__cm--empty .cm-content::before {
+  content: "stage id \"Name\" { ... }";
+  color: var(--bone-mute);
+}
+
+.pg-dsl-pane__buttons {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.pg-dsl-pane__buttons .btn:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.pg-dsl-pane__diagnostics {
+  margin: 0;
+  max-height: 46px;
+  overflow: auto;
+  padding: 5px 7px;
+  background: var(--ink-950);
+  border-left: 2px solid var(--danger);
+  color: var(--warn);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+}
+
+.pg-dsl-pane__diagnostics[hidden] {
+  display: none;
+}
+
+.pg-dsl-stack {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.pg-dsl-stack > .pg-dsl-section {
+  align-self: stretch;
+  max-height: 100%;
+}
+
+.pg-dsl-stack[data-active="pipeline"] {
+  grid-template-rows: minmax(0, 1fr) auto auto;
+}
+
+.pg-dsl-stack[data-active="stamp"] {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.pg-dsl-stack[data-active="preset"] {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.pg-dsl-section {
+  min-width: 0;
+  min-height: 0;
+  background: var(--ink-950);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.pg-dsl-section:not([open]) .pg-dsl-section__editor {
+  display: none;
+}
+
+.pg-dsl-section[open] {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+  max-height: 100%;
+}
+
+.pg-dsl-section__summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  cursor: pointer;
+  border-bottom: 1px solid transparent;
+}
+
+.pg-dsl-section[open] .pg-dsl-section__summary {
+  border-bottom-color: var(--line);
+}
+
+.pg-dsl-section__title,
+.pg-dsl-section__count {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--bone-mute);
+}
+
+.pg-dsl-section__count {
+  color: var(--signal-trace);
+}
+
+.pg-dsl-section__editor {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  background: var(--ink-950);
+  overflow: hidden;
+}
+
+.pg-dsl-section__editor .cm-editor {
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.pg-dsl-section__editor .cm-scroller {
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
+  overflow: auto !important;
+}
+
+.pg-dsl-section__editor .cm-content {
+  min-height: 0;
+}
+
+.pg-dsl-section__editor .cm-gutters {
+  font-size: 9px;
+}
+
+.pg-dsl-section__editor .cm-content {
+  font-size: 10.5px;
+}
+
+.pg-graph-wrap {
+  position: relative;
+  overflow: hidden;
+  background: var(--ink-950);
+  border: 1px solid var(--line);
+  min-height: 0;
+  touch-action: none;
+  cursor: grab;
+}
+
+.pg-graph-wrap--panning {
+  cursor: grabbing;
+}
+
+.pg-graph-scene {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+  z-index: 1;
+}
+
+.pg-graph-hud {
+  position: absolute;
+  z-index: 8;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  background: color-mix(in srgb, var(--ink-950) 88%, transparent);
+  border: 1px solid var(--line);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.22);
+}
+
+.pg-graph-hud__btn {
+  min-width: 28px;
+  height: 22px;
+  padding: 0 7px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  line-height: 1;
+}
+
+.pg-graph-hud__readout {
+  min-width: 34px;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  letter-spacing: 0.08em;
+  color: var(--bone-mute);
+}
+
+/* Single bone-mute graticule, deliberately dim. No signal-green here —
+   the wires are the only thing on this canvas allowed to be phosphor.
+   Tighter major-grid spacing (40px) so depth columns sit on the lines. */
+.pg-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right,  rgba(216, 212, 196, 0.045) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(216, 212, 196, 0.045) 1px, transparent 1px);
+  background-size: var(--pg-grid-size, 40px) var(--pg-grid-size, 40px);
+  background-position: var(--pg-grid-x, 0) var(--pg-grid-y, 0);
+  z-index: 0;
+}
+
+/* Depth-tick numerals along the top edge — column = topo depth. Made
+   the layout's meaning legible. Renders as inline-block elements
+   absolutely positioned by the JS. */
+.pg-depth-ticks {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 18px;
+  pointer-events: none;
+  z-index: 1;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(8, 11, 16, 0.85) 0%, transparent 100%);
+}
+
+.pg-depth-tick {
+  position: absolute;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  color: var(--bone-mute);
+  text-transform: uppercase;
+  top: 4px;
+}
+
+.pg-depth-tick::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: -1px;
+  width: 1px;
+  height: 6px;
+  background: var(--line-strong);
+  transform: translateX(-50%);
+}
+
+/* Empty-state register crosshair. Reads as "calibrated empty" rather
+   than a void. */
+.pg-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  pointer-events: none;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--bone-mute);
+}
+
+.pg-empty__crosshair {
+  width: 18px;
+  height: 18px;
+  position: relative;
+}
+
+.pg-empty__crosshair::before,
+.pg-empty__crosshair::after {
+  content: "";
+  position: absolute;
+  background: var(--line-strong);
+}
+
+.pg-empty__crosshair::before {
+  top: 8px; left: 0; right: 0; height: 1px;
+}
+
+.pg-empty__crosshair::after {
+  left: 8px; top: 0; bottom: 0; width: 1px;
+}
+
+.pg-wires {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  z-index: 2;
+  /* SVG roots default to overflow: hidden, which clips paths drawn past
+     the SVG's nominal height — happens any time a node is dragged below
+     the initial layout extent. Visible here lets the path render; the
+     graph wrap's overflow: auto handles scrolling. */
+  overflow: visible;
+}
+
+/* Idle wire: a clean 1px hairline, no glow. Glow lives on touched
+   wires only — a wire is either inert or carrying signal. */
+.pg-wire {
+  fill: none;
+  stroke: var(--wire, var(--signal-trace));
+  stroke-width: 1.15px;
+  stroke-linecap: round;
+  opacity: 0.82;
+  transition: stroke 120ms ease, stroke-width 120ms ease, opacity 120ms ease;
+}
+
+.pg-wire--touched {
+  stroke: var(--wire, var(--signal));
+  stroke-width: 1.8px;
+  opacity: 1;
+  stroke-dasharray: 4 8;
+  filter:
+    drop-shadow(0 0 2px var(--wire-glow, var(--signal-glow)))
+    drop-shadow(0 0 7px var(--wire-glow, rgba(124, 249, 157, 0.22)));
+  animation: pg-wire-march 2.4s linear infinite;
+}
+
+@keyframes pg-wire-march {
+  to { stroke-dashoffset: -24; }
+}
+
+/* Preview wire — drawn while user drags from an output port to an
+   input port. Brighter than idle wires so it's clearly an in-progress
+   action, dashed so it visually distinguishes from committed edges. */
+.pg-wire--preview {
+  stroke: var(--signal);
+  stroke-width: 1.8px;
+  stroke-dasharray: 6 4;
+  filter: drop-shadow(0 0 4px var(--signal-glow));
+  pointer-events: none;
+}
+
+/* While a wire-drag is in flight, dim the cursor's hover effects on
+   anything that's not a valid drop target — the user is in "wiring
+   mode" and shouldn't be distracted by other UI. */
+body.pg-wiring { cursor: crosshair; }
+body.pg-wiring .pg-port { cursor: crosshair; }
+
+/* Valid drop target during a wire-drag — input port that the cursor
+   is currently over (and that belongs to a different node). */
+.pg-port.pg-port--target {
+  background: var(--signal);
+  border-color: var(--signal);
+  box-shadow: 0 0 6px var(--signal-glow);
+}
+
+.pg-node-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 3;
+}
+
+/* Variable node — typed value source. Smaller, dashed-border, no head
+   bar. Two stacked rows: type tag (small mono, bone-dim) above, value
+   (mono, bone-bright) below. The dashed border + neutral palette makes
+   them visually retreat: kernel nodes do work, variable nodes are
+   constants. */
+.pg-var {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  background: var(--ink-900);
+  border: 1px dashed var(--line-strong);
+  cursor: grab;
+  user-select: none;
+  font-family: var(--font-mono);
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.pg-var:hover {
+  border-color: var(--signal);
+  background: var(--ink-850);
+}
+
+.pg-var:active { cursor: grabbing; }
+
+.pg-var__type {
+  font-size: 8px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--bone-dim);
+}
+
+.pg-var__value {
+  font-size: 11px;
+  color: var(--bone-bright);
+  letter-spacing: 0.04em;
+  max-width: 88px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pg-rail {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  background: var(--ink-900);
+  border: 1px solid var(--line-strong);
+  border-left: 3px solid var(--line-strong);
+  cursor: grab;
+  user-select: none;
+  font-family: var(--font-mono);
+  box-shadow: 0 0 0 1px var(--ink-950) inset;
+}
+
+.pg-rail--output {
+  border-left: 1px solid var(--line-strong);
+  border-right: 3px solid var(--line-strong);
+}
+
+.pg-rail__title {
+  flex: 0 0 auto;
+  font-size: 7.5px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--bone-mute);
+}
+
+.pg-rail__group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pg-rail__group-label {
+  font-size: 7px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--bone-mute);
+}
+
+.pg-rail__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.pg-rail .pg-port-row {
+  width: 100%;
+}
+
+.pg-rail--output .pg-port-row {
+  justify-content: flex-start;
+}
+
+.pg-rail .pg-port-name {
+  max-width: 98px;
+}
+
+.pg-port-row--param-number {
+  color: var(--amber);
+}
+
+.pg-port-row--param-boolean {
+  color: var(--info);
+}
+
+.pg-port-row--param-stepper {
+  color: var(--violet);
+}
+
+.pg-port-row--source {
+  color: var(--bone-bright);
+}
+
+.pg-port-row--source .pg-port-name {
+  font-style: italic;
+}
+
+.pg-port-row--declared {
+  color: var(--violet);
+}
+
+.pg-port-row--declared .pg-port-dot {
+  border-style: dashed;
+}
+
+/* The node card itself. Borrows .lab-section's grammar: 1px hairline
+   border with corner register marks at -3/-3, flat ink-700 head bar,
+   ink-850 body. */
+.pg-node {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  background: color-mix(in srgb, var(--ink-850) 96%, black);
+  border: 1px solid var(--line);
+  cursor: grab;
+  user-select: none;
+  font-family: var(--font-sans);
+  transition: border-color 120ms ease, opacity 160ms ease;
+}
+
+.pg-node::before,
+.pg-node::after {
+  content: "";
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  border: 1px solid var(--line-strong);
+  pointer-events: none;
+}
+
+.pg-node::before { top: -3px; left: -3px;  border-bottom: 0; border-right: 0; }
+.pg-node::after  { bottom: -3px; right: -3px; border-top: 0;  border-left: 0; }
+
+.pg-node:hover { border-color: var(--line-strong); }
+.pg-node:active { cursor: grabbing; }
+
+/* Selected: replace the green halo with a bone-bright border + a
+   phosphor sweep beneath the head bar (mirrors .lab-header::after). */
+.pg-node--selected {
+  border-color: var(--signal);
+  box-shadow: 0 0 0 1px var(--signal-glow), 0 0 12px -2px var(--signal-glow);
+}
+
+/* Selection-by-attenuation: unselected nodes recede slightly so the
+   selected one reads as "on the signal path." */
+.pg-graph-wrap--has-selection .pg-node:not(.pg-node--selected) {
+  opacity: 0.94;
+}
+
+.pg-node--disabled { opacity: 0.42; }
+
+.pg-node__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  background: var(--ink-700);
+  border-bottom: 1px solid var(--line);
+}
+
+.pg-node__idx {
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--bone-mute);
+  white-space: nowrap;
+}
+
+.pg-node__title {
+  flex: 0 1 auto;
+  font-family: var(--font-cond);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--bone-bright);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pg-node__rule {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, var(--line) 0%, transparent 100%);
+  margin: 0 6px;
+}
+
+.pg-node__kind-tag {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 7.5px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  padding: 1px 5px;
+  border-radius: 2px;
+  color: var(--signal-trace);
+  border: 1px solid var(--signal-trace);
+  background: var(--ink-950);
+}
+
+.pg-node__body {
+  padding: 6px 8px;
+}
+
+.pg-node__cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 4px 0;
+}
+
+.pg-node__previews {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+
+.pg-node__previews-label {
+  display: block;
+  margin-bottom: 4px;
+  font-family: var(--font-mono);
+  font-size: 7px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--bone-mute);
+}
+
+.pg-node__preview-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.pg-preview {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: var(--preview-h, 36px) 12px;
+  gap: 2px;
+}
+
+.pg-preview__canvas {
+  width: 100%;
+  height: var(--preview-h, 36px);
+  aspect-ratio: var(--preview-aspect, 2 / 1);
+  display: block;
+  background: var(--ink-950);
+  border: 1px solid color-mix(in srgb, var(--accent, var(--line-strong)) 62%, var(--line));
+  image-rendering: pixelated;
+  cursor: zoom-in;
+}
+
+.pg-preview__canvas--geodesic {
+  background: transparent;
+  border-radius: 50%;
+}
+
+.pg-preview__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 7.5px;
+  letter-spacing: 0.04em;
+  color: var(--accent, var(--bone-mute));
+}
+
+.pg-preview-popout {
+  position: fixed;
+  z-index: 700;
+  top: 96px;
+  right: 420px;
+  width: min(640px, calc(100vw - 48px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  background: var(--ink-900);
+  border: 1px solid var(--line-strong);
+  box-shadow:
+    0 18px 48px rgba(0, 0, 0, 0.42),
+    0 0 0 1px rgba(0, 0, 0, 0.3);
+}
+
+.pg-preview-popout[hidden] {
+  display: none;
+}
+
+.pg-preview-popout__head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--ink-700);
+  border-bottom: 1px solid var(--line);
+  cursor: grab;
+}
+
+.pg-preview-popout__head:active {
+  cursor: grabbing;
+}
+
+.pg-preview-popout__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--bone-bright);
+}
+
+.pg-preview-popout__close {
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  background: var(--ink-850);
+  color: var(--bone);
+  font-family: var(--font-mono);
+  cursor: pointer;
+}
+
+.pg-preview-popout__close:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.pg-preview-popout__canvas {
+  width: 100%;
+  height: auto;
+  max-height: 70vh;
+  aspect-ratio: var(--preview-aspect, 2 / 1);
+  display: block;
+  background: var(--ink-950);
+  image-rendering: pixelated;
+  object-fit: contain;
+}
+
+.pg-preview-popout__canvas--geodesic {
+  justify-self: center;
+  width: min(100%, 70vh);
+  background: transparent;
+  border-radius: 50%;
+}
+
+.pg-port-col {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.pg-port-col--out {
+  align-items: flex-end;
+}
+
+.pg-port-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 16px;
+  padding: 0 4px;
+  cursor: crosshair;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  color: var(--bone);
+  position: relative;
+  border-radius: 2px;
+  transition: background 100ms;
+  min-width: 0;
+}
+
+.pg-port-row:hover {
+  background: rgba(124, 249, 157, 0.06);
+}
+
+.pg-port-row--out {
+  justify-content: flex-end;
+}
+
+.pg-port-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 92px;
+}
+
+.pg-port-dot {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid var(--accent, var(--bone-mute));
+  border-radius: 50%;
+  position: relative;
+  transition: transform 100ms, box-shadow 100ms, background 100ms;
+}
+
+.pg-port-dot--in {
+  background: var(--accent, var(--bone-mute));
+  margin-left: -8px;
+}
+
+.pg-port-dot--out {
+  background: var(--ink-950);
+  margin-right: -8px;
+}
+
+.pg-port-row:hover .pg-port-dot,
+.pg-port-row.pg-port--target .pg-port-dot,
+.pg-port-row--energized .pg-port-dot {
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--accent, var(--signal)) 38%, transparent),
+    0 0 6px color-mix(in srgb, var(--accent, var(--signal)) 44%, transparent);
+}
+
+/* Ports: hollow terminal blocks. Filled state means "energized" —
+   the JS adds .pg-port--energized when a wire touching this port is
+   selected, so terminals visually carry signal state. */
+.pg-port {
+  position: absolute;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  background: var(--ink-950);
+  border: 1px solid var(--line-strong);
+  transform: translateY(-50%);
+  transition: background 120ms ease, border-color 120ms ease;
+  cursor: crosshair;
+}
+
+.pg-port::before {
+  content: "";
+  position: absolute;
+  inset: -8px -10px;
+}
+
+.pg-port--left  { left: -4px; }
+.pg-port--right { right: -4px; }
+
+.pg-port--energized {
+  background: var(--signal);
+  border-color: var(--signal);
+  box-shadow: 0 0 4px -1px var(--signal-glow);
+}
+
+/* Pane separator: replace the plain border-top with the phosphor
+   sweep that runs under .lab-header. Reads as a signal bus, not a div
+   boundary. */
+.pg-editor-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  position: relative;
+  padding-top: var(--s-2);
+  margin-top: 1px;
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    transparent calc(var(--s-2) - 1px),
+    var(--ink-900) var(--s-2),
+    var(--ink-900) 100%
+  );
+}
+
+.pg-editor-pane::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(124, 249, 157, 0.35) 30%,
+    rgba(124, 249, 157, 0.5) 50%,
+    rgba(124, 249, 157, 0.35) 70%,
+    transparent 100%
+  );
+}
+
+/* PROBE / STATS overlays */
+
+.stats {
+  position: fixed;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  color: var(--bone-mute);
+  padding: 6px 10px;
+  background: rgba(8, 11, 16, 0.85);
+  border: 1px solid var(--line);
+  backdrop-filter: blur(6px);
+  z-index: 4;
+  pointer-events: none;
+  white-space: nowrap;
+  max-width: calc(100vw - var(--panel-w) - 32px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  top: calc(var(--menubar-h) + var(--header-h) + var(--s-3));
+  right: calc(var(--panel-w) + var(--s-3));
+  text-transform: uppercase;
+}
+
+/* Probe overlay — fixed-channel readout for the cell under the
+ * pointer plus a recency-sorted list of pipeline contributions.
+ * Each row carries a left-edge color tab keyed to its field; the
+ * fixed rows always render in PROBE_FIXED_CHANNELS order so the
+ * eye can land on a known row by position. */
+.probe {
+  /* Anchored to .viewport-frame (which is `position: relative`) so the
+     probe lives at the canvas's bottom-left, not the document's. The
+     viewport-frame shrinks when the left dock opens; the probe rides
+     along with it. */
+  position: absolute;
+  bottom: var(--s-3);
+  left: var(--s-3);
+  z-index: 4;
+  pointer-events: none;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--bone-dim);
+  font-variant-numeric: tabular-nums;
+  background: rgba(8, 11, 16, 0.88);
+  border: 1px solid var(--line);
+  backdrop-filter: blur(6px);
+  padding: var(--s-2) 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 220px;
+  max-width: min(360px, calc(100% - 32px));
+}
+
+.probe__empty {
+  padding: 0 var(--s-3);
+  color: var(--bone-mute);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-size: 9px;
+}
+
+.probe__head {
+  padding: 0 var(--s-3) var(--s-1);
+  margin-bottom: var(--s-1);
+  border-bottom: 1px solid var(--line);
+  color: var(--bone-bright);
+  font-size: 9px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+.probe__row,
+.probe__change {
+  position: relative;
+  padding: 1px var(--s-3) 1px calc(var(--s-3) - 2px);
+  border-left: 2px solid var(--accent, var(--bone-mute));
+  background: linear-gradient(
+    to right,
+    rgba(255, 255, 255, 0.018),
+    transparent 60%
+  );
+}
+
+.probe__row {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  align-items: baseline;
+  gap: var(--s-2);
+}
+
+.probe__row-label {
+  color: var(--accent, var(--bone-dim));
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.probe__row-value {
+  color: var(--bone);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.probe__divider {
+  margin: var(--s-2) var(--s-3) var(--s-1);
+  padding-top: var(--s-1);
+  border-top: 1px dashed var(--line);
+  font-size: 8px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--bone-mute);
+}
+
+.probe__change {
+  display: grid;
+  grid-template-columns: 72px auto 1fr;
+  align-items: baseline;
+  gap: var(--s-2);
+  font-size: 9px;
+}
+
+.probe__change-field {
+  color: var(--accent, var(--bone-dim));
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.probe__change-delta {
+  font-variant-numeric: tabular-nums;
+}
+
+.probe__change-delta--pos { color: var(--signal); }
+.probe__change-delta--neg { color: var(--warn); }
+
+.probe__change-source {
+  color: var(--bone-mute);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 920px) {
+  #app { grid-template-columns: 1fr; }
+  #panel { display: none; }
+  .stats { right: var(--s-3); }
+  .probe { max-width: calc(100% - 32px); }
+}

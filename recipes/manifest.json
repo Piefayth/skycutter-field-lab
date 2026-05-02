@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "defaultRecipe": "blank",
+  "recipes": [
+    {
+      "id": "blank",
+      "name": "Blank",
+      "path": "recipes/blank.mjs",
+      "summary": "Empty starter recipe. One field, one no-op stage. Replace contents of pipelineDsl with your own simulation."
+    },
+    {
+      "id": "weather",
+      "name": "Weather (example)",
+      "path": "recipes/weather.mjs",
+      "summary": "Forcing-driven weather pipeline. Single attractor; useful as a baseline."
+    },
+    {
+      "id": "gray-scott",
+      "name": "Gray-Scott (example)",
+      "path": "recipes/gray-scott.mjs",
+      "summary": "Two-field reaction with asymmetric diffusion. Knobs gsFeed/gsKill walk Pearson's f/k phase diagram."
+    },
+    {
+      "id": "discharge-cascade",
+      "name": "Discharge cascade (example)",
+      "path": "recipes/discharge-cascade.mjs",
+      "summary": "Excitable medium with discrete discharge events via where(). Knob dischargeThreshold walks silent / intermittent / runaway-cascade regimes."
+    },
+    {
+      "id": "inverter-front",
+      "name": "Inverter front (example)",
+      "path": "recipes/inverter-front.mjs",
+      "summary": "A wave propagates by threshold-spread (one cell/tick); cells the wave passes through fire an event that swaps substances A and B locally. Closes the events trilogy alongside discharge-cascade and residue-tracks: events that *modify* underlying continuous fields."
+    },
+    {
+      "id": "fitzhugh-nagumo",
+      "name": "FitzHugh-Nagumo (example)",
+      "path": "recipes/fitzhugh-nagumo.mjs",
+      "summary": "Excitable medium. Fast u spikes through a cubic threshold; slow v recovers and suppresses. Diffusion turns spikes into traveling fronts; an asymmetric seed breaks a front into a rotating spiral."
+    },
+    {
+      "id": "belousov-zhabotinsky",
+      "name": "Belousov-Zhabotinsky (example)",
+      "path": "recipes/belousov-zhabotinsky.mjs",
+      "summary": "3-field oscillating chemistry. u is the fast autocatalyst, v is the medium-timescale inhibitor, w is the slow tertiary recovery. Three timescales produce nested target waves and rotating spirals."
+    }
+  ]
+}
