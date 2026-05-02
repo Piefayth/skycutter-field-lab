@@ -19,7 +19,7 @@
 // =============================================================================
 
 import {
-  autocompletion, completionKeymap,
+  autocompletion, completionKeymap, acceptCompletion,
 } from "@codemirror/autocomplete";
 import {
   keymap, ViewPlugin, Decoration, WidgetType, EditorView,
@@ -602,9 +602,13 @@ export function dslAutocomplete() {
     ghostUpdater,
     // Wrap in Prec.high so our Tab/Escape run before editor-core's
     // `indentWithTab` (which would otherwise eat Tab and indent instead
-    // of accepting the ghost).
+    // of accepting). `completionKeymap` only binds Enter for accept, so
+    // we add Tab → acceptCompletion explicitly. The two Tab bindings
+    // chain: ghost first; if no ghost, fall through to popup; if no
+    // popup, fall through to indentWithTab in the lower-prec keymap.
     Prec.high(keymap.of([
       { key: "Tab", run: acceptGhost },
+      { key: "Tab", run: acceptCompletion },
       { key: "Escape", run: dismissGhost },
       ...completionKeymap,
     ])),
