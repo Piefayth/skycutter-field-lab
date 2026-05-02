@@ -1,4 +1,4 @@
-import { TAU, clamp, smoothstep, spatialNoise } from "../kernel/kernel.mjs";
+import { TAU, clamp, hashNoise, smoothstep, spatialNoise } from "../kernel/kernel.mjs";
 
 export function buildDslPresetDecls(presets, dsl) {
   return presets.map((preset) => ({
@@ -237,6 +237,8 @@ function evalInitCall(ast, state, cell) {
     const pz = (cell?.pz ?? 0) * scale;
     return spatialNoise(px, py, pz, seed);
   }
+  if (name === "cellRand") return hashNoise(cell?.i ?? 0, args[0] ?? 0);
+  if (name === "wrapAngle") return Math.atan2(Math.sin(args[0]), Math.cos(args[0]));
   throw new Error(`unknown init function ${name ?? "call"}`);
 }
 

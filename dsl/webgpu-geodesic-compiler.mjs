@@ -680,6 +680,13 @@ function compileCall(ast, ctx) {
         : `vec3<f32>(px, py, pz)`;
       return `spatialNoise(${coords}, ${args[0]})`;
     }
+    case "cellRand":
+      // Pure per-cell hash on (cell index, seed). No spatial coherence.
+      return `hashNoise(f32(i), ${args[0]})`;
+    case "wrapAngle":
+      // atan2(sin x, cos x) collapses any input range to [-π, π] without
+      // a floor / mod sign-handling dance.
+      return `atan2(sin(${args[0]}), cos(${args[0]}))`;
     case "max":
     case "min":
     case "abs":

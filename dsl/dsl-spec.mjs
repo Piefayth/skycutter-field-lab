@@ -136,8 +136,26 @@ export const MATH_FUNCTIONS = [
     arity: [1, 2],
     importNamespace: "core",
     signature: "cellNoise(seed) | cellNoise(seed, scale)",
-    doc: "Spatially-coherent 3D noise sampled at the cell's unit-sphere position. Geometrically correct on a sphere — no pole distortion. `scale` controls spatial frequency (default 1; higher = finer texture). Returns [-1, 1]. In preset top-level (no cell context), falls back to a deterministic per-seed scalar — useful for randomizing spot positions.",
+    doc: "Spatially-coherent 3D noise sampled at the cell's unit-sphere position. Geometrically correct on a sphere — no pole distortion. `scale` controls spatial frequency (default 1; higher = finer texture). Returns [-1, 1]. In preset top-level (no cell context), falls back to a deterministic per-seed scalar — useful for randomizing spot positions. Use this when you want SMOOTHLY-VARYING noise (basins, terrain). For statistically independent per-cell values use `cellRand` instead.",
     example: "let basin = cellNoise(31, 2.5)\nadd moisture = cellNoise(frame * 0.13) * amp * 0.25",
+  },
+  {
+    name: "cellRand",
+    target: "c.cellRand",
+    arity: [1],
+    importNamespace: "core",
+    signature: "cellRand(seed)",
+    doc: "IID per-cell hash: each cell produces a statistically independent value from (cell index, seed). Returns [-1, 1]. Use for stochastic processes — heterogeneous parameters, Monte Carlo sampling, omega distributions in oscillator networks. Different from `cellNoise(seed)`, which is spatially correlated (neighbors tend to have similar values).",
+    example: "set omega = cellRand(7) * omegaSpread",
+  },
+  {
+    name: "wrapAngle",
+    target: "c.wrapAngle",
+    arity: [1],
+    importNamespace: "core",
+    signature: "wrapAngle(x)",
+    doc: "Wraps an angle (radians) into [-π, π]. Useful any time you accumulate phase that would otherwise grow unbounded — Kuramoto, XY model, active nematics, anywhere a `theta` keeps integrating `omega * dt`.",
+    example: "set theta = wrapAngle(theta)",
   },
 ];
 

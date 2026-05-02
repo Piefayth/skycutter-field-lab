@@ -85,6 +85,39 @@ export function violet(fieldName) {
   return ramp(fieldName, [42, 20, 80], [183, 92, 255]);
 }
 
+// Phase colorer — maps any-range angle (radians) to a saturated HSV
+// cycle. Smooth across the period boundary, so values that drift
+// past ±π still land on the same color as their wrapped equivalent.
+// Use for oscillator phase fields (Kuramoto, XY model, active nematics).
+export function phase(fieldName) {
+  const color = (i, fields) => phaseToRgb(fields[fieldName][i]);
+  color.write = (i, fields, data, k) => {
+    const [r, g, b] = phaseToRgb(fields[fieldName][i]);
+    data[k + 0] = r;
+    data[k + 1] = g;
+    data[k + 2] = b;
+  };
+  color.fields = [fieldName];
+  return color;
+}
+
+function phaseToRgb(theta) {
+  const TAU_LOCAL = Math.PI * 2;
+  const h = ((theta / TAU_LOCAL) % 1 + 1) % 1;   // [0, 1)
+  const sector = Math.floor(h * 6);
+  const f = h * 6 - sector;
+  const q = Math.round((1 - f) * 255);
+  const t = Math.round(f * 255);
+  switch (sector % 6) {
+    case 0: return [255, t, 0];
+    case 1: return [q, 255, 0];
+    case 2: return [0, 255, t];
+    case 3: return [0, q, 255];
+    case 4: return [t, 0, 255];
+    default: return [255, 0, q];
+  }
+}
+
 // Wind magnitude — reads `fields.windU` / `fields.windV` (declared
 // fields like everything else). Returns black for cells in recipes that
 // don't carry wind.

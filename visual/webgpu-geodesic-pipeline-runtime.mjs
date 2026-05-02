@@ -220,5 +220,6 @@ function evalUniformCall(ast, env) {
     // value is stable across frames.
     return spatialNoise(0, 0, 0, args[0] ?? 0);
   }
+  if (name === "wrapAngle") return Math.atan2(Math.sin(args[0]), Math.cos(args[0]));
   throw new Error(`unknown primitive uniform function ${name ?? "call"}`);
 }

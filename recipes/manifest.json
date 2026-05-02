@@ -43,6 +43,12 @@
       "name": "Belousov-Zhabotinsky (example)",
       "path": "recipes/belousov-zhabotinsky.mjs",
       "summary": "3-field oscillating chemistry. u is the fast autocatalyst, v is the medium-timescale inhibitor, w is the slow tertiary recovery. Three timescales produce nested target waves and rotating spirals."
+    },
+    {
+      "id": "kuramoto-chimera",
+      "name": "Kuramoto chimera (example)",
+      "path": "recipes/kuramoto-chimera.mjs",
+      "summary": "Coupled phase oscillators on a sphere. Sakaguchi lag α near π/2 lets sync and chaos coexist; the sphere's closed surface produces rotating-spiral chimera patterns."
     }
   ]
 }
