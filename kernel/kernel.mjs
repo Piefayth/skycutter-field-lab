@@ -4,7 +4,7 @@
 // The kernel ships ONLY field-set-agnostic primitives — anything that
 // names a specific field is recipe physics and lives in the recipe.
 //
-//   * grid constants (W, H, N, TAU, idx)
+//   * fixed-format canvas constants (W, H, N, TAU, idx)
 //   * state-allocation helpers (createState, reallocateState, resetState)
 //   * brush helpers (addBlob, addEllipse) used by recipe stamps + presets
 //   * field-set-agnostic metrics (metrics) + sanity checks
@@ -41,11 +41,11 @@ export function gridResolution() {
 // State allocation
 // =========================================================================
 
-// Fresh state object. The caller passes the recipe's `fields`
-// declaration; the kernel allocates a Float32Array per field plus a
-// scratch tmp buffer of the same length. `createState({})` produces
-// an empty state — useful when a caller wants to allocate and call
-// `reallocateState` separately.
+// Fresh state object. The caller usually creates an empty state, then
+// recipe loading installs the authoritative geodesic grid and allocates
+// fields. Passing fields before a grid exists still allocates against
+// the fixed-format canvas size for tests and standalone helpers, but it
+// does not imply that the live simulation grid is rectangular.
 //
 // Forcing maps that used to be a separate "sources" namespace are now
 // just fields with a name suffix (e.g. `moistureSource`). The
@@ -56,7 +56,7 @@ export function createState({ fields } = {}) {
   const state = {
     fields: {},
     tmp: {},
-    grid: { kind: "rectangular", width: W, height: H, cells: N },
+    grid: null,
     rng: mulberry32(4),
     frame: 0,
     // Per-tick event accounting. The runner resets this at the top of

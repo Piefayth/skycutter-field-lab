@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
-import { H, TAU, W } from "../kernel/kernel.mjs";
+import { TAU } from "../kernel/kernel.mjs";
 
 export async function createThreeSetup() {
   const canvas = document.querySelector("#viewport");
@@ -32,38 +32,11 @@ export async function createThreeSetup() {
   sun.position.set(2.5, 1.3, 2.0);
   scene.add(sun);
 
-  const textureCanvas = document.createElement("canvas");
-  textureCanvas.width = W;
-  textureCanvas.height = H;
-  const texCtx = textureCanvas.getContext("2d", { willReadFrequently: true });
-  const imageData = texCtx.createImageData(W, H);
-  const fieldTexture = new THREE.CanvasTexture(textureCanvas);
-  fieldTexture.colorSpace = THREE.SRGBColorSpace;
-  fieldTexture.wrapS = THREE.RepeatWrapping;
-  fieldTexture.wrapT = THREE.ClampToEdgeWrapping;
-  // The globe shader samples this canvas with equal-area latitude
-  // projection. Keep mipmaps for minification; magnification stays nearest
-  // so cells read as a grid instead of a smeared image.
-  fieldTexture.minFilter = THREE.LinearMipmapLinearFilter;
-  fieldTexture.magFilter = THREE.NearestFilter;
-  fieldTexture.generateMipmaps = true;
-  fieldTexture.anisotropy = renderer.capabilities?.getMaxAnisotropy?.() ?? 1;
-
   const globe = new THREE.Mesh(
     new THREE.SphereGeometry(1, 160, 80),
-    createWebGpuGlobeMaterial(fieldTexture),
+    createRaycastGlobeMaterial(),
   );
   scene.add(globe);
-
-  const arrowMaterial = new THREE.LineBasicMaterial({
-    color: 0xd9f99d,
-    transparent: true,
-    opacity: 0.8,
-    depthWrite: false,
-  });
-  const arrowGeometry = new THREE.BufferGeometry();
-  arrowGeometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(0), 3));
-  const arrows = new THREE.LineSegments(arrowGeometry, arrowMaterial);
 
   const starGeometry = new THREE.BufferGeometry();
   const starCount = 900;
@@ -91,13 +64,7 @@ export async function createThreeSetup() {
     scene,
     camera,
     orbitControls,
-    textureCanvas,
-    texCtx,
-    imageData,
-    fieldTexture,
     globe,
-    arrows,
-    arrowGeometry,
   };
 }
 
@@ -112,10 +79,9 @@ async function createRenderer(canvas) {
   return renderer;
 }
 
-function createWebGpuGlobeMaterial(fieldTexture) {
-  return new THREE.MeshStandardMaterial({
-    map: fieldTexture,
-    roughness: 0.86,
-    metalness: 0,
+function createRaycastGlobeMaterial() {
+  return new THREE.MeshBasicMaterial({
+    color: 0x05070a,
+    depthWrite: false,
   });
 }

@@ -5,7 +5,6 @@
 
 import { createState } from "../kernel/kernel.mjs";
 import { createThreeSetup } from "./three-setup.mjs";
-import { createView } from "./view.mjs";
 import { createMetrics } from "./metrics.mjs";
 import {
   applyControlSpec,
@@ -37,22 +36,8 @@ const {
   scene,
   camera,
   orbitControls,
-  texCtx,
-  imageData,
-  fieldTexture,
   globe,
-  arrows,
-  arrowGeometry,
 } = await createThreeSetup();
-const { updateTexture, updateArrows } = createView({
-  renderer,
-  texCtx,
-  imageData,
-  fieldTexture,
-  globe,
-  arrows,
-  arrowGeometry,
-});
 
 const state = createState();
 // Don't destructure — state.fields and its inner Float32Arrays get
@@ -176,23 +161,6 @@ function stepOneTick() {
   }
 }
 
-function runSelectedNode(id) {
-  const runner = getRunner();
-  if (!runner || !id) return;
-  try {
-    state.events.totalThisTick = 0;
-    state.events.byLabel = Object.create(null);
-    probe.clearContribs();
-    runner.runNode(state, id, FIXED_SIM_DT);
-    updateAll({ force: true });
-    pipelineEditor.setStatus(`ran ${runner.nodes[id].name ?? id}`);
-  } catch (error) {
-    console.error("run failed:", error);
-    showToast(`run failed: ${error.message}`, { kind: "error" });
-    pipelineEditor.setStatus(`run failed: ${error.message}`, true);
-  }
-}
-
 // =========================================================================
 // Side-panel section collapse (chev button on the [02]–[06] sections)
 // =========================================================================
@@ -213,7 +181,6 @@ function wireSectionCollapse() {
 // =========================================================================
 
 let lastPreviewRefreshFrame = -Infinity;
-let lastArrowRefreshFrame = -Infinity;
 let lastMetricsRefreshFrame = -Infinity;
 let lastProbeRefreshFrame = -Infinity;
 let geodesicPreview = null;
@@ -229,28 +196,12 @@ function updateAll({ force = false } = {}) {
     pipelineEditor.refreshPreviews?.();
     lastPreviewRefreshFrame = runtime.frame;
   }
-  if (state.grid?.kind !== "geodesic") {
-    runner?.readFields?.(state, recipes.viewById?.(ui.viewSelect.value)?.color?.fields);
-    updateTexture({
-      fields: state.fields,
-      viewSpec: recipes.viewById?.(ui.viewSelect.value),
-    });
-  }
   geodesicPreview?.refresh?.({
     fields: state.fields,
     viewSpec: recipes.viewById?.(ui.viewSelect.value),
     frame: runtime.frame,
     force,
   });
-  if (state.grid?.kind !== "geodesic" && (force || runtime.frame - lastArrowRefreshFrame >= 6)) {
-    runner?.readFields?.(state, ["windU", "windV"]);
-    updateArrows({
-      windU: state.fields.windU,
-      windV: state.fields.windV,
-      showArrows: recipes.isOverlayEnabled?.("wind-vectors") ?? false,
-    });
-    lastArrowRefreshFrame = runtime.frame;
-  }
   if (force || runtime.frame - lastMetricsRefreshFrame >= 6) {
     runner?.syncState?.(state);
     metrics.updateStrip({ fields: state.fields, events: state.events });
@@ -437,7 +388,6 @@ export function bootApp() {
   const windows = buildWindows();
   initEditors({
     pipelineWindow: windows.pipelineWindow,
-    onRunNode: runSelectedNode,
     getState: () => state,
     getPreviewView: previewView,
   });

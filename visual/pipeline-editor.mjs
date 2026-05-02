@@ -13,9 +13,6 @@
 
 import { mountPipelineGraph } from "./pipeline-graph.mjs";
 
-// Shared registry exported for boot.mjs's run-node button. The boot
-// module reads `pipelineEditor.selectedNodeId` to dispatch a single
-// node by id.
 const registry = {
   runner: null,
   recipeId: null,
@@ -37,11 +34,8 @@ let pipelineEditorAPI = null;
 
 let pipelineWin = null;
 
-let runHook = null;
-
-export function initEditors({ pipelineWindow, onRunNode, getState, getPreviewView }) {
+export function initEditors({ pipelineWindow, getState, getPreviewView }) {
   pipelineWin = pipelineWindow;
-  runHook = onRunNode;
   registry.getState = getState ?? null;
   registry.getPreviewView = getPreviewView ?? null;
 
@@ -143,9 +137,6 @@ function buildPipelineApi() {
         throw new Error(`node "${id}" is not a variable`);
       }
       r.nodes[id].value = value;
-    },
-    onRun(id) {
-      runHook?.(id);
     },
     onChange(action, id) {
       registry.selectedNodeId = id;

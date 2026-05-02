@@ -1,10 +1,12 @@
 import * as weather from "../recipes/weather.mjs";
 import * as grayScott from "../recipes/gray-scott.mjs";
 import * as dischargeCascade from "../recipes/discharge-cascade.mjs";
-import * as residueTracks from "../recipes/residue-tracks.mjs";
 import * as inverterFront from "../recipes/inverter-front.mjs";
+import * as fitzhughNagumo from "../recipes/fitzhugh-nagumo.mjs";
+import * as belousovZhabotinsky from "../recipes/belousov-zhabotinsky.mjs";
+import * as blank from "../recipes/blank.mjs";
 import { compileDsl, diagnoseDsl, parseStages, parseStamps, parseTopLevelDeclarations } from "./compiler.mjs";
-import { createPipelineMetadataRunner } from "../visual/pipeline-metadata-runner.mjs";
+import { createPipelineMetadata } from "../visual/pipeline-metadata.mjs";
 import { materializeRecipe, prepareRecipeState } from "../visual/recipes.mjs";
 import { createState } from "../kernel/kernel.mjs";
 
@@ -12,8 +14,10 @@ const recipes = [
   weather,
   grayScott,
   dischargeCascade,
-  residueTracks,
   inverterFront,
+  fitzhughNagumo,
+  belousovZhabotinsky,
+  blank,
 ];
 
 let failed = 0;
@@ -34,13 +38,13 @@ for (const recipe of recipes) {
       assert(recipe.pipeline.nodes[stage.id], `missing compiled node ${stage.id}`);
       assert(Array.isArray(stage.reads), `${stage.id} reads are not parsed`);
       assert(Array.isArray(stage.writes), `${stage.id} writes are not parsed`);
-      assert(typeof recipe.pipeline.nodes[stage.id].run === "string", `${stage.id} has no runnable body`);
+      assert(recipe.pipeline.nodes[stage.id].dsl?.body?.type === "dsl", `${stage.id} has no DSL IR body`);
     }
   });
 }
 
 check("runtime exposes pipeline DSL source", () => {
-  const runner = createPipelineMetadataRunner(weather);
+  const runner = createPipelineMetadata(weather);
   assert(runner.pipelineDsl() === weather.pipelineDsl, "runner.pipelineDsl() should return source text");
 });
 

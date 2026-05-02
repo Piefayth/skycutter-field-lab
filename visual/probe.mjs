@@ -12,7 +12,7 @@
 // Boot order: `initProbe(deps)` runs once from `bootApp()` after
 // `initPaint(deps)` so `paint.pointerHit` is available to pass in.
 // =============================================================================
-import { H, idx, W } from "../kernel/kernel.mjs";
+import { H, W } from "../kernel/kernel.mjs";
 import { fieldCssColor } from "./field-colors.mjs";
 
 // Registry exported as `probe`. Method slots fill in during init; reads
@@ -78,6 +78,11 @@ export function initProbe({ ui, state, pointerHit }) {
       return;
     }
     const i = probeIndexForHit(hit);
+    if (i === null) {
+      target = null;
+      renderEmpty();
+      return;
+    }
     const x = Math.floor((hit.u ?? hit.x) * W);
     const y = Math.floor((hit.v ?? hit.y) * H);
     target = { i, x, y };
@@ -167,15 +172,9 @@ export function initProbe({ ui, state, pointerHit }) {
   }
 
   function probeIndexForHit(hit) {
-    if (state.grid?.kind !== "geodesic") return idx(
-      Math.floor((hit.u ?? hit.x) * W),
-      Math.floor((hit.v ?? hit.y) * H),
-    );
+    if (state.grid?.kind !== "geodesic") return null;
     const grid = state.grid.topology;
-    if (!grid?.positions?.length) return idx(
-      Math.floor((hit.u ?? hit.x) * W),
-      Math.floor((hit.v ?? hit.y) * H),
-    );
+    if (!grid?.positions?.length) return null;
 
     const p = Number.isFinite(hit.px) && Number.isFinite(hit.py) && Number.isFinite(hit.pz)
       ? [hit.px, hit.py, hit.pz]

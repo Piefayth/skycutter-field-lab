@@ -24,6 +24,7 @@ test("state allocation creates fields and tmp buffers", () => {
       { name: "windV" },
     ],
   });
+  assert(state.grid === null, "fresh state should not default to a rectangular grid");
   assert(state.fields.moisture.length === N, "field allocation should use current grid size");
   assert(state.tmp.moisture.length === N, "tmp allocation should mirror field size");
   assert(state.fields.windU.length === N && state.fields.windV.length === N, "all declared fields should allocate");

@@ -42,7 +42,6 @@ jobs:
             recipes \
             style.css \
             visual \
-            webgpu-geodesic.html \
             .nojekyll \
             _site/
 

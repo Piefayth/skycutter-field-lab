@@ -11,9 +11,9 @@
 //     { id: "composite", label: "Composite", color: composite() },
 //   ]
 //
-// view.mjs's render loop calls `view.color(i, fields)` once
-// per cell. The factory closes over its config (field name, ramp
-// endpoints, scale) so the per-cell call is just a tight read-and-mix.
+// The geodesic renderer calls `view.color(i, fields)` once per cell. The
+// factory closes over its config (field name, ramp endpoints, scale) so
+// the per-cell call is just a tight read-and-mix.
 // Wind-aware colorers (`windMagnitude`) read `fields.windU` / `fields.windV`
 // — they're recipe-declared fields, not a state-shape special case.
 // =============================================================================

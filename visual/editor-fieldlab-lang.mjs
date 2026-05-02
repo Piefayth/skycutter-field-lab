@@ -67,21 +67,11 @@ const LOGICAL_OPS = new Set(["and", "or", "not"]);
 const BOOLEANS = new Set(["true", "false"]);
 const NULLS = new Set(["null", "undefined"]);
 
-// Names injected into every cell/event/each scope. Highlighting these
-// as `atom` keeps them visually distinct from authored field names.
-const BUILTIN_VARS = new Set([
-  "params", "consts", "planet",
-  "dt", "frame", "x", "y", "lon", "lat", "u", "v", "px", "py", "pz", "W", "H", "N",
-  "PI", "TAU", "E",
-  "neighborMax",
-]);
-
-// Namespaces whose property accesses are read-only inside stage bodies.
-// Bold = "you can't write to this here" in the design language. `params`
-// is included even though sliders are user-tunable at runtime, because
-// from the recipe author's perspective, a stage can't mutate it — same
-// contract as `consts` and `planet`.
-const IMMUTABLE_NAMESPACES = new Set(["params", "consts", "planet"]);
+// (Builtin/namespace identifier sets dropped — clock/geo identifiers
+// are now `use`-imported per recipe, and the deprecated `params.X` /
+// `consts.X` / `planet.X` dotted form is rejected by the compiler.
+// Token resolution: keyword/control sets first, then def-site short-
+// circuits, then declared-name lookups, then variableName fallback.)
 
 // Definition-site identifiers. `stage <id>`, `param <id>`, `const <id>`
 // — all rendered with the same "definition" emphasis (bone-bright).
@@ -234,7 +224,12 @@ function extractTopLevelDeclNames(source, lineRegex) {
     if (!match) continue;
     for (const id of match[1].matchAll(/[A-Za-z_$][A-Za-z0-9_$]*/g)) {
       const word = id[0];
-      if (!BUILTIN_VARS.has(word) && !MODIFIER_KEYWORDS.has(word)) names.add(word);
+      // MODIFIER_KEYWORDS still skipped because trailing-arg keywords
+      // like `lon`/`lat`/`rx`/`ry` aren't field names. Builtin filtering
+      // dropped — recipes can declare `field u, v` (gray-scott, BZ) or
+      // `field W` (inverter-front) and those should make it into the
+      // extracted set so the tokenizer can colour them as fields.
+      if (!MODIFIER_KEYWORDS.has(word)) names.add(word);
     }
   }
   return [...names];
@@ -357,18 +352,10 @@ function makeFieldLabLanguage({ fieldTags, tokenNames, sourceTokenNames, immutab
       if (LOGICAL_OPS.has(word)) return "operatorKeyword";
       if (BOOLEANS.has(word)) return "bool";
       if (NULLS.has(word)) return "null";
-      if (BUILTIN_VARS.has(word)) {
-        if (IMMUTABLE_NAMESPACES.has(word)) {
-          state.afterImmutableNs = true;
-          return "immutableNs";
-        }
-        return "atom";
-      }
 
-      // Definition sites win over field-name accents. This is what
-      // makes `stamp catalyst "Catalyst only" { spot catalyst ... }` color
-      // the stamp id as a name, not the catalyst field — only the
-      // reference inside the body picks up the field accent.
+      // Def-site short-circuit. `stamp X "..."`, `preset X`, `stage X`,
+      // `param X`, `const X` style their leading id as a definition
+      // even when the id collides with an existing field name.
       if (state.lineMode === "single-def" && !state.defConsumed) {
         state.defConsumed = true;
         return "definitionName";
@@ -378,19 +365,19 @@ function makeFieldLabLanguage({ fieldTags, tokenNames, sourceTokenNames, immutab
         return "namespace";
       }
 
-      // Known source name → bold + italic, no per-name colour. Sources
-      // are stage-readonly so they get the same "immutable" treatment
-      // as `consts.X` / `planet.X`.
+      // Recipe-declared names. Sources get bold+italic, params/consts/
+      // planet bare refs get bold info-color, fields get the per-name
+      // pill. A recipe declaring `field u, v` shadows the geodesic
+      // position-coord `u`/`v` here just as it does in the WGSL
+      // compiler's ctx.reads-first resolution.
       if (sourceTokenNames.has(word)) return sourceTokenNames.get(word);
-
-      // Bare ref to a declared param / const / planet — bold info-color.
       if (immutableTokenNames.has(word)) return immutableTokenNames.get(word);
-
-      // Known mutable field name → per-field accent. Applied in any context
-      // that survived the def-site short-circuit above: reads/writes
-      // lists, field declaration lists, expression body.
       if (tokenNames.has(word)) return tokenNames.get(word);
 
+      // Field/source-list mode fallback. tokenNames already catches
+      // names that survived a re-extraction; this fires while the user
+      // is still typing a brand-new declaration before the editor has
+      // had a chance to re-extract.
       if (state.lineMode === "field-list" || state.lineMode === "source-list") {
         return "definitionName";
       }

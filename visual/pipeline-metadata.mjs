@@ -1,9 +1,9 @@
 // DSL graph metadata surface for the browser UI.
 //
-// WebGPU owns live simulation ticks. The graph/editor still needs a small
-// runner-shaped object for node metadata, edges, and pipeline DSL source.
+// WebGPU owns live simulation ticks. This object only feeds node metadata,
+// graph edges, and pipeline DSL source to the editor.
 
-export function createPipelineMetadataRunner(recipe) {
+export function createPipelineMetadata(recipe) {
   if (!recipe?.pipeline) throw new Error("recipe missing pipeline");
   const nodes = recipe.pipeline.nodes ?? {};
   const sortedIds = topoSort(recipe.pipeline);
@@ -32,10 +32,6 @@ export function createPipelineMetadataRunner(recipe) {
     nodes,
     edges,
     addEdge,
-    runTick() {},
-    runNode() {
-      throw new Error("single-node run is not available in geodesic WebGPU mode");
-    },
     listNodes() {
       return sortedIds.map((id) => ({ id, ...nodes[id] }));
     },

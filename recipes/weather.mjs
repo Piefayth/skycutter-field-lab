@@ -61,14 +61,6 @@ export const views = [
 ];
 
 // -----------------------------------------------------------------------------
-// Overlays — additional render layers (wind arrows, eventually contours).
-// -----------------------------------------------------------------------------
-
-export const overlays = [
-  { id: "arrows", label: "wind arrows", type: "wind-vectors", default: true },
-];
-
-// -----------------------------------------------------------------------------
 // Metrics — derived measurements. (Same shape as current; no migration
 // needed beyond moving from JSON to module export.)
 // -----------------------------------------------------------------------------

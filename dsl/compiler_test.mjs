@@ -243,7 +243,7 @@ test("validator constrains declared pipeline fields", () => {
         set x = seed
       }
     }
-  `), "declared field x conflicts with recipe field");
+  `), "declared as both field and declared");
 
   assertThrows(() => compileDsl(`
     use sim cell
@@ -288,35 +288,35 @@ test("validator constrains declared pipeline fields", () => {
   `), "field x is not declared");
 });
 
-test("primitive stages compile to script bodies", () => {
+test("primitive stages expose DSL statement IR only", () => {
   const pipeline = compileDsl(`
     use sim wind, clamp, normalize
+    param windStrength slider min 0 max 4 default 1
+    param normalizePressure boolean default true
 
     stage wind "Wind" {
       reads pressure
       writes windU, windV, lift
-      wind pressure -> windU, windV, lift strength params.windStrength
+      wind pressure -> windU, windV, lift strength windStrength
     }
 
     stage clamp "Clamp" {
       reads cloud, pressure
       writes cloud, pressure
       clamp cloud 0 1
-      normalize pressure damping 0.997 when params.normalizePressure
+      normalize pressure damping 0.997 when normalizePressure
     }
   `);
-  assert(
-    pipeline.nodes.wind.run.includes("computeWind(fields.pressure, fields.windU, fields.windV, params.windStrength);"),
-    "wind primitive should call computeWind",
-  );
-  assert(
-    pipeline.nodes.wind.run.includes("computeLift(fields.lift, fields.windU, fields.windV);"),
-    "wind primitive with lift should call computeLift",
-  );
-  assert(
-    pipeline.nodes.clamp.run.includes("if (params.normalizePressure) normalizeField(fields.pressure, 0.997);"),
-    "normalize primitive should compile conditional",
-  );
+  assert(!("run" in pipeline.nodes.wind), "node should not carry generated JS");
+  assertDeep(pipeline.nodes.wind.dsl.body.statements, [
+    { type: "wind", pressure: "pressure", windU: "windU", windV: "windV", lift: "lift", strength: "windStrength" },
+  ], "wind primitive IR");
+  assertDeep(pipeline.nodes.clamp.dsl.body.statements, [
+    { type: "clamp", field: "cloud", lo: "0", hi: "1" },
+    { type: "normalize", field: "pressure", damping: "0.997", condition: "normalizePressure" },
+  ], "clamp/normalize primitive IR");
+  assertDeep(pipeline.dsl.stages[0].params, ["windStrength"], "wind param refs");
+  assertDeep(pipeline.dsl.stages[1].params, ["normalizePressure"], "normalize param refs");
 });
 
 test("wind primitive can omit lift output", () => {
@@ -329,11 +329,17 @@ test("wind primitive can omit lift output", () => {
       wind pressure -> windU, windV strength 4
     }
   `);
-  assert(pipeline.nodes.wind.run.includes("computeWind(fields.pressure, fields.windU, fields.windV, 4);"), "computeWind call");
-  assert(!pipeline.nodes.wind.run.includes("computeLift"), "no lift call");
+  assertDeep(pipeline.nodes.wind.dsl.body.statements[0], {
+    type: "wind",
+    pressure: "pressure",
+    windU: "windU",
+    windV: "windV",
+    lift: undefined,
+    strength: "4",
+  }, "wind IR without lift");
 });
 
-test("primitive return values use fields bag to avoid global-name collisions", () => {
+test("field names that resemble old rectangular globals remain regular fields", () => {
   const pipeline = compileDsl(`
     use sim clamp
 
@@ -343,36 +349,40 @@ test("primitive return values use fields bag to avoid global-name collisions", (
       clamp W 0 1
     }
   `);
-  assert(pipeline.nodes.clamp.run.includes("clampField(fields.W, 0, 1);"), "clamp uses fields.W");
-  assert(pipeline.nodes.clamp.run.includes("return { W: fields.W };"), "return uses fields.W");
+  assertDeep(pipeline.nodes.clamp.dsl.reads, ["W"], "reads W field");
+  assertDeep(pipeline.nodes.clamp.dsl.writes, ["W"], "writes W field");
+  assertDeep(pipeline.nodes.clamp.dsl.body.statements[0], { type: "clamp", field: "W", lo: "0", hi: "1" }, "clamp W IR");
 });
 
-test("event blocks compile to where with bounded add/set actions", () => {
+test("event blocks expose bounded add/set action IR", () => {
   const pipeline = compileDsl(`
     use sim event
+    param threshold slider min 0 max 2 default 1
+    param amount slider min 0 max 1 default 0.1
 
     stage discharge "Discharge" {
       reads A, B, R
       writes A, B, R
-      event when A > params.threshold and R < 0.05 {
-        add B = params.amount
+      event when A > threshold and R < 0.05 {
+        add B = amount
         set A = 0
         set R = 1
       }
     }
   `);
-  const body = pipeline.nodes.discharge.run;
-  assert(body.includes("where("), "event should compile to where");
-  assert(body.includes("(c.field.A > c.params.threshold) && (c.field.R < 0.05)"), "condition");
-  assert(body.includes("c.add(\"B\", c.params.amount);"), "add action");
-  assert(body.includes("c.set(\"A\", 0);"), "set action");
-  assert(body.includes("return { A: fields.A, B: fields.B, R: fields.R };"), "return writes");
+  const statement = pipeline.nodes.discharge.dsl.body.statements[0];
+  assert(statement.type === "event", "event statement");
+  assert(statement.condition.op === "&&", "condition should parse as and");
+  assertDeep(statement.actions.map((action) => action.type), ["add", "set", "set"], "event action types");
+  assertDeep(pipeline.dsl.stages[0].params, ["threshold", "amount"], "event param refs");
 });
 
-test("cell blocks compile to direct loops with locals, add, set, and when", () => {
+test("cell blocks expose locals, add, set, and when as IR", () => {
   const pipeline = compileDsl(`
     use sim cell
     use core max
+    use clock dt
+    param enableFeedback boolean default true
 
     stage grow "Grow" {
       reads moisture, cloud, lift
@@ -382,43 +392,46 @@ test("cell blocks compile to direct loops with locals, add, set, and when", () =
         let net = growth * (1 - cloud)
         set reaction = net
         add cloud = net * dt
-        when params.enableFeedback {
+        when enableFeedback {
           add moisture = -growth * 0.1 * dt
         }
       }
     }
   `);
-  const body = pipeline.nodes.grow.run;
-  assert(body.includes("for (let y = 0, i = 0; y < H; y++)"), "cell should compile to direct loop");
-  assert(body.includes("const growth = Math.max(0, ((_v_moisture + _v_lift) - 0.5));"), "local expression");
-  assert(body.includes("_f_reaction[i] = net;"), "set write");
-  assert(body.includes("_f_cloud[i] += (net * dt);"), "add write");
-  assert(body.includes("if (params.enableFeedback"), "when block");
+  const actions = pipeline.nodes.grow.dsl.body.statements[0].actions;
+  assertDeep(actions.map((action) => action.type), ["let", "let", "set", "add", "when"], "cell action sequence");
+  assert(actions[0].expr.type === "Call" && actions[0].expr.callee.name === "max", "max call parsed");
+  assertDeep(pipeline.dsl.stages[0].params, ["enableFeedback"], "cell param refs");
 });
 
-test("cell expressions expose deterministic per-cell noise", () => {
+test("cell expressions expose spatial noise as IR", () => {
   const pipeline = compileDsl(`
     use sim cell
     use core noise
+    use clock frame
+    param amp slider min 0 max 1 default 0.1
 
     stage stochastic "Stochastic" {
       reads moisture
       writes moisture
       cell {
         let seed = frame * 131
-        add moisture = noise(seed + 11) * params.amp
+        add moisture = noise(seed + 11) * amp
       }
     }
   `);
-  const body = pipeline.nodes.stochastic.run;
-  assert(body.includes("const seed = (frame * 131);"), "frame local");
-  assert(body.includes("hashNoise(i, (seed + 11)) * params.amp"), "noise mapping");
+  const actions = pipeline.nodes.stochastic.dsl.body.statements[0].actions;
+  assert(actions[0].name === "seed", "frame local");
+  assert(actions[1].expr.type === "Binary" && actions[1].expr.op === "*", "noise expression parsed");
+  assertDeep(pipeline.dsl.stages[0].params, ["amp"], "noise param ref");
 });
 
 test("stage cell validation accepts geodesic coordinates", () => {
   const result = diagnoseDsl(`
     field A
     use sim cell
+    use clock dt, frame
+    use geo lon, lat, u, v, px, py, pz, i, N
     use core sin, cos, noise
 
     stage waves "Spatial waves" {
@@ -434,10 +447,11 @@ test("stage cell validation accepts geodesic coordinates", () => {
 });
 
 test("cell expressions can read recipe constants and planet constants", () => {
-  const pipeline = compileDsl(`
+  const result = diagnoseDsl(`
     planet gravity 9.81
     const gain 0.25
     use sim cell
+    use clock dt
 
     field A
 
@@ -445,34 +459,33 @@ test("cell expressions can read recipe constants and planet constants", () => {
       reads A
       writes A
       cell {
-        add A = (consts.gain + planet.gravity) * dt
+        add A = (gain + gravity) * dt
       }
     }
   `);
-  const body = pipeline.nodes.scale.run;
-  assert(body.includes("consts.gain"), "const expression");
-  assert(body.includes("planet.gravity"), "planet expression");
+  assert(result.ok, `expected constants to validate, got ${result.errors?.[0]?.message}`);
 });
 
-test("each blocks compile stencil reads and side-effect writes", () => {
+test("each blocks expose stencil reads and side-effect writes as IR", () => {
   const pipeline = compileDsl(`
     use sim each
     use core sample
+    param threshold slider min 0 max 1 default 0.5
 
     stage mark "Mark" {
       reads W, R
       writes spreadMask
       each {
-        when W < params.threshold and R <= 0.1 and sample(W, 1, 0) > 0.5 {
+        when W < threshold and R <= 0.1 and sample(W, 1, 0) > 0.5 {
           set spreadMask = 1
         }
       }
     }
   `);
-  const body = pipeline.nodes.mark.run;
-  assert(body.includes("each("), "each block");
-  assert(body.includes("c.sample(\"W\", 1, 0)"), "sample call");
-  assert(body.includes("c.set(\"spreadMask\", 1);"), "set action");
+  const statement = pipeline.nodes.mark.dsl.body.statements[0];
+  assert(statement.type === "each", "each statement");
+  assert(statement.actions[0].type === "when", "when action");
+  assertDeep(pipeline.dsl.stages[0].params, ["threshold"], "each param refs");
 });
 
 test("event blocks support local bindings", () => {
@@ -489,9 +502,10 @@ test("event blocks support local bindings", () => {
       }
     }
   `);
-  const body = pipeline.nodes.swap.run;
-  assert(body.includes("const oldA = c.field.A;"), "event let");
-  assert(body.includes("c.set(\"B\", oldA);"), "event local use");
+  const actions = pipeline.nodes.swap.dsl.body.statements[0].actions;
+  assertDeep(actions.map((action) => action.type), ["let", "set", "set"], "event local/action sequence");
+  assert(actions[0].name === "oldA", "event local name");
+  assert(actions[2].expr.type === "Identifier" && actions[2].expr.name === "oldA", "event local use");
 });
 
 test("validator rejects writes to undeclared fields", () => {
@@ -589,6 +603,7 @@ test("validator rejects stage writes and stamps to immutable sources", () => {
 test("diagnoseDsl returns structured success and failure", () => {
   const good = diagnoseDsl(`
     use sim cell
+    use clock dt
 
     stage ok "OK" {
       reads A

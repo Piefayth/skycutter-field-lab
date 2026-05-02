@@ -14,7 +14,7 @@ import {
   reallocateState, resetState,
 } from "../kernel/kernel.mjs";
 import { createGeodesicGrid } from "../kernel/geodesic-grid.mjs";
-import { createPipelineMetadataRunner } from "./pipeline-metadata-runner.mjs";
+import { createPipelineMetadata } from "./pipeline-metadata.mjs";
 import { setControlHandlers } from "./controls.mjs";
 import { formModal, confirmModal } from "./modal.mjs";
 import { showToast } from "./toast.mjs";
@@ -220,7 +220,7 @@ export function initRecipes({
     // Build the runner. The metadata runner owns graph/editor shape;
     // the WebGPU wrapper below owns geodesic tick execution.
     registry.runner?.dispose?.();
-    const metadataRunner = createPipelineMetadataRunner(recipe);
+    const metadataRunner = createPipelineMetadata(recipe);
     const runner = wrapGeodesicRunner(recipe, metadataRunner, { renderer, getParams, getFrame, state });
     registry.runner = runner;
 
@@ -298,9 +298,6 @@ export function initRecipes({
           console.warn("geodesic WebGPU tick failed", error);
           throw error;
         }
-      },
-      runNode() {
-        throw new Error("single-node run is not available in geodesic WebGPU mode yet");
       },
       dispose() {
         disposed = true;
