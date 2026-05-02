@@ -60,18 +60,20 @@ source omega
 
 setting simRateHz slider min 0 max 360 step 1 default 60 label "SIM RATE"
 // K is per-neighbor coupling. Each cell sums over 5–6 neighbors,
-// so the effective coupling pressure is ~5–6 × K. Keep small.
-param K     slider min 0 max 2    step 0.01 default 0.30 label "COUPLING K"
-// α near π/2 (≈ 1.5708) is where Sakaguchi-Kuramoto's sync-vs-partial
-// transition lives. Above π/2 sync is unstable; below, it dominates.
-param alpha slider min 0 max 1.6  step 0.01 default 1.50 label "PHASE LAG α"
+// so the effective coupling pressure is ~5–6 × K.
+param K     slider min 0 max 2    step 0.01 default 1.58 label "COUPLING K"
+// α near π/2 (≈ 1.5708) is the Sakaguchi-Kuramoto sync edge; low
+// values give standard Kuramoto where sync wins when K dominates ω
+// spread. The recommended preset's K vs ωspread ratio sits in the
+// partial-sync regime.
+param alpha slider min 0 max 1.6  step 0.01 default 0.15 label "PHASE LAG α"
 // Heterogeneity of intrinsic frequencies. Higher = harder to fully
 // synchronize, more likely to see partial-sync regimes.
-param omegaSpread slider min 0 max 2 step 0.01 default 0.80 label "ω SPREAD"
+param omegaSpread slider min 0 max 2 step 0.01 default 1.45 label "ω SPREAD"
 // Time scaling. dt = 1/60 already; rate amplifies the per-tick step
 // so phase evolution is visible. Keep modest — too high and a single
 // tick can flip phases through more than a half-cycle.
-param rate  slider min 0 max 8    step 0.05 default 2.0  label "RATE"
+param rate  slider min 0 max 8    step 0.05 default 2.05 label "RATE"
 
 stamp pulse "Phase pulse" {
   // Lift theta by π in a brush-radius patch — useful for kicking the
