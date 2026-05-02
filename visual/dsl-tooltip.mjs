@@ -17,6 +17,7 @@
 
 import { hoverTooltip } from "@codemirror/view";
 import { getSymbolInfo } from "./dsl-symbols.mjs";
+import { showSymbolInDocs } from "./dsl-docs.mjs";
 
 const KIND_LABELS = {
   declKeyword: "Recipe declaration",
@@ -213,6 +214,19 @@ function renderTooltipDom(resolution) {
     el.className = part.cls;
     el.textContent = part.text;
     body.appendChild(el);
+  }
+
+  // Catalog symbols carry a "Open in docs" link that focuses the docs
+  // window on this entry. Recipe-declared things (field/source/param/
+  // const/planet/declared) don't get one — they aren't in the catalog,
+  // so the docs window has nothing to show for them.
+  if (resolution.kind === "catalog") {
+    const link = document.createElement("button");
+    link.type = "button";
+    link.className = "dsl-tooltip__open";
+    link.textContent = "Open in docs ⤴";
+    link.addEventListener("click", () => showSymbolInDocs(resolution.sym.name));
+    body.appendChild(link);
   }
 
   return dom;

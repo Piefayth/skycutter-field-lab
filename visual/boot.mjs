@@ -29,6 +29,7 @@ import {
 import { createWindow, listWindows } from "./windows.mjs";
 import { buildMenuBar } from "./menu.mjs";
 import { createGeodesicPreview } from "./geodesic-preview.mjs";
+import { createDslDocsContent, registerDslDocsWindow } from "./dsl-docs.mjs";
 
 const {
   canvas,
@@ -300,7 +301,24 @@ function buildWindows() {
     defaultSize: { w: 520, h: 660 },
   });
   layer.appendChild(pipelineWindow.element);
-  return { pipelineWindow };
+
+  // DSL docs window — searchable reader over the symbol catalog. Hidden
+  // by default; opened from Window menu or by clicking through a hover
+  // tooltip. The catalog data is small enough that we can safely build
+  // the full DOM up-front in createDslDocsContent.
+  const docsController = createDslDocsContent();
+  const docsWindow = createWindow({
+    id: "dsl-docs",
+    title: "DSL Docs",
+    contentEl: docsController.contentEl,
+    defaultPos: { x: 96, y: 96 },
+    defaultSize: { w: 760, h: 540 },
+    defaultVisible: false,
+  });
+  layer.appendChild(docsWindow.element);
+  registerDslDocsWindow(docsWindow, docsController);
+
+  return { pipelineWindow, docsWindow };
 }
 
 function buildMenu(windows) {
@@ -358,6 +376,7 @@ function updateGridRev() {
 function windowMenuItems(windows) {
   return [
     { type: "checkable", label: "Pipeline", isChecked: () => windows.pipelineWindow.isVisible(), onClick: () => windows.pipelineWindow.toggle() },
+    { type: "checkable", label: "DSL Docs", isChecked: () => windows.docsWindow.isVisible(), onClick: () => windows.docsWindow.toggle() },
   ];
 }
 
