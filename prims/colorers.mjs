@@ -90,26 +90,8 @@ export function violet(fieldName) {
 // past ±π still land on the same color as their wrapped equivalent.
 // Use for oscillator phase fields (Kuramoto, XY model, active nematics).
 export function phase(fieldName) {
-  // Diagnostic: log a sample of values once per second so we can see
-  // what's actually flowing into the colorer when something looks wrong.
-  // Cheap; cleared once the recipe is working.
-  let lastLog = 0;
-  const logIfDue = (arr) => {
-    const now = Date.now();
-    if (now - lastLog < 1000) return;
-    lastLog = now;
-    if (!arr || arr.length === 0) return;
-    const sample = [];
-    for (let s = 0; s < 6 && s < arr.length; s++) {
-      sample.push(arr[Math.floor((s / 6) * arr.length)]);
-    }
-    let nonFinite = 0;
-    for (let s = 0; s < arr.length; s++) if (!Number.isFinite(arr[s])) nonFinite++;
-    console.log(`[phase ${fieldName}] sample:`, sample.map((v) => Number(v).toFixed(3)).join(", "), `non-finite: ${nonFinite}/${arr.length}`);
-  };
   const color = (i, fields) => phaseToRgb(fields[fieldName][i]);
   color.write = (i, fields, data, k) => {
-    if (i === 0) logIfDue(fields[fieldName]);
     const [r, g, b] = phaseToRgb(fields[fieldName][i]);
     data[k + 0] = r;
     data[k + 1] = g;

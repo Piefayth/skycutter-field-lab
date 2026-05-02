@@ -483,7 +483,9 @@ const RESERVED_IDENTIFIERS = new Set([
 function compileActions(actions, ctx) {
   const out = [];
   // The reduction counter is shared across all actions in the stage so
-  // the lifted accumulator names (`__nr_<idx>`) don't collide.
+  // the lifted accumulator names (`nr_<idx>`) don't collide. Single
+  // underscore prefix only — WGSL reserves `__`-prefixed identifiers
+  // and silently fails shader compilation if you sneak one through.
   if (ctx.nrCounter == null) ctx.nrCounter = { value: 0 };
   for (const action of actions) {
     if (action.type === "let") {
@@ -565,7 +567,7 @@ function rewriteWithLifts(expr, ctx, statements) {
 
 function emitReduction(node, ctx, statements) {
   const idx = ctx.nrCounter.value++;
-  const accName = `__nr_${idx}`;
+  const accName = `nr_${idx}`;
   const slot = `${accName}_slot`;
   const count = `${accName}_count`;
   const sumName = `${accName}_sum`;

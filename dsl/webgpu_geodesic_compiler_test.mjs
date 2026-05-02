@@ -162,10 +162,10 @@ stage sum "Sum" {
 `);
   const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
   assert(pass.needsNeighbors === true, "stage should bind neighbor arrays");
-  assert(pass.source.includes("var __nr_0: f32 = 0.0;"), "sum accumulator initialized to 0");
-  assert(pass.source.includes("for (var __nr_0_slot: u32 = 0u"), "loop emitted");
-  assert(pass.source.includes("let n: f32 = f_A[u32(neighbors[cell * 6u + __nr_0_slot])]"), "binding read from neighbor");
-  assert(pass.source.includes("__nr_0 = __nr_0 + ((n - v_A))"), "sum body accumulated");
+  assert(pass.source.includes("var nr_0: f32 = 0.0;"), "sum accumulator initialized to 0");
+  assert(pass.source.includes("for (var nr_0_slot: u32 = 0u"), "loop emitted");
+  assert(pass.source.includes("let n: f32 = f_A[u32(neighbors[cell * 6u + nr_0_slot])]"), "binding read from neighbor");
+  assert(pass.source.includes("nr_0 = nr_0 + ((n - v_A))"), "sum body accumulated");
 });
 
 test("neighbor mean divides by neighbor count", () => {
@@ -187,8 +187,8 @@ stage avg "Avg" {
 }
 `);
   const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
-  assert(pass.source.includes("var __nr_0_sum: f32 = 0.0;"), "mean uses a sum accumulator");
-  assert(pass.source.includes("__nr_0 = select(0.0, __nr_0_sum / f32(__nr_0_count)"), "mean divides by count");
+  assert(pass.source.includes("var nr_0_sum: f32 = 0.0;"), "mean uses a sum accumulator");
+  assert(pass.source.includes("nr_0 = select(0.0, nr_0_sum / f32(nr_0_count)"), "mean divides by count");
 });
 
 test("neighbor max uses -infinity sentinel", () => {
@@ -210,8 +210,8 @@ stage hi "Hi" {
 }
 `);
   const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
-  assert(pass.source.includes("var __nr_0: f32 = -1.0e38;"), "max seeded with -infinity");
-  assert(pass.source.includes("__nr_0 = max(__nr_0, (n))"), "max body uses WGSL max");
+  assert(pass.source.includes("var nr_0: f32 = -1.0e38;"), "max seeded with -infinity");
+  assert(pass.source.includes("nr_0 = max(nr_0, (n))"), "max body uses WGSL max");
 });
 
 test("validator rejects nested neighbor reductions", () => {
@@ -291,8 +291,8 @@ stage mark "Mark" {
   assert(pass, "spreadMask pass missing");
   assert(pass.needsNeighbors === true, "stage did not request neighbor buffers");
   assert(pass.source.includes("var<storage, read> neighbors"), "neighbor storage binding missing");
-  assert(pass.source.includes("var __nr_0: f32 = -1.0e38;"), "max accumulator initialized to -infinity");
-  assert(pass.source.includes("let n: f32 = f_W[u32(neighbors[cell * 6u + __nr_0_slot])]"), "binding read from neighbor");
+  assert(pass.source.includes("var nr_0: f32 = -1.0e38;"), "max accumulator initialized to -infinity");
+  assert(pass.source.includes("let n: f32 = f_W[u32(neighbors[cell * 6u + nr_0_slot])]"), "binding read from neighbor");
   assert(pass.source.includes("let v_W = f_W[cell];"), "read variable should avoid W constant collision");
 });
 
