@@ -507,31 +507,31 @@ function parsePrimitiveLine(line) {
   let match = /^wind\s+(\w+)\s*->\s*(\w+)\s*,\s*(\w+)(?:\s*,\s*(\w+))?\s+strength\s+(.+)$/.exec(line);
   if (match) {
     const [, pressure, windU, windV, lift, strength] = match;
-    return { type: "wind", pressure, windU, windV, lift, strength };
+    return { type: "wind", pressure, windU, windV, lift, strength: parseExpr(tokenizeExpr(strength)) };
   }
 
   match = /^advect\s+(\w+)\s+by\s+(\w+)\s*,\s*(\w+)\s+dt\s+(.+)$/.exec(line);
   if (match) {
     const [, field, windU, windV, dtExpr] = match;
-    return { type: "advect", field, windU, windV, dt: dtExpr };
+    return { type: "advect", field, windU, windV, dt: parseExpr(tokenizeExpr(dtExpr)) };
   }
 
   match = /^diffuse\s+(\w+)\s+amount\s+(.+)$/.exec(line);
   if (match) {
     const [, field, amount] = match;
-    return { type: "diffuse", field, amount };
+    return { type: "diffuse", field, amount: parseExpr(tokenizeExpr(amount)) };
   }
 
   match = /^clamp\s+(\w+)\s+(.+?)\s+(.+)$/.exec(line);
   if (match) {
     const [, field, lo, hi] = match;
-    return { type: "clamp", field, lo, hi };
+    return { type: "clamp", field, lo: parseExpr(tokenizeExpr(lo)), hi: parseExpr(tokenizeExpr(hi)) };
   }
 
   match = /^normalize\s+(\w+)\s+damping\s+(.+?)\s+when\s+(.+)$/.exec(line);
   if (match) {
     const [, field, damping, cond] = match;
-    return { type: "normalize", field, damping, condition: cond };
+    return { type: "normalize", field, damping: parseExpr(tokenizeExpr(damping)), condition: parseExpr(tokenizeExpr(cond)) };
   }
 
   throw new Error(`Unknown DSL primitive: ${line}`);

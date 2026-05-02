@@ -333,11 +333,11 @@ test("primitive stages expose DSL statement IR only", () => {
   `);
   assert(!("run" in pipeline.nodes.wind), "node should not carry generated JS");
   assertDeep(pipeline.nodes.wind.dsl.body.statements, [
-    { type: "wind", pressure: "pressure", windU: "windU", windV: "windV", lift: "lift", strength: "windStrength" },
+    { type: "wind", pressure: "pressure", windU: "windU", windV: "windV", lift: "lift", strength: { type: "Identifier", name: "windStrength" } },
   ], "wind primitive IR");
   assertDeep(pipeline.nodes.clamp.dsl.body.statements, [
-    { type: "clamp", field: "cloud", lo: "0", hi: "1" },
-    { type: "normalize", field: "pressure", damping: "0.997", condition: "normalizePressure" },
+    { type: "clamp", field: "cloud", lo: { type: "Number", value: "0" }, hi: { type: "Number", value: "1" } },
+    { type: "normalize", field: "pressure", damping: { type: "Number", value: "0.997" }, condition: { type: "Identifier", name: "normalizePressure" } },
   ], "clamp/normalize primitive IR");
   assertDeep(pipeline.dsl.stages[0].params, ["windStrength"], "wind param refs");
   assertDeep(pipeline.dsl.stages[1].params, ["normalizePressure"], "normalize param refs");
@@ -359,7 +359,7 @@ test("wind primitive can omit lift output", () => {
     windU: "windU",
     windV: "windV",
     lift: undefined,
-    strength: "4",
+    strength: { type: "Number", value: "4" },
   }, "wind IR without lift");
 });
 
@@ -375,7 +375,12 @@ test("field names that resemble old rectangular globals remain regular fields", 
   `);
   assertDeep(pipeline.nodes.clamp.dsl.reads, ["W"], "reads W field");
   assertDeep(pipeline.nodes.clamp.dsl.writes, ["W"], "writes W field");
-  assertDeep(pipeline.nodes.clamp.dsl.body.statements[0], { type: "clamp", field: "W", lo: "0", hi: "1" }, "clamp W IR");
+  assertDeep(pipeline.nodes.clamp.dsl.body.statements[0], {
+    type: "clamp",
+    field: "W",
+    lo: { type: "Number", value: "0" },
+    hi: { type: "Number", value: "1" },
+  }, "clamp W IR");
 });
 
 test("event blocks expose bounded add/set action IR", () => {
@@ -588,6 +593,30 @@ test("validator rejects samples of undeclared fields", () => {
       }
     }
   `), "sample field references undeclared field B");
+});
+
+test("validator rejects per-cell identifiers in primitive uniform expressions", () => {
+  assertThrows(() => compileDsl(`
+    use sim diffuse
+    field A
+
+    stage bad "Bad" {
+      reads A
+      writes A
+      diffuse A amount A * 0.1
+    }
+  `), "unknown identifier A");
+
+  assertThrows(() => compileDsl(`
+    use sim wind
+    use geo lon
+
+    stage bad "Bad" {
+      reads pressure
+      writes windU, windV
+      wind pressure -> windU, windV strength lon
+    }
+  `), "unknown identifier lon");
 });
 
 test("validator rejects stage writes and stamps to immutable sources", () => {

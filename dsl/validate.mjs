@@ -7,9 +7,9 @@ import {
   GEO_IDENTIFIERS,
   STAMP_IDENTIFIERS,
   formatCallee,
-  parseExpr,
-  tokenizeExpr,
 } from "./expr-parser.mjs";
+
+const UNIFORM_IDENTIFIERS = new Set(["PI", "TAU"]);
 
 export function buildDeclaredPipelineSummary(stages) {
   return stages.flatMap((stage) => (stage.declares ?? []).map((name) => ({
@@ -46,17 +46,17 @@ function collectParamRefsFromStatement(statement, add) {
     collectParamRefsFromExpr(statement.condition, add);
     for (const action of statement.actions ?? []) collectParamRefsFromAction(action, add);
   } else if (statement.type === "wind") {
-    collectParamRefsFromExpr(parseExpr(tokenizeExpr(statement.strength)), add);
+    collectParamRefsFromExpr(statement.strength, add);
   } else if (statement.type === "advect") {
-    collectParamRefsFromExpr(parseExpr(tokenizeExpr(statement.dt)), add);
+    collectParamRefsFromExpr(statement.dt, add);
   } else if (statement.type === "diffuse") {
-    collectParamRefsFromExpr(parseExpr(tokenizeExpr(statement.amount)), add);
+    collectParamRefsFromExpr(statement.amount, add);
   } else if (statement.type === "clamp") {
-    collectParamRefsFromExpr(parseExpr(tokenizeExpr(statement.lo)), add);
-    collectParamRefsFromExpr(parseExpr(tokenizeExpr(statement.hi)), add);
+    collectParamRefsFromExpr(statement.lo, add);
+    collectParamRefsFromExpr(statement.hi, add);
   } else if (statement.type === "normalize") {
-    collectParamRefsFromExpr(parseExpr(tokenizeExpr(statement.damping)), add);
-    collectParamRefsFromExpr(parseExpr(tokenizeExpr(statement.condition)), add);
+    collectParamRefsFromExpr(statement.damping, add);
+    collectParamRefsFromExpr(statement.condition, add);
   }
 }
 
@@ -342,7 +342,7 @@ function validateStatement(statement, stage, reads, writes, declares, visibleFie
       requireOutput(statement.windU, writes, declares, stage.id);
       requireOutput(statement.windV, writes, declares, stage.id);
       if (statement.lift) requireOutput(statement.lift, writes, declares, stage.id);
-      validateRawExpr(statement.strength, visibleFields, declaredParams, declaredConstants, declaredPlanet, imports, `${stage.id} wind strength`);
+      validateUniformExpr(statement.strength, `${stage.id} wind strength`, declaredParams, declaredConstants, declaredPlanet, imports);
       break;
     case "advect":
       requireImport(imports, "sim", "advect", stage.id);
@@ -350,35 +350,35 @@ function validateStatement(statement, stage, reads, writes, declares, visibleFie
       requireVisibleField(statement.windU, visibleFields, stage.id, "advect windU");
       requireVisibleField(statement.windV, visibleFields, stage.id, "advect windV");
       requireWrite(statement.field, writes, stage.id);
-      validateRawExpr(statement.dt, visibleFields, declaredParams, declaredConstants, declaredPlanet, imports, `${stage.id} advect dt`);
+      validateUniformExpr(statement.dt, `${stage.id} advect dt`, declaredParams, declaredConstants, declaredPlanet, imports);
       break;
     case "diffuse":
       requireImport(imports, "sim", statement.type, stage.id);
       requireVisibleField(statement.field, visibleFields, stage.id, statement.type);
       requireWrite(statement.field, writes, stage.id);
-      validateRawExpr(statement.amount, visibleFields, declaredParams, declaredConstants, declaredPlanet, imports, `${stage.id} diffuse amount`);
+      validateUniformExpr(statement.amount, `${stage.id} diffuse amount`, declaredParams, declaredConstants, declaredPlanet, imports);
       break;
     case "clamp":
       requireImport(imports, "sim", statement.type, stage.id);
       requireVisibleField(statement.field, visibleFields, stage.id, statement.type);
       requireWrite(statement.field, writes, stage.id);
-      validateRawExpr(statement.lo, visibleFields, declaredParams, declaredConstants, declaredPlanet, imports, `${stage.id} clamp lo`);
-      validateRawExpr(statement.hi, visibleFields, declaredParams, declaredConstants, declaredPlanet, imports, `${stage.id} clamp hi`);
+      validateUniformExpr(statement.lo, `${stage.id} clamp lo`, declaredParams, declaredConstants, declaredPlanet, imports);
+      validateUniformExpr(statement.hi, `${stage.id} clamp hi`, declaredParams, declaredConstants, declaredPlanet, imports);
       break;
     case "normalize":
       requireImport(imports, "sim", statement.type, stage.id);
       requireVisibleField(statement.field, visibleFields, stage.id, statement.type);
       requireWrite(statement.field, writes, stage.id);
-      validateRawExpr(statement.damping, visibleFields, declaredParams, declaredConstants, declaredPlanet, imports, `${stage.id} normalize damping`);
-      validateRawExpr(statement.condition, visibleFields, declaredParams, declaredConstants, declaredPlanet, imports, `${stage.id} normalize when`);
+      validateUniformExpr(statement.damping, `${stage.id} normalize damping`, declaredParams, declaredConstants, declaredPlanet, imports);
+      validateUniformExpr(statement.condition, `${stage.id} normalize when`, declaredParams, declaredConstants, declaredPlanet, imports);
       break;
     default:
       throw new Error(`Unknown statement in ${stage.id}: ${statement.type}`);
   }
 }
 
-function validateRawExpr(source, visibleFields, declaredParams, declaredConstants, declaredPlanet, imports, label) {
-  validateExpr(parseExpr(tokenizeExpr(source)), visibleFields, new Set(), label, declaredParams, declaredConstants, declaredPlanet, imports);
+function validateUniformExpr(ast, label, declaredParams, declaredConstants, declaredPlanet, imports) {
+  validateExpr(ast, new Set(), new Set(), label, declaredParams, declaredConstants, declaredPlanet, imports, UNIFORM_IDENTIFIERS, false);
 }
 
 function validateActions(actions, stage, reads, writes, declares, visibleFields, mode, declaredParams, declaredConstants, declaredPlanet, imports, locals = new Set()) {
@@ -409,6 +409,7 @@ function validateExpr(
   declaredPlanet = new Set(),
   imports = null,
   extraIdentifiers = new Set(),
+  allowImplicitGeo = true,
 ) {
   switch (ast.type) {
     case "Number":
@@ -428,7 +429,7 @@ function validateExpr(
         if (GEO_IDENTIFIERS.has(ast.name)) requireImport(imports, "geo", ast.name, label);
         return;
       }
-      if (GEO_IDENTIFIERS.has(ast.name)) {
+      if (allowImplicitGeo && GEO_IDENTIFIERS.has(ast.name)) {
         requireImport(imports, "geo", ast.name, label);
         return;
       }
@@ -446,37 +447,37 @@ function validateExpr(
           || ast.object.name === "planet")) {
         throw new Error(`${label}: ${ast.object.name}.${ast.prop} is no longer supported — drop the \`${ast.object.name}.\` prefix and use bare \`${ast.prop}\``);
       }
-      validateExpr(ast.object, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers);
+      validateExpr(ast.object, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers, allowImplicitGeo);
       return;
     case "Unary":
-      validateExpr(ast.expr, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers);
+      validateExpr(ast.expr, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers, allowImplicitGeo);
       return;
     case "Binary":
-      validateExpr(ast.left, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers);
-      validateExpr(ast.right, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers);
+      validateExpr(ast.left, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers, allowImplicitGeo);
+      validateExpr(ast.right, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers, allowImplicitGeo);
       return;
     case "Conditional":
-      validateExpr(ast.test, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers);
-      validateExpr(ast.consequent, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers);
-      validateExpr(ast.alternate, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers);
+      validateExpr(ast.test, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers, allowImplicitGeo);
+      validateExpr(ast.consequent, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers, allowImplicitGeo);
+      validateExpr(ast.alternate, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers, allowImplicitGeo);
       return;
     case "Call":
-      validateCall(ast, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers);
+      validateCall(ast, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers, allowImplicitGeo);
       return;
     default:
       throw new Error(`${label}: unknown expression node ${ast.type}`);
   }
 }
 
-function validateCall(ast, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers) {
+function validateCall(ast, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers, allowImplicitGeo = true) {
   if (ast.callee.type === "Identifier" && ast.callee.name === "sample") {
     requireImport(imports, "core", "sample", label);
     if (ast.args.length !== 3) throw new Error(`${label}: sample expects 3 arguments`);
     const [field, dx, dy] = ast.args;
     if (field.type !== "Identifier") throw new Error(`${label}: sample first argument must be a field name`);
     requireVisibleField(field.name, visibleFields, label, "sample field");
-    validateExpr(dx, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers);
-    validateExpr(dy, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers);
+    validateExpr(dx, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers, allowImplicitGeo);
+    validateExpr(dy, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers, allowImplicitGeo);
     return;
   }
   if (ast.callee.type === "Identifier" && ast.callee.name === "neighborMax") {
@@ -497,7 +498,7 @@ function validateCall(ast, visibleFields, locals, label, declaredParams, declare
   if (arity && !arity.includes(ast.args.length)) {
     throw new Error(`${label}: ${ast.callee.name} expects ${arity.join(" or ")} args, got ${ast.args.length}`);
   }
-  for (const arg of ast.args) validateExpr(arg, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers);
+  for (const arg of ast.args) validateExpr(arg, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers, allowImplicitGeo);
 }
 
 function buildImportSets(imports) {

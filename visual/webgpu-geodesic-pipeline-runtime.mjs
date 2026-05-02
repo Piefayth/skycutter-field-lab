@@ -3,6 +3,7 @@ import {
   buildWebGpuGeodesicUniforms,
   compileWebGpuGeodesicPipeline,
 } from "../dsl/webgpu-geodesic-compiler.mjs";
+import { clamp, hashNoise, noise2, smoothstep } from "../kernel/kernel.mjs";
 import { createWebGpuGeodesicRuntime } from "./webgpu-geodesic-runtime.mjs";
 
 // =============================================================================
@@ -127,21 +128,93 @@ function recipeFieldNames(dsl) {
 }
 
 function evalUniformExpr(expr, env) {
-  if (expr === undefined || expr === null || expr === "") return 0;
+  if (expr === undefined || expr === null || expr === "") throw new Error("missing primitive uniform expression");
   if (typeof expr === "number") return expr;
-  const source = String(expr).replace(/\band\b/g, "&&").replace(/\bor\b/g, "||").replace(/\bnot\b/g, "!");
-  // Bare-name DSL: params / consts / planet are all in one global scope.
-  // Flatten them into individual Function args so an expression like
-  // `windStrength * 0.18 * dt` can resolve `windStrength` as a free
-  // identifier. Recipe-level uniqueness (validateNameUniqueness in the
-  // compiler) guarantees no key collisions across the namespaces.
-  const params = env.params ?? {};
-  const consts = env.consts ?? {};
-  const planet = env.planet ?? {};
-  const names = ["dt", "frame", ...Object.keys(params), ...Object.keys(consts), ...Object.keys(planet)];
-  const values = [env.dt ?? 0, env.frame ?? 0, ...Object.values(params), ...Object.values(consts), ...Object.values(planet)];
-  // Internal DSL expression evaluation for primitive uniforms. These
-  // strings are compiler-validated DSL, not arbitrary user JS editors.
-  // eslint-disable-next-line no-new-func
-  return Function(...names, `"use strict"; return (${source});`)(...values);
+  switch (expr.type) {
+    case "Number":
+      return Number(expr.value);
+    case "Identifier":
+      return evalUniformIdentifier(expr.name, env);
+    case "Member": {
+      const object = evalUniformExpr(expr.object, env);
+      if (object == null || !Object.hasOwn(object, expr.prop)) {
+        throw new Error(`unknown primitive uniform property ${expr.prop}`);
+      }
+      return object[expr.prop];
+    }
+    case "Unary": {
+      const value = evalUniformExpr(expr.expr, env);
+      if (expr.op === "-") return -value;
+      if (expr.op === "+") return +value;
+      if (expr.op === "!") return !value;
+      throw new Error(`unknown primitive uniform unary op ${expr.op}`);
+    }
+    case "Binary":
+      return evalUniformBinary(expr.op, evalUniformExpr(expr.left, env), evalUniformExpr(expr.right, env));
+    case "Conditional":
+      return evalUniformExpr(expr.test, env)
+        ? evalUniformExpr(expr.consequent, env)
+        : evalUniformExpr(expr.alternate, env);
+    case "Call":
+      return evalUniformCall(expr, env);
+    default:
+      throw new Error(`unknown primitive uniform expression node ${expr.type}`);
+  }
+}
+
+function evalUniformIdentifier(name, env) {
+  if (name === "true") return true;
+  if (name === "false") return false;
+  if (name === "null") return null;
+  if (name === "undefined") return undefined;
+  if (name === "dt") return env.dt ?? 0;
+  if (name === "frame") return env.frame ?? 0;
+  if (name === "PI") return Math.PI;
+  if (name === "TAU") return Math.PI * 2;
+  if (Object.hasOwn(env.params ?? {}, name)) return env.params[name];
+  if (Object.hasOwn(env.consts ?? {}, name)) return env.consts[name];
+  if (Object.hasOwn(env.planet ?? {}, name)) return env.planet[name];
+  throw new Error(`unknown primitive uniform identifier ${name}`);
+}
+
+function evalUniformBinary(op, left, right) {
+  switch (op) {
+    case "??": return left ?? right;
+    case "||": return left || right;
+    case "&&": return left && right;
+    case "===": return left === right;
+    case "!==": return left !== right;
+    case "==": return left == right;
+    case "!=": return left != right;
+    case ">": return left > right;
+    case ">=": return left >= right;
+    case "<": return left < right;
+    case "<=": return left <= right;
+    case "+": return left + right;
+    case "-": return left - right;
+    case "*": return left * right;
+    case "/": return left / right;
+    case "%": return left % right;
+    default: throw new Error(`unknown primitive uniform binary op ${op}`);
+  }
+}
+
+function evalUniformCall(ast, env) {
+  const name = ast.callee.type === "Identifier" ? ast.callee.name : null;
+  const args = ast.args.map((arg) => evalUniformExpr(arg, env));
+  if (name === "clamp") return clamp(args[0], args[1], args[2]);
+  if (name === "smoothstep") return smoothstep(args[0], args[1], args[2]);
+  if (name === "max") return Math.max(...args);
+  if (name === "min") return Math.min(...args);
+  if (name === "abs") return Math.abs(args[0]);
+  if (name === "hypot") return Math.hypot(...args);
+  if (name === "sin") return Math.sin(args[0]);
+  if (name === "asin") return Math.asin(args[0]);
+  if (name === "cos") return Math.cos(args[0]);
+  if (name === "exp") return Math.exp(args[0]);
+  if (name === "sqrt") return Math.sqrt(args[0]);
+  if (name === "pow") return Math.pow(args[0], args[1]);
+  if (name === "noise") return hashNoise(env.frame ?? 0, args[0] ?? 0);
+  if (name === "noise2") return noise2(args[0], args[1]);
+  throw new Error(`unknown primitive uniform function ${name ?? "call"}`);
 }
