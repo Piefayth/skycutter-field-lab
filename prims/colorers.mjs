@@ -118,38 +118,6 @@ export function windMagnitude(scale = 1, lo = [10, 20, 28], hi = [90, 190, 255])
   return color;
 }
 
-// Forcing visualization — mixes the *Source forcing-map fields so
-// authors don't have to write the per-source blend by hand. Reads
-// fields directly now that sources collapsed into the fields namespace.
-export function forcing() {
-  const color = (i, fields) => {
-    let color = mix([24, 30, 38], [46, 126, 180], clamp(fields.moistureSource[i], 0, 1));
-    color = mix(color, [232, 96, 54], clamp(Math.max(0, fields.heatSource[i]), 0, 1) * 0.58);
-    color = mix(color, [83, 132, 190], clamp(Math.max(0, -fields.heatSource[i]), 0, 1) * 0.48);
-    color = mix(color, [190, 98, 255], clamp(fields.catalystSource[i], 0, 1) * 0.7);
-    color = mix(color, [26, 20, 28], clamp(fields.sinkSource[i], 0, 1) * 0.32);
-    return color;
-  };
-  color.write = (i, fields, data, k) => {
-    let r = 24, g = 30, b = 38;
-    let t = clamp(fields.moistureSource[i], 0, 1);
-    r = mixChannel(r, 46, t); g = mixChannel(g, 126, t); b = mixChannel(b, 180, t);
-    t = clamp(Math.max(0, fields.heatSource[i]), 0, 1) * 0.58;
-    r = mixChannel(r, 232, t); g = mixChannel(g, 96, t); b = mixChannel(b, 54, t);
-    t = clamp(Math.max(0, -fields.heatSource[i]), 0, 1) * 0.48;
-    r = mixChannel(r, 83, t); g = mixChannel(g, 132, t); b = mixChannel(b, 190, t);
-    t = clamp(fields.catalystSource[i], 0, 1) * 0.7;
-    r = mixChannel(r, 190, t); g = mixChannel(g, 98, t); b = mixChannel(b, 255, t);
-    t = clamp(fields.sinkSource[i], 0, 1) * 0.32;
-    r = mixChannel(r, 26, t); g = mixChannel(g, 20, t); b = mixChannel(b, 28, t);
-    data[k + 0] = r;
-    data[k + 1] = g;
-    data[k + 2] = b;
-  };
-  color.fields = ["moistureSource", "heatSource", "catalystSource", "sinkSource"];
-  return color;
-}
-
 // Weather-flavored composite: ocean-base with moisture/temperature/catalyst
 // tinting and cloud alpha on top. Bespoke; only weather uses it.
 export function composite() {

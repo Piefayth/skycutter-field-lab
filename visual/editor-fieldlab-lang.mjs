@@ -82,16 +82,6 @@ export { definitionNameTag };
 const namespaceTag = Tag.define(t.variableName);
 export { namespaceTag };
 
-// References into an immutable namespace (`consts.X`, `planet.X`,
-// `params.X`) — deprecated dotted form. Tagged distinctly from the
-// post-bare-name `immutableRefTag` so the deprecated syntax keeps
-// its info-color signal during transition while bare-name refs match
-// definition styling.
-const immutableNsTag = Tag.define(t.atom);
-export { immutableNsTag };
-const immutablePropTag = Tag.define(t.propertyName);
-export { immutablePropTag };
-
 // Bare references to declared params / consts / planet constants.
 // Coloured the same as the declaration site (definitionName) so the
 // reference and the def site read as the same identity.
@@ -252,14 +242,13 @@ function makeFieldLabLanguage({ fieldTags, tokenNames, sourceTokenNames, immutab
   name: "fieldlab",
 
   startState() {
-    return { afterDot: false, afterImmutableNs: false, lineMode: null, defConsumed: false };
+    return { afterDot: false, lineMode: null, defConsumed: false };
   },
 
   token(stream, state) {
     if (stream.sol()) {
       state.lineMode = null;
       state.defConsumed = false;
-      state.afterImmutableNs = false;
     }
 
     if (stream.eatSpace()) return null;
@@ -295,12 +284,7 @@ function makeFieldLabLanguage({ fieldTags, tokenNames, sourceTokenNames, immutab
     if (idMatch) {
       const word = idMatch[0];
       const wasAfterDot = state.afterDot;
-      const wasAfterImmutableNs = state.afterImmutableNs;
       state.afterDot = false;
-      // The "we just saw an immutable namespace" flag only stays alive
-      // for the immediate ns.prop chain. Any identifier that ISN'T the
-      // prop in that chain (i.e. wasn't preceded by a dot) clears it.
-      if (!wasAfterDot) state.afterImmutableNs = false;
 
       // `(`-lookahead: any identifier directly followed by `(` is a
       // function call, regardless of whether it's also a keyword. This
@@ -308,15 +292,7 @@ function makeFieldLabLanguage({ fieldTags, tokenNames, sourceTokenNames, immutab
       // styling without losing the action-verb form's keyword color.
       const isCall = stream.match(/^\s*\(/, false);
 
-      if (wasAfterDot) {
-        // Prop-access. Calls always render as functions; otherwise
-        // bold the prop when the parent namespace was immutable
-        // (params/consts/planet) so the whole `ns.prop` chain reads
-        // as immutable in the design language.
-        return isCall
-          ? "function"
-          : (wasAfterImmutableNs ? "immutableProp" : "propertyName");
-      }
+      if (wasAfterDot) return isCall ? "function" : "propertyName";
       if (isCall) return "function";
 
       // Past the namespace on a `use sim …` line, the remaining
@@ -398,8 +374,6 @@ function makeFieldLabLanguage({ fieldTags, tokenNames, sourceTokenNames, immutab
     function: t.function(t.variableName),
     definitionName: definitionNameTag,
     namespace: namespaceTag,
-    immutableNs: immutableNsTag,
-    immutableProp: immutablePropTag,
     immutable_ref: immutableRefTag,
     source_ref: sourceRefTag,
     ...Object.fromEntries([...tokenNames].map(([name, token]) => [token, fieldTags.get(name)])),
