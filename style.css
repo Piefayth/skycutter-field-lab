@@ -932,8 +932,27 @@ input[type="range"]::-moz-range-thumb {
   color: var(--bone-bright);
 }
 
+.menu__item:disabled,
+.menu__item--disabled {
+  color: var(--bone-mute);
+  cursor: default;
+  opacity: 0.7;
+}
+
+.menu__item:disabled:hover,
+.menu__item--disabled:hover {
+  background: transparent;
+  color: var(--bone-mute);
+}
+
 .menu__item--checked { color: var(--signal); }
 .menu__item--checked:hover { color: var(--signal); }
+
+.menu__separator {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--line);
+}
 
 .submenu { position: relative; }
 

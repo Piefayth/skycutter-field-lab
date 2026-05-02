@@ -84,6 +84,13 @@ function buildMenu({ label, items }) {
 }
 
 function buildItem(item, ownerMenu) {
+  if (item.type === "separator") {
+    const sep = document.createElement("div");
+    sep.className = "menu__separator";
+    sep.setAttribute("role", "separator");
+    return sep;
+  }
+
   if (item.type === "submenu") {
     const wrap = document.createElement("div");
     wrap.className = "submenu";
@@ -115,6 +122,10 @@ function buildItem(item, ownerMenu) {
   btn.type = "button";
   btn.className = "menu__item";
   if (item.title) btn.title = item.title;
+  if (item.disabled) {
+    btn.disabled = true;
+    btn.classList.add("menu__item--disabled");
+  }
 
   if (item.type === "checkable") {
     btn.dataset.checkable = "1";
@@ -127,6 +138,7 @@ function buildItem(item, ownerMenu) {
   }
 
   btn.addEventListener("click", () => {
+    if (item.disabled) return;
     item.onClick?.();
     if (item.type === "checkable") renderCheckable(btn, item);
     closeAll(ownerMenu.parentElement.parentElement);

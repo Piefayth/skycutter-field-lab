@@ -339,6 +339,45 @@ function buildMenu(windows) {
       ui.recipeSelect.dispatchEvent(new Event("change", { bubbles: true }));
     },
   }));
+  const savedRecipeItems = () => {
+    if (!recipes.savedRecipes.length) {
+      return [{ label: "No saved recipes", disabled: true }];
+    }
+    return recipes.savedRecipes.map((r) => ({
+      type: "checkable",
+      label: r.name ?? r.id,
+      title: r.summary,
+      isChecked: () => r.id === recipes.activeId,
+      onClick: () => recipes.loadSavedById?.(r.id)?.catch(handleRecipeMenuError),
+    }));
+  };
+  const deleteSavedRecipeItems = () => {
+    if (!recipes.savedRecipes.length) {
+      return [{ label: "No saved recipes", disabled: true }];
+    }
+    return recipes.savedRecipes.map((r) => ({
+      label: r.name ?? r.id,
+      title: r.summary,
+      onClick: () => recipes.deleteSavedById?.(r.id)?.catch(handleRecipeMenuError),
+    }));
+  };
+  const fileMenuItems = () => [
+    { label: "Save Recipe", title: "Cmd/Ctrl+S", onClick: () => recipes.saveCurrentLocal?.()?.catch(handleRecipeMenuError) },
+    { label: "Save Recipe As...", title: "Shift+Cmd/Ctrl+S", onClick: () => recipes.saveCurrentAsLocal?.()?.catch(handleRecipeMenuError) },
+    { type: "submenu", label: "Open Saved Recipe", items: savedRecipeItems() },
+    { type: "submenu", label: "Delete Saved Recipe", items: deleteSavedRecipeItems() },
+    { type: "separator" },
+    { label: "Export Recipe File...", onClick: () => {
+      try {
+        recipes.exportCurrentFile?.();
+      } catch (error) {
+        handleRecipeMenuError(error);
+      }
+    } },
+    { label: "Import Recipe File...", onClick: () => recipes.importRecipeFile?.()?.catch(handleRecipeMenuError) },
+    { type: "separator" },
+    { type: "submenu", label: "Example Recipes", items: recipeItems() },
+  ];
   const menu = buildMenuBar({
     container: host,
     brand: "SKYCUTTER · FIELD LAB",
@@ -346,7 +385,7 @@ function buildMenu(windows) {
     menus: [
       {
         label: "File",
-        items: [{ type: "submenu", label: "Recipe", items: recipeItems() }],
+        items: fileMenuItems(),
       },
       {
         label: "Window",
@@ -355,9 +394,26 @@ function buildMenu(windows) {
     ],
   });
   return { rebuild: () => menu.rebuild([
-    { label: "File", items: [{ type: "submenu", label: "Recipe", items: recipeItems() }] },
+    { label: "File", items: fileMenuItems() },
     { label: "Window", items: windowMenuItems(windows) },
   ]) };
+}
+
+function handleRecipeMenuError(error) {
+  console.error("recipe menu action failed:", error);
+  showToast(`recipe action failed: ${error.message}`, { kind: "error" });
+  pipelineEditor.setStatus(`recipe action failed: ${error.message}`, true);
+}
+
+function wireRecipeSaveShortcuts() {
+  document.addEventListener("keydown", (event) => {
+    const key = event.key?.toLowerCase();
+    if (key !== "s" || (!event.metaKey && !event.ctrlKey) || event.altKey) return;
+    event.preventDefault();
+    if (document.querySelector(".modal-backdrop")) return;
+    const action = event.shiftKey ? recipes.saveCurrentAsLocal : recipes.saveCurrentLocal;
+    action?.()?.catch(handleRecipeMenuError);
+  }, true);
 }
 
 function gridLabel() {
@@ -434,6 +490,7 @@ export function bootApp() {
   // immediate fetch — the menu's recipe submenu may briefly be empty
   // until the manifest resolves, which is fine.
   menuRef = buildMenu(windows);
+  wireRecipeSaveShortcuts();
 
   // Window menu's checkmarks need to refresh whenever a window's
   // visibility changes (close button, escape, programmatic toggle).

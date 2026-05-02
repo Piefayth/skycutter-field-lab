@@ -6,9 +6,9 @@
 // Persistence model (post-cutover): edits do NOT auto-save. The runner is
 // the live, mutable source of truth during a session. Mutating a node
 // body, renaming a node, drawing a wire, etc. all reshape the runner in
-// place; a browser refresh discards them and reloads the recipe from
-// disk in its baseline shape. The recipe source files are the only
-// persistence today.
+// place; a browser refresh discards unapplied editor text. Applied DSL
+// can be persisted through File -> Save Recipe or File -> Export Recipe
+// File.
 // =============================================================================
 
 import { mountPipelineGraph } from "./pipeline-graph.mjs";

@@ -5,7 +5,8 @@
 // toggles, presets, stamps, views, overlays, metrics, regime, pipeline,
 // recommendedPreset }`. The manifest names which recipe to auto-load at
 // boot. The browser wraps DSL metadata with a geodesic WebGPU executor;
-// the recipe file on disk is the only persistence today.
+// Built-in recipe files are immutable in-browser; user snapshots live in
+// localStorage and can be exported/imported as JSON recipe files.
 // =============================================================================
 
 import {
@@ -22,6 +23,7 @@ import { compileDsl } from "../dsl/compiler.mjs";
 const registry = {
   manifest: { defaultRecipe: null, recipes: [] },
   defaultRecipeId: null,
+  savedRecipes: [],
   // Currently-active recipe id (mirrors `ui.recipeSelect.value`). Used
   // by the top menu's File→Recipe submenu to render checkmarks.
   activeId: null,
@@ -36,6 +38,12 @@ const registry = {
   // True if the active recipe declares an overlay of `type` and its
   // checkbox is currently checked.
   isOverlayEnabled: null,
+  saveCurrentLocal: null,
+  saveCurrentAsLocal: null,
+  loadSavedById: null,
+  deleteSavedById: null,
+  exportCurrentFile: null,
+  importRecipeFile: null,
   // The WebGPU-backed runner for the active recipe. `null` until the first
   // recipe loads. boot.mjs reads this through `getRunner()` so per-tick
   // calls always pick up the latest one across recipe swaps.
@@ -46,6 +54,9 @@ export const recipes = registry;
 
 const AUTHOR_COORD_W = 256;
 const AUTHOR_COORD_H = 128;
+const SAVED_RECIPE_STORAGE_KEY = "skycutter.fieldLab.savedRecipes.v1";
+const RECIPE_FILE_TYPE = "skycutter-field-lab.recipe";
+const RECIPE_FILE_VERSION = 1;
 
 export function getRunner() {
   return registry.runner;
@@ -71,6 +82,7 @@ export function initRecipes({
   // Active recipe state.
   let activeRecipe = null;
   let activeRecipeId = null;
+  let activeBaseRecipeId = null;
   let activeViewDecls = [];
   let activeOverlayDecls = [];
   let activePresetDecls = [];
@@ -101,6 +113,7 @@ export function initRecipes({
 
   async function bootstrap() {
     try {
+      registry.savedRecipes = loadSavedRecipes();
       const response = await fetch("recipes/manifest.json", { cache: "no-store" });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
@@ -128,19 +141,145 @@ export function initRecipes({
   }
 
   async function loadById(id) {
-    const entry = registry.manifest.recipes.find((recipe) => recipe.id === id);
-    if (!entry || !entry.path) throw new Error(`recipe "${id}" not in manifest`);
-    // Dynamic import the .mjs module. Cache-bust via timestamp query so
-    // edits to the recipe source during dev are picked up on reload.
-    const url = new URL(entry.path, window.location.href);
-    url.searchParams.set("v", String(Date.now()));
-    const recipeModule = await import(url.href);
+    const recipeModule = await importManifestRecipe(id);
     activeRecipe = materializeRecipe(recipeModule);
     activeRecipeId = id;
+    activeBaseRecipeId = id;
     registry.activeId = id;
     applyRecipe(activeRecipe, id);
     onActiveRecipeChange?.(id);
     pipelineEditor.setStatus(`loaded recipe "${activeRecipe.name ?? id}"`);
+  }
+
+  async function loadSavedById(id) {
+    const snapshot = registry.savedRecipes.find((recipe) => recipe.id === id);
+    if (!snapshot) throw new Error(`saved recipe "${id}" not found`);
+    const recipe = await materializeSavedRecipe(snapshot);
+    activeRecipe = recipe;
+    activeRecipeId = snapshot.id;
+    activeBaseRecipeId = snapshot.baseRecipeId;
+    registry.activeId = snapshot.id;
+    applyRecipe(activeRecipe, snapshot.id);
+    onActiveRecipeChange?.(snapshot.id);
+    pipelineEditor.setStatus(`loaded saved recipe "${snapshot.name ?? snapshot.id}"`);
+    showToast(`loaded saved recipe "${snapshot.name ?? snapshot.id}"`);
+  }
+
+  async function materializeSavedRecipe(snapshot) {
+    const baseId = snapshot.baseRecipeId ?? registry.defaultRecipeId ?? registry.manifest.recipes[0]?.id;
+    const baseModule = await importManifestRecipe(baseId);
+    const recipe = materializeRecipe(baseModule);
+    recipe.pipelineDsl = snapshot.pipelineDsl;
+    recipe.pipeline = compileDsl(snapshot.pipelineDsl);
+    applyDslRecipeMetadata(recipe, recipe.pipeline.dsl);
+    recipe.name = snapshot.name ?? recipe.name;
+    recipe.summary = snapshot.summary ?? recipe.summary;
+    return recipe;
+  }
+
+  async function saveCurrentLocal() {
+    const existing = activeRecipeId?.startsWith("local:")
+      ? registry.savedRecipes.find((recipe) => recipe.id === activeRecipeId)
+      : null;
+    if (!existing) return saveCurrentAsLocal();
+
+    const source = currentPipelineDsl();
+    const compiled = compileDsl(source);
+    const snapshot = makeRecipeSnapshot({
+      id: existing.id,
+      name: existing.name ?? activeRecipe?.name ?? compiled.dsl?.recipe?.name ?? "Untitled recipe",
+      summary: existing.summary ?? activeRecipe?.summary ?? compiled.dsl?.recipe?.summary ?? "",
+      pipelineDsl: source,
+      baseRecipeId: activeBaseRecipeId ?? existing.baseRecipeId ?? registry.defaultRecipeId,
+      existing,
+    });
+    activateSavedSnapshot(snapshot);
+    pipelineEditor.setStatus(`saved recipe "${snapshot.name}"`);
+    showToast(`saved recipe "${snapshot.name}"`);
+    return snapshot;
+  }
+
+  async function saveCurrentAsLocal() {
+    const source = currentPipelineDsl();
+    const compiled = compileDsl(source);
+    const defaultName = activeRecipe?.name ?? compiled.dsl?.recipe?.name ?? "Untitled recipe";
+    const form = await formModal({
+      title: "Save recipe as",
+      confirmLabel: "Save",
+      fields: [
+        { name: "name", label: "Name", type: "text", default: defaultName, required: true },
+        { name: "summary", label: "Summary", type: "text", default: activeRecipe?.summary ?? "" },
+      ],
+    });
+    if (!form) return null;
+    const snapshot = makeRecipeSnapshot({
+      name: form.name,
+      summary: form.summary,
+      pipelineDsl: source,
+      baseRecipeId: activeBaseRecipeId ?? registry.defaultRecipeId,
+    });
+    activateSavedSnapshot(snapshot);
+    pipelineEditor.setStatus(`saved recipe "${snapshot.name}"`);
+    showToast(`saved recipe "${snapshot.name}"`);
+    return snapshot;
+  }
+
+  function activateSavedSnapshot(snapshot) {
+    upsertSavedRecipe(snapshot);
+    activeRecipeId = snapshot.id;
+    activeBaseRecipeId = snapshot.baseRecipeId;
+    registry.activeId = snapshot.id;
+    if (activeRecipe) {
+      activeRecipe.name = snapshot.name;
+      activeRecipe.summary = snapshot.summary;
+    }
+    onActiveRecipeChange?.(snapshot.id);
+  }
+
+  async function deleteSavedById(id) {
+    const snapshot = registry.savedRecipes.find((recipe) => recipe.id === id);
+    if (!snapshot) return false;
+    const ok = await confirmModal({
+      title: "Delete saved recipe",
+      message: `Delete saved recipe "${snapshot.name ?? id}" from local storage?`,
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return false;
+    const next = registry.savedRecipes.filter((recipe) => recipe.id !== id);
+    persistSavedRecipes(next);
+    registry.savedRecipes = next;
+    if (registry.activeId === id) registry.activeId = null;
+    onActiveRecipeChange?.(registry.activeId);
+    showToast(`deleted saved recipe "${snapshot.name ?? id}"`);
+    return true;
+  }
+
+  function exportCurrentFile() {
+    const source = currentPipelineDsl();
+    const compiled = compileDsl(source);
+    const snapshot = makeRecipeSnapshot({
+      name: activeRecipe?.name ?? compiled.dsl?.recipe?.name ?? "Untitled recipe",
+      summary: activeRecipe?.summary ?? compiled.dsl?.recipe?.summary ?? "",
+      pipelineDsl: source,
+      baseRecipeId: activeBaseRecipeId ?? registry.defaultRecipeId,
+    });
+    downloadRecipeSnapshot(snapshot);
+    pipelineEditor.setStatus(`exported recipe "${snapshot.name}"`);
+    showToast(`exported recipe "${snapshot.name}"`);
+  }
+
+  async function importRecipeFile() {
+    const file = await pickRecipeFile();
+    if (!file) return null;
+    const text = await file.text();
+    const snapshot = parseRecipeFile(text, {
+      filename: file.name,
+      baseRecipeId: activeBaseRecipeId ?? registry.defaultRecipeId,
+    });
+    upsertSavedRecipe(snapshot);
+    await loadSavedById(snapshot.id);
+    return snapshot;
   }
 
   function applyActivePipelineDsl(source) {
@@ -530,14 +669,187 @@ export function initRecipes({
   });
 
   registry.loadById = loadById;
+  registry.loadSavedById = loadSavedById;
+  registry.saveCurrentLocal = saveCurrentLocal;
+  registry.saveCurrentAsLocal = saveCurrentAsLocal;
+  registry.deleteSavedById = deleteSavedById;
+  registry.exportCurrentFile = exportCurrentFile;
+  registry.importRecipeFile = importRecipeFile;
   pipelineEditor.applyPipelineDsl = applyActivePipelineDsl;
   bootstrap();
+
+  async function importManifestRecipe(id) {
+    const entry = registry.manifest.recipes.find((recipe) => recipe.id === id);
+    if (!entry || !entry.path) throw new Error(`recipe "${id}" not in manifest`);
+    // Dynamic import the .mjs module. Cache-bust via timestamp query so
+    // edits to the recipe source during dev are picked up on reload.
+    const url = new URL(entry.path, window.location.href);
+    url.searchParams.set("v", String(Date.now()));
+    return import(url.href);
+  }
+
+  function currentPipelineDsl() {
+    if (!activeRecipe?.pipelineDsl) throw new Error("no active recipe DSL to save");
+    return activeRecipe.pipelineDsl;
+  }
 }
 
 export function materializeRecipe(recipeModule) {
   const recipe = { ...recipeModule };
   applyDslRecipeMetadata(recipe, recipe.pipeline?.dsl);
   return recipe;
+}
+
+function loadSavedRecipes() {
+  try {
+    const raw = localStorage.getItem(SAVED_RECIPE_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(normalizeRecipeSnapshot).filter(Boolean);
+  } catch (error) {
+    console.warn("could not load saved recipes:", error);
+    return [];
+  }
+}
+
+function persistSavedRecipes(snapshots) {
+  try {
+    localStorage.setItem(SAVED_RECIPE_STORAGE_KEY, JSON.stringify(snapshots));
+  } catch (error) {
+    console.error("could not persist saved recipes:", error);
+    showToast(`recipe save failed: ${error.message}`, { kind: "error" });
+    throw error;
+  }
+}
+
+function upsertSavedRecipe(snapshot) {
+  const next = registry.savedRecipes.filter((recipe) => recipe.id !== snapshot.id);
+  next.unshift(snapshot);
+  persistSavedRecipes(next);
+  registry.savedRecipes = next;
+}
+
+function makeRecipeSnapshot({
+  id = null,
+  name,
+  summary,
+  pipelineDsl,
+  baseRecipeId,
+  existing = null,
+}) {
+  if (typeof pipelineDsl !== "string" || pipelineDsl.trim() === "") {
+    throw new Error("recipe has no pipeline DSL");
+  }
+  compileDsl(pipelineDsl);
+  const now = new Date().toISOString();
+  const snapshot = {
+    type: RECIPE_FILE_TYPE,
+    version: RECIPE_FILE_VERSION,
+    id: id ?? uniqueSavedRecipeId(name),
+    name: String(name ?? "Untitled recipe").trim() || "Untitled recipe",
+    summary: String(summary ?? ""),
+    baseRecipeId: baseRecipeId ?? registry.defaultRecipeId,
+    pipelineDsl,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  };
+  return normalizeRecipeSnapshot(snapshot);
+}
+
+function normalizeRecipeSnapshot(value) {
+  if (!value || typeof value !== "object") return null;
+  if (value.type && value.type !== RECIPE_FILE_TYPE) return null;
+  if (typeof value.pipelineDsl !== "string" || value.pipelineDsl.trim() === "") return null;
+  const name = String(value.name ?? inferRecipeName(value.pipelineDsl) ?? "Untitled recipe").trim()
+    || "Untitled recipe";
+  return {
+    type: RECIPE_FILE_TYPE,
+    version: RECIPE_FILE_VERSION,
+    id: typeof value.id === "string" && value.id.startsWith("local:")
+      ? value.id
+      : uniqueSavedRecipeId(name),
+    name,
+    summary: String(value.summary ?? ""),
+    baseRecipeId: typeof value.baseRecipeId === "string" ? value.baseRecipeId : null,
+    pipelineDsl: value.pipelineDsl,
+    createdAt: typeof value.createdAt === "string" ? value.createdAt : new Date().toISOString(),
+    updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : new Date().toISOString(),
+  };
+}
+
+function parseRecipeFile(text, { filename, baseRecipeId } = {}) {
+  let raw = null;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    raw = {
+      name: inferRecipeName(text) ?? filename?.replace(/\.[^.]+$/, "") ?? "Imported recipe",
+      summary: "",
+      baseRecipeId,
+      pipelineDsl: text,
+    };
+  }
+  const snapshot = normalizeRecipeSnapshot({
+    ...raw,
+    baseRecipeId: raw.baseRecipeId ?? baseRecipeId,
+  });
+  if (!snapshot) throw new Error("file is not a Field Lab recipe");
+  compileDsl(snapshot.pipelineDsl);
+  return {
+    ...snapshot,
+    id: uniqueSavedRecipeId(snapshot.name),
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function downloadRecipeSnapshot(snapshot) {
+  const blob = new Blob([`${JSON.stringify(snapshot, null, 2)}\n`], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${slugify(snapshot.name)}.fieldlab-recipe.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function pickRecipeFile() {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json,.fieldlab-recipe,application/json,text/plain";
+    input.addEventListener("change", () => resolve(input.files?.[0] ?? null), { once: true });
+    input.click();
+  });
+}
+
+function uniqueSavedRecipeId(name) {
+  const base = slugify(name || "recipe");
+  let id = `local:${base}`;
+  const existing = new Set(registry.savedRecipes.map((recipe) => recipe.id));
+  if (!existing.has(id)) return id;
+  let i = 2;
+  while (existing.has(`${id}-${i}`)) i++;
+  return `${id}-${i}`;
+}
+
+function slugify(value) {
+  const slug = String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "recipe";
+}
+
+function inferRecipeName(source) {
+  try {
+    return compileDsl(source).dsl?.recipe?.name ?? null;
+  } catch {
+    const match = String(source).match(/^\s*recipe\s+"([^"]+)"/m);
+    return match?.[1] ?? null;
+  }
 }
 
 export function prepareRecipeState(recipe, state) {
