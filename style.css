@@ -1494,6 +1494,145 @@ input[type="range"]::-moz-range-thumb {
 .dsl-tooltip__open:hover { color: var(--signal); }
 
 /* =============================================================================
+ * DSL AUTOCOMPLETE
+ *
+ * The popup uses CodeMirror's stock structure but skinned to match the
+ * lab's window/tooltip language: ink-850 base, line-strong borders, mono
+ * labels. The single-suggestion case renders a ghost-text decoration
+ * inline at the cursor — Tab accepts.
+ * ===========================================================================*/
+
+.cm-tooltip.cm-tooltip-autocomplete.dsl-ac-tooltip,
+.cm-tooltip-autocomplete.dsl-ac-tooltip {
+  background: var(--ink-850);
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  font-family: var(--font-mono);
+}
+
+.cm-tooltip-autocomplete.dsl-ac-tooltip > ul {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  background: transparent;
+  color: var(--bone);
+  max-height: 240px;
+  min-width: 220px;
+  padding: 2px 0;
+}
+
+.cm-tooltip-autocomplete.dsl-ac-tooltip > ul > li {
+  padding: 3px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-left: 2px solid transparent;
+  line-height: 1.35;
+}
+.cm-tooltip-autocomplete.dsl-ac-tooltip > ul > li[aria-selected] {
+  background: rgba(124, 249, 157, 0.10);
+  color: var(--bone-bright);
+  border-left-color: var(--signal);
+}
+.cm-tooltip-autocomplete.dsl-ac-tooltip .cm-completionLabel {
+  color: var(--bone);
+  font-family: var(--font-mono);
+  flex: 1;
+  min-width: 0;
+}
+.cm-tooltip-autocomplete.dsl-ac-tooltip > ul > li[aria-selected] .cm-completionLabel {
+  color: var(--bone-bright);
+}
+.cm-tooltip-autocomplete.dsl-ac-tooltip .cm-completionMatchedText {
+  color: var(--signal);
+  text-decoration: none;
+  font-weight: 500;
+}
+.cm-tooltip-autocomplete.dsl-ac-tooltip .cm-completionDetail {
+  color: var(--bone-mute);
+  font-style: normal;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  margin-left: 6px;
+}
+
+/* Per-type icon — CM emits .cm-completionIcon-method / -function / -keyword
+   etc. We override with monospace single-character glyphs so it matches
+   the lab's typographic vocabulary. */
+.cm-tooltip-autocomplete.dsl-ac-tooltip .cm-completionIcon {
+  width: 14px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--bone-mute);
+  opacity: 1;
+  letter-spacing: 0;
+}
+.cm-tooltip-autocomplete.dsl-ac-tooltip .cm-completionIcon::before { content: "·"; }
+.cm-tooltip-autocomplete.dsl-ac-tooltip .cm-completionIcon-method::before { content: "▶"; color: var(--signal); }
+.cm-tooltip-autocomplete.dsl-ac-tooltip .cm-completionIcon-function::before { content: "ƒ"; color: var(--bone-bright); }
+.cm-tooltip-autocomplete.dsl-ac-tooltip .cm-completionIcon-keyword::before { content: "K"; color: var(--violet); }
+.cm-tooltip-autocomplete.dsl-ac-tooltip .cm-completionIcon-constant::before { content: "C"; color: var(--info); }
+.cm-tooltip-autocomplete.dsl-ac-tooltip .cm-completionIcon-variable::before { content: "v"; color: var(--bone); }
+.cm-tooltip-autocomplete.dsl-ac-tooltip .cm-completionIcon-property::before { content: "·"; color: var(--bone-mute); }
+
+/* Info panel — CM mounts to the right of the popup with the active
+   completion's `info()` HTML. Reuse the docs-detail typographic palette. */
+.cm-tooltip-autocomplete.dsl-ac-tooltip .cm-completionInfo {
+  background: var(--ink-900);
+  border: 1px solid var(--line-strong);
+  border-left: 0;
+  color: var(--bone);
+  padding: 8px 10px;
+  max-width: 320px;
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.dsl-ac-info { display: flex; flex-direction: column; gap: 6px; }
+.dsl-ac-info__sig {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--bone-bright);
+  background: var(--ink-950);
+  border-left: 2px solid var(--signal-dim);
+  padding: 4px 6px;
+  margin: 0;
+  white-space: pre-wrap;
+  font-variant-ligatures: none;
+}
+.dsl-ac-info__doc {
+  margin: 0;
+  color: var(--bone);
+}
+.dsl-ac-info__import {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--signal);
+  background: rgba(124, 249, 157, 0.06);
+  border: 1px dashed var(--signal-dim);
+  padding: 3px 6px;
+}
+.dsl-ac-info__import--present {
+  color: var(--bone-mute);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-style: solid;
+}
+
+/* Ghost text widget. Rendered inline via Decoration.widget at cursor.head.
+   Bone-mute italic so it's visible but unmistakably "not yet accepted". */
+.dsl-ac-ghost {
+  color: var(--bone-mute);
+  font-style: italic;
+  opacity: 0.75;
+  font-family: inherit;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* =============================================================================
  * DSL DOCS WINDOW
  *
  * Two-pane reader over the symbol catalog. Left: search + categorized

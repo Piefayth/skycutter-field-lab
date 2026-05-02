@@ -16,6 +16,7 @@ import {
   createFieldLabExtensions, fieldLabHighlight, fieldNameKey,
 } from "./editor-fieldlab-lang.mjs";
 import { dslHoverTooltip } from "./dsl-tooltip.mjs";
+import { dslAutocomplete } from "./dsl-autocomplete.mjs";
 
 export const fieldLabTheme = EditorView.theme({
   "&": {
@@ -98,7 +99,7 @@ export function createEditorView({ parent, onApply, onDocChange, language = "jav
         languageCompartment.of(isFieldLab
           ? createFieldLabExtensions([])
           : [syntaxHighlighting(fieldLabHighlight), javascript()]),
-        ...(isFieldLab ? [dslHoverTooltip()] : []),
+        ...(isFieldLab ? [dslHoverTooltip(), dslAutocomplete()] : []),
         keymap.of([
           {
             key: "Mod-Enter",
