@@ -6,7 +6,7 @@
 // =============================================================================
 
 import { Compartment, EditorState } from "@codemirror/state";
-import { EditorView, keymap, lineNumbers, drawSelection, highlightActiveLine, highlightActiveLineGutter, tooltips } from "@codemirror/view";
+import { EditorView, keymap, lineNumbers, drawSelection, highlightActiveLine, highlightActiveLineGutter } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import {
   syntaxHighlighting, indentOnInput, bracketMatching, foldGutter, foldKeymap,
@@ -100,13 +100,6 @@ export function createEditorView({ parent, onApply, onDocChange, language = "jav
           ? createFieldLabExtensions([])
           : [syntaxHighlighting(fieldLabHighlight), javascript()]),
         ...(isFieldLab ? [dslHoverTooltip(), dslAutocomplete()] : []),
-        // Mount tooltips into <body> so they escape per-window stacking
-        // contexts. Each `.win` sets z-index, which creates a stacking
-        // context; a `position: fixed` tooltip rendered inside that
-        // context still gets eclipsed by sibling windows. Hosting at
-        // body level + the `.cm-tooltip` z-index in style.css lets it
-        // stack above everything.
-        tooltips({ parent: document.body }),
         keymap.of([
           {
             key: "Mod-Enter",

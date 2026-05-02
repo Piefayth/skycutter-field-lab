@@ -1351,15 +1351,6 @@ input[type="range"]::-moz-range-thumb {
  * carries semantic colour; everything else is bone tones.
  * ===========================================================================*/
 
-/* CodeMirror tooltips are mounted at <body> level (see editor-core.mjs's
-   `tooltips({ parent: document.body })`), so they live outside any
-   window's stacking context. Bump the z-index above the floating-window
-   range (windows start at 100 and increment per click) but below the
-   menu bar at 9000. */
-.cm-tooltip {
-  z-index: 8500;
-}
-
 /* CodeMirror's tooltip wrapper — drop the default white background and
    let our `.dsl-tooltip` paint the surface. */
 .cm-tooltip:has(.dsl-tooltip) {
