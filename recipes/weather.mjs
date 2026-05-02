@@ -29,7 +29,7 @@ import { compileDsl } from "../dsl/compiler.mjs";
 // read these as `gravity` etc; they're immutable for the
 // duration of a recipe load. Editing them means editing the recipe.
 // Recipe-declared field bundle. Each entry is allocated as a Float32Array
-// of length N at recipe-load time; tmp buffers are auto-allocated 1:1.
+// of length N at recipe-load time.
 // windU/windV used to be top-level on `state`; now they're declared
 // fields like everything else.
 //

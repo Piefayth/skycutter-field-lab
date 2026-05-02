@@ -1,4 +1,4 @@
-import { H, N, W, createState, hashNoise, reallocateState, setGridResolution } from "./kernel.mjs";
+import { DEFAULT_CELL_COUNT, createState, hashNoise, reallocateState } from "./kernel.mjs";
 import { createGeodesicGrid } from "./geodesic-grid.mjs";
 import { materializeRecipe } from "../visual/recipes.mjs";
 import * as weather from "../recipes/weather.mjs";
@@ -16,7 +16,7 @@ test("hashNoise is deterministic and bounded", () => {
   assert(a >= -1 && a <= 1, "noise should be in [-1, 1]");
 });
 
-test("state allocation creates fields and tmp buffers", () => {
+test("state allocation creates fields", () => {
   const state = createState({
     fields: [
       { name: "moisture" },
@@ -25,27 +25,28 @@ test("state allocation creates fields and tmp buffers", () => {
     ],
   });
   assert(state.grid === null, "fresh state should not default to a rectangular grid");
-  assert(state.fields.moisture.length === N, "field allocation should use current grid size");
-  assert(state.tmp.moisture.length === N, "tmp allocation should mirror field size");
-  assert(state.fields.windU.length === N && state.fields.windV.length === N, "all declared fields should allocate");
+  assert(state.fields.moisture.length === DEFAULT_CELL_COUNT, "field allocation should use default cell count without a grid");
+  assert(state.fields.windU.length === DEFAULT_CELL_COUNT && state.fields.windV.length === DEFAULT_CELL_COUNT, "all declared fields should allocate");
 });
 
-test("grid resolution can be changed before allocation", () => {
-  try {
-    setGridResolution(64, 32);
-    const state = createState({ fields: [{ name: "A" }] });
-    assert(W === 64 && H === 32 && N === 2048, "grid constants should update");
-    assert(state.fields.A.length === 2048, "field allocation should follow grid resolution");
-  } finally {
-    setGridResolution(256, 128);
-  }
+test("state allocation follows an installed geodesic grid", () => {
+  const topology = createGeodesicGrid({ frequency: 8 });
+  const state = createState();
+  state.grid = {
+    kind: "geodesic",
+    frequency: topology.frequency,
+    cells: topology.cellCount,
+    topology,
+  };
+  reallocateState(state, { fields: [{ name: "A" }] });
+  assert(state.fields.A.length === topology.cellCount, "field allocation should follow geodesic cell count");
 });
 
 test("weather stamps mutate geodesic fields", () => {
   const state = makeGeodesicWeatherState(16);
   const before = sum(state.fields.pressure);
   const stamp = weatherRecipe.stamps.find((s) => s.id === "stormSeed");
-  stamp.run(state, W / 2, H / 2, 10, { lon: 0, lat: 0, u: 0.5, v: 0.5, px: 1, py: 0, pz: 0 });
+  stamp.run(state, 128, 64, 10, { lon: 0, lat: 0, u: 0.5, v: 0.5, px: 1, py: 0, pz: 0 });
   const after = sum(state.fields.pressure);
   assert(Math.abs(after - before) > 1e-5, "stormSeed should change pressure on a geodesic grid");
 });
@@ -58,8 +59,8 @@ function makeGeodesicWeatherState(frequency) {
     frequency: topology.frequency,
     cells: topology.cellCount,
     topology,
-    width: W,
-    height: H,
+    width: 256,
+    height: 128,
   };
   reallocateState(state, { fields: weatherRecipe.fields });
   return state;

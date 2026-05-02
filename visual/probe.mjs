@@ -12,8 +12,10 @@
 // Boot order: `initProbe(deps)` runs once from `bootApp()` after
 // `initPaint(deps)` so `paint.pointerHit` is available to pass in.
 // =============================================================================
-import { H, W } from "../kernel/kernel.mjs";
 import { fieldCssColor } from "./field-colors.mjs";
+
+const AUTHOR_COORD_W = 256;
+const AUTHOR_COORD_H = 128;
 
 // Registry exported as `probe`. Method slots fill in during init; reads
 // to them before init throw a TypeError, which is what we want — silent
@@ -83,8 +85,8 @@ export function initProbe({ ui, state, pointerHit }) {
       renderEmpty();
       return;
     }
-    const x = Math.floor((hit.u ?? hit.x) * W);
-    const y = Math.floor((hit.v ?? hit.y) * H);
+    const x = Math.floor((hit.u ?? hit.x) * AUTHOR_COORD_W);
+    const y = Math.floor((hit.v ?? hit.y) * AUTHOR_COORD_H);
     target = { i, x, y };
     render();
   }

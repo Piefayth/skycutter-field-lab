@@ -54,7 +54,6 @@ check("recipe state preparation allocates geodesic fields", () => {
   prepareRecipeState(recipe, state);
   assert(state.grid?.kind === "geodesic", "state grid should be geodesic");
   assert(state.fields.pressure?.length === state.grid.cells, "pressure field should match geodesic cell count");
-  assert(state.tmp.pressure?.length === state.grid.cells, "tmp pressure field should match geodesic cell count");
 });
 
 check("DSL top-level declarations expose recipe control schema", () => {

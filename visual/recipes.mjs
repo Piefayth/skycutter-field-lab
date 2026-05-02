@@ -9,7 +9,7 @@
 // =============================================================================
 
 import {
-  W, H, TAU, sample, hashNoise, noise2,
+  TAU, hashNoise, noise2,
   clamp, lerp, smoothstep,
   reallocateState, resetState,
 } from "../kernel/kernel.mjs";
@@ -44,6 +44,9 @@ const registry = {
 };
 
 export const recipes = registry;
+
+const AUTHOR_COORD_W = 256;
+const AUTHOR_COORD_H = 128;
 
 export function getRunner() {
   return registry.runner;
@@ -612,8 +615,8 @@ function applyRecipeResolution(recipe, state) {
     topology,
     // Width/height are retained only for fixed-format UI readouts and
     // brush-radius scaling; DSL author coordinates are spherical.
-    width: W,
-    height: H,
+    width: AUTHOR_COORD_W,
+    height: AUTHOR_COORD_H,
   };
 }
 
@@ -810,7 +813,7 @@ function evalInitIdentifier(name, state, cell) {
   if (name === "false") return false;
   if (name === "null") return null;
   if (name === "undefined") return undefined;
-  if (name === "N") return state?.grid?.cells ?? W * H;
+  if (name === "N") return state?.grid?.cells ?? 0;
   if (name === "TAU") return TAU;
   if (name === "PI") return Math.PI;
   if (cell?.locals && Object.hasOwn(cell.locals, name)) return cell.locals[name];
@@ -884,7 +887,7 @@ function evalInitCall(ast, state, cell) {
     if (state.grid?.kind === "geodesic" && arr && cell) {
       return arr[cell.i] ?? 0;
     }
-    return arr && cell ? sample(arr, cell.x + (args[1] ?? 0), cell.y + (args[2] ?? 0)) : 0;
+    throw new Error("init sample() requires a geodesic state");
   }
   throw new Error(`unknown init function ${name ?? "call"}`);
 }
