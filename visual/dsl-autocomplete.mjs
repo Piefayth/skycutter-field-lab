@@ -452,6 +452,13 @@ function dslCompletionSource(context) {
   const to = word ? word.to : context.pos;
   const prefix = word ? word.text : "";
 
+  // Suppress mid-word completion: if the cursor sits inside a word
+  // (the next char is an identifier char), the user is editing an
+  // existing identifier, not typing a new one. Autocompleting in that
+  // position would replace half a word the user wanted to keep.
+  // Explicit invocation (Ctrl-Space) bypasses this check.
+  if (!context.explicit && cursorIsMidWord(context.state, context.pos)) return null;
+
   const ctx = detectContext(context.state, from);
   const mode = classifyContext(ctx);
 
@@ -523,6 +530,16 @@ function wordBefore(state, pos) {
   return { from: line.from + m.index, to: pos, text: m[0] };
 }
 
+// True when the next character is an identifier char — i.e., the cursor
+// is inside an existing word, not at its trailing edge. The autocomplete
+// and ghost both suppress in this case so editing `dif|fuse` doesn't
+// pop a suggestion that would replace the unread half of the word.
+function cursorIsMidWord(state, pos) {
+  if (pos >= state.doc.length) return false;
+  const next = state.doc.sliceString(pos, pos + 1);
+  return /[A-Za-z0-9_$]/.test(next);
+}
+
 // Pure function: given a state, return the ghost record (or null).
 // Reads suppressed-at to honor recent Esc.
 function computeGhost(state) {
@@ -531,6 +548,9 @@ function computeGhost(state) {
   if (!sel.empty) return null;
   const pos = sel.head;
   if (suppressedAt === pos) return null;
+  // Don't ghost in the middle of an existing word — the user is editing,
+  // not typing-from-scratch.
+  if (cursorIsMidWord(state, pos)) return null;
   const word = wordBefore(state, pos);
   if (!word || !word.text) return null;
   const ctx = detectContext(state, word.from);

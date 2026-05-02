@@ -253,18 +253,24 @@ function wordAt(state, pos) {
 export function dslHoverTooltip() {
   return hoverTooltip((view, pos, side) => {
     const at = wordAt(view.state, pos);
+    console.log("[dsl-hover] fired", { pos, side, at });
     if (!at) return null;
     // `side` is +1 if the cursor is between two characters' right sides;
     // skip lookups when the user is on whitespace (off=at.to).
     if (side > 0 && pos === at.to) return null;
     const declared = buildDeclaredIndex(view.state.doc.toString());
     const resolution = resolveName(at.word, declared);
+    console.log("[dsl-hover] resolved", at.word, resolution);
     if (!resolution) return null;
     return {
       pos: at.from,
       end: at.to,
       above: true,
-      create: () => ({ dom: renderTooltipDom(resolution) }),
+      create: () => {
+        const dom = renderTooltipDom(resolution);
+        console.log("[dsl-hover] create called, dom:", dom);
+        return { dom };
+      },
     };
   }, {
     hoverTime: 200,
