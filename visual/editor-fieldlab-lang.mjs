@@ -138,8 +138,6 @@ export const fieldLabHighlight = HighlightStyle.define([
   { tag: t.definition(t.variableName),        color: "var(--bone-bright)" },
   { tag: definitionNameTag,                   color: "var(--bone-bright)", fontWeight: "600" },
   { tag: namespaceTag,                        color: "var(--info)", fontStyle: "italic" },
-  { tag: immutableNsTag,                      color: "var(--info)", fontWeight: "600" },
-  { tag: immutablePropTag,                    color: "var(--info)", fontWeight: "600" },
   { tag: immutableRefTag,                     color: "var(--bone-bright)", fontWeight: "600" },
   { tag: sourceRefTag,                        color: "var(--bone)", fontWeight: "600", fontStyle: "italic" },
   { tag: [t.operator, t.operatorKeyword],     color: "var(--bone-dim)" },
