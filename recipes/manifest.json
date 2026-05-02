@@ -15,24 +15,6 @@
       "summary": "Forcing-driven weather pipeline. Single attractor; useful as a baseline."
     },
     {
-      "id": "gray-scott",
-      "name": "Gray-Scott (example)",
-      "path": "recipes/gray-scott.mjs",
-      "summary": "Two-field reaction with asymmetric diffusion. Knobs gsFeed/gsKill walk Pearson's f/k phase diagram."
-    },
-    {
-      "id": "discharge-cascade",
-      "name": "Discharge cascade (example)",
-      "path": "recipes/discharge-cascade.mjs",
-      "summary": "Excitable medium with discrete discharge events via where(). Knob dischargeThreshold walks silent / intermittent / runaway-cascade regimes."
-    },
-    {
-      "id": "inverter-front",
-      "name": "Inverter front (example)",
-      "path": "recipes/inverter-front.mjs",
-      "summary": "A wave propagates by threshold-spread (one cell/tick); cells the wave passes through fire an event that swaps substances A and B locally. Closes the events trilogy alongside discharge-cascade and residue-tracks: events that *modify* underlying continuous fields."
-    },
-    {
       "id": "fitzhugh-nagumo",
       "name": "FitzHugh-Nagumo (example)",
       "path": "recipes/fitzhugh-nagumo.mjs",

@@ -1,7 +1,4 @@
 import * as weather from "../recipes/weather.mjs";
-import * as grayScott from "../recipes/gray-scott.mjs";
-import * as dischargeCascade from "../recipes/discharge-cascade.mjs";
-import * as inverterFront from "../recipes/inverter-front.mjs";
 import * as fitzhughNagumo from "../recipes/fitzhugh-nagumo.mjs";
 import * as belousovZhabotinsky from "../recipes/belousov-zhabotinsky.mjs";
 import * as kuramotoChimera from "../recipes/kuramoto-chimera.mjs";
@@ -16,9 +13,6 @@ import { createState } from "../kernel/kernel.mjs";
 
 const recipes = [
   weather,
-  grayScott,
-  dischargeCascade,
-  inverterFront,
   fitzhughNagumo,
   belousovZhabotinsky,
   kuramotoChimera,

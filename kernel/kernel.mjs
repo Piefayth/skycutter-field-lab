@@ -104,7 +104,7 @@ export function resetState(state) {
 
 // =========================================================================
 // Metrics — kernel-shipped basic summary. Recipes that don't declare a
-// "cloud" field (gray-scott's u/v, discharge-cascade's A/B/R, etc.)
+// "cloud" field (every non-weather recipe in the gallery, currently)
 // get 0 in those slots — the recipe's own `metrics[]` declarations
 // surface meaningful values via `evaluateMetricDecls()` instead.
 // =========================================================================

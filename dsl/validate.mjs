@@ -139,9 +139,9 @@ export function validateNameUniqueness(schema, stages = []) {
   //
   // Geodesic position coordinates (x, y, lon, lat, u, v, px, py, pz, i)
   // and projection constants (PI, TAU, N) are deliberately NOT in the
-  // reserved set — recipes can declare e.g. `field u` (gray-scott) or
-  // `field W` (inverter-front), in which case a bare reference resolves
-  // to the field. The position coord is then unreachable inside that
+  // reserved set — recipes can declare e.g. `field u, v` (FitzHugh-
+  // Nagumo's two scalars), in which case a bare reference resolves to
+  // the field. The position coord is then unreachable inside that
   // recipe's stages, which is the recipe author's choice.
   for (const [name, kind] of declaredBy) {
     if (RESERVED_NAMES.has(name)) {
