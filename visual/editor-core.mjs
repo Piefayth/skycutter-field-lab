@@ -100,22 +100,17 @@ export function createEditorView({ parent, onApply, onDocChange, language = "jav
           ? createFieldLabExtensions([])
           : [syntaxHighlighting(fieldLabHighlight), javascript()]),
         ...(isFieldLab ? [dslHoverTooltip(), dslAutocomplete()] : []),
-        // Tell CM the tooltip's available space is the floating-window
-        // body (which has overflow:hidden), not the viewport. Without
-        // this, hovering near the top of the editor places the tooltip
-        // above it — and it gets clipped by the window chrome since
-        // `.win__body` overflow:hidden swallows anything that extends
-        // out the top. With this, CM flips to below when there's no
-        // room above within the window's body.
+        // Tooltips render at the body level with `position: fixed` so
+        // they (a) escape the floating window's `overflow: hidden`
+        // clipping and (b) escape the per-window stacking context that
+        // a `.win` z-index creates. Fixed positioning is viewport-
+        // relative, so the placement math doesn't depend on the parent
+        // having any particular layout. The CSS pin (`.cm-tooltip`
+        // z-index in style.css) keeps tooltips above the entire
+        // floating-window range.
         tooltips({
-          tooltipSpace: (view) => {
-            const win = view.dom.closest(".win__body");
-            if (win) return win.getBoundingClientRect();
-            return {
-              top: 0, left: 0,
-              bottom: window.innerHeight, right: window.innerWidth,
-            };
-          },
+          parent: document.body,
+          position: "fixed",
         }),
         keymap.of([
           {
