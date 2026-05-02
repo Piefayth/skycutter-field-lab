@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import WebGPURenderer from "three/addons/renderers/webgpu/WebGPURenderer.js";
 
 import { TAU } from "../kernel/kernel.mjs";
 
@@ -72,7 +73,6 @@ async function createRenderer(canvas) {
   if (!globalThis.navigator?.gpu) {
     throw new Error("WebGPU is required for Field Lab's geodesic renderer.");
   }
-  const { default: WebGPURenderer } = await import("https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/renderers/webgpu/WebGPURenderer.js");
   const renderer = new WebGPURenderer({ canvas, antialias: true });
   await renderer.init();
   renderer.fieldLabBackend = "webgpu";

@@ -19,6 +19,16 @@ import { setControlHandlers } from "./controls.mjs";
 import { formModal, confirmModal } from "./modal.mjs";
 import { showToast } from "./toast.mjs";
 import { compileDsl } from "../dsl/compiler.mjs";
+import { gray } from "../prims/colorers.mjs";
+import {
+  downloadRecipeSnapshot,
+  loadSavedRecipes,
+  makeRecipeSnapshot,
+  parseRecipeFile,
+  persistSavedRecipes,
+  pickRecipeFile,
+  upsertSavedRecipe,
+} from "./recipe-storage.mjs";
 
 const registry = {
   manifest: { defaultRecipe: null, recipes: [] },
@@ -54,10 +64,6 @@ export const recipes = registry;
 
 const AUTHOR_COORD_W = 256;
 const AUTHOR_COORD_H = 128;
-const SAVED_RECIPE_STORAGE_KEY = "skycutter.fieldLab.savedRecipes.v1";
-const RECIPE_FILE_TYPE = "skycutter-field-lab.recipe";
-const RECIPE_FILE_VERSION = 1;
-
 export function getRunner() {
   return registry.runner;
 }
@@ -193,7 +199,7 @@ export function initRecipes({
       : null;
     if (!existing) return saveCurrentAsLocal();
 
-    const source = currentPipelineDsl();
+    const source = currentPipelineDsl({ applyEditorDraft: true });
     const compiled = compileDsl(source);
     const snapshot = makeRecipeSnapshot({
       id: existing.id,
@@ -201,7 +207,9 @@ export function initRecipes({
       summary: existing.summary ?? activeRecipe?.summary ?? compiled.dsl?.recipe?.summary ?? "",
       pipelineDsl: source,
       baseRecipeId: activeBaseRecipeId ?? existing.baseRecipeId ?? registry.defaultRecipeId,
+      defaultRecipeId: registry.defaultRecipeId,
       existing,
+      existingIds: savedRecipeIds(),
     });
     activateSavedSnapshot(snapshot);
     pipelineEditor.setStatus(`saved recipe "${snapshot.name}"`);
@@ -210,7 +218,7 @@ export function initRecipes({
   }
 
   async function saveCurrentAsLocal() {
-    const source = currentPipelineDsl();
+    const source = currentPipelineDsl({ applyEditorDraft: true });
     const compiled = compileDsl(source);
     const defaultName = activeRecipe?.name ?? compiled.dsl?.recipe?.name ?? "Untitled recipe";
     const form = await formModal({
@@ -227,6 +235,8 @@ export function initRecipes({
       summary: form.summary,
       pipelineDsl: source,
       baseRecipeId: activeBaseRecipeId ?? registry.defaultRecipeId,
+      defaultRecipeId: registry.defaultRecipeId,
+      existingIds: savedRecipeIds(),
     });
     activateSavedSnapshot(snapshot);
     pipelineEditor.setStatus(`saved recipe "${snapshot.name}"`);
@@ -235,7 +245,9 @@ export function initRecipes({
   }
 
   function activateSavedSnapshot(snapshot) {
-    upsertSavedRecipe(snapshot);
+    const next = upsertSavedRecipe(registry.savedRecipes, snapshot);
+    persistSavedRecipes(next);
+    registry.savedRecipes = next;
     activeRecipeId = snapshot.id;
     activeBaseRecipeId = snapshot.baseRecipeId;
     registry.activeId = snapshot.id;
@@ -266,13 +278,15 @@ export function initRecipes({
   }
 
   function exportCurrentFile() {
-    const source = currentPipelineDsl();
+    const source = currentPipelineDsl({ applyEditorDraft: true });
     const compiled = compileDsl(source);
     const snapshot = makeRecipeSnapshot({
       name: activeRecipe?.name ?? compiled.dsl?.recipe?.name ?? "Untitled recipe",
       summary: activeRecipe?.summary ?? compiled.dsl?.recipe?.summary ?? "",
       pipelineDsl: source,
       baseRecipeId: activeBaseRecipeId ?? registry.defaultRecipeId,
+      defaultRecipeId: registry.defaultRecipeId,
+      existingIds: savedRecipeIds(),
     });
     downloadRecipeSnapshot(snapshot);
     pipelineEditor.setStatus(`exported recipe "${snapshot.name}"`);
@@ -286,8 +300,11 @@ export function initRecipes({
     const snapshot = parseRecipeFile(text, {
       filename: file.name,
       baseRecipeId: activeBaseRecipeId ?? registry.defaultRecipeId,
+      existingIds: savedRecipeIds(),
     });
-    upsertSavedRecipe(snapshot);
+    const next = upsertSavedRecipe(registry.savedRecipes, snapshot);
+    persistSavedRecipes(next);
+    registry.savedRecipes = next;
     await loadSavedById(snapshot.id);
     return snapshot;
   }
@@ -361,6 +378,7 @@ export function initRecipes({
     populatePresetSelect(activePresetDecls);
 
     // Views.
+    recipe.views = reconcileRecipeViews(recipe);
     activeViewDecls = Array.isArray(recipe.views) ? recipe.views : [];
     populateViewSelect(activeViewDecls);
 
@@ -698,7 +716,16 @@ export function initRecipes({
     return import(url.href);
   }
 
-  function currentPipelineDsl() {
+  function currentPipelineDsl({ applyEditorDraft = false } = {}) {
+    if (applyEditorDraft && pipelineEditor.isPipelineDslDirty?.()) {
+      const draft = pipelineEditor.getCurrentPipelineDsl?.();
+      if (typeof draft === "string") {
+        // Compile before applying so Save surfaces DSL diagnostics instead
+        // of silently persisting the last applied source.
+        compileDsl(draft);
+        applyActivePipelineDsl(draft);
+      }
+    }
     if (!activeRecipe?.pipelineDsl) throw new Error("no active recipe DSL to save");
     return activeRecipe.pipelineDsl;
   }
@@ -710,156 +737,34 @@ export function materializeRecipe(recipeModule) {
   return recipe;
 }
 
-function loadSavedRecipes() {
-  try {
-    const raw = localStorage.getItem(SAVED_RECIPE_STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(parsed)) return [];
-    return parsed.map(normalizeRecipeSnapshot).filter(Boolean);
-  } catch (error) {
-    console.warn("could not load saved recipes:", error);
-    return [];
-  }
-}
-
-function persistSavedRecipes(snapshots) {
-  try {
-    localStorage.setItem(SAVED_RECIPE_STORAGE_KEY, JSON.stringify(snapshots));
-  } catch (error) {
-    console.error("could not persist saved recipes:", error);
-    showToast(`recipe save failed: ${error.message}`, { kind: "error" });
-    throw error;
-  }
-}
-
-function upsertSavedRecipe(snapshot) {
-  const next = registry.savedRecipes.filter((recipe) => recipe.id !== snapshot.id);
-  next.unshift(snapshot);
-  persistSavedRecipes(next);
-  registry.savedRecipes = next;
-}
-
-function makeRecipeSnapshot({
-  id = null,
-  name,
-  summary,
-  pipelineDsl,
-  baseRecipeId,
-  existing = null,
-}) {
-  if (typeof pipelineDsl !== "string" || pipelineDsl.trim() === "") {
-    throw new Error("recipe has no pipeline DSL");
-  }
-  compileDsl(pipelineDsl);
-  const now = new Date().toISOString();
-  const snapshot = {
-    type: RECIPE_FILE_TYPE,
-    version: RECIPE_FILE_VERSION,
-    id: id ?? uniqueSavedRecipeId(name),
-    name: String(name ?? "Untitled recipe").trim() || "Untitled recipe",
-    summary: String(summary ?? ""),
-    baseRecipeId: baseRecipeId ?? registry.defaultRecipeId,
-    pipelineDsl,
-    createdAt: existing?.createdAt ?? now,
-    updatedAt: now,
-  };
-  return normalizeRecipeSnapshot(snapshot);
-}
-
-function normalizeRecipeSnapshot(value) {
-  if (!value || typeof value !== "object") return null;
-  if (value.type && value.type !== RECIPE_FILE_TYPE) return null;
-  if (typeof value.pipelineDsl !== "string" || value.pipelineDsl.trim() === "") return null;
-  const name = String(value.name ?? inferRecipeName(value.pipelineDsl) ?? "Untitled recipe").trim()
-    || "Untitled recipe";
-  return {
-    type: RECIPE_FILE_TYPE,
-    version: RECIPE_FILE_VERSION,
-    id: typeof value.id === "string" && value.id.startsWith("local:")
-      ? value.id
-      : uniqueSavedRecipeId(name),
-    name,
-    summary: String(value.summary ?? ""),
-    baseRecipeId: typeof value.baseRecipeId === "string" ? value.baseRecipeId : null,
-    pipelineDsl: value.pipelineDsl,
-    createdAt: typeof value.createdAt === "string" ? value.createdAt : new Date().toISOString(),
-    updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : new Date().toISOString(),
-  };
-}
-
-function parseRecipeFile(text, { filename, baseRecipeId } = {}) {
-  let raw = null;
-  try {
-    raw = JSON.parse(text);
-  } catch {
-    raw = {
-      name: inferRecipeName(text) ?? filename?.replace(/\.[^.]+$/, "") ?? "Imported recipe",
-      summary: "",
-      baseRecipeId,
-      pipelineDsl: text,
-    };
-  }
-  const snapshot = normalizeRecipeSnapshot({
-    ...raw,
-    baseRecipeId: raw.baseRecipeId ?? baseRecipeId,
+function reconcileRecipeViews(recipe) {
+  const views = Array.isArray(recipe?.views) ? recipe.views : [];
+  const fields = recipeFieldNames(recipe);
+  const compatible = views.filter((view) => {
+    const required = view?.color?.fields;
+    return !Array.isArray(required) || required.every((name) => fields.has(name));
   });
-  if (!snapshot) throw new Error("file is not a Field Lab recipe");
-  compileDsl(snapshot.pipelineDsl);
-  return {
-    ...snapshot,
-    id: uniqueSavedRecipeId(snapshot.name),
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  };
+  if (compatible.length > 0) return compatible;
+  return [...fields].map((name) => ({
+    id: name,
+    label: name.toUpperCase(),
+    color: gray(name),
+  }));
 }
 
-function downloadRecipeSnapshot(snapshot) {
-  const blob = new Blob([`${JSON.stringify(snapshot, null, 2)}\n`], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `${slugify(snapshot.name)}.fieldlab-recipe.json`;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 0);
-}
-
-function pickRecipeFile() {
-  return new Promise((resolve) => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = ".json,.fieldlab-recipe,application/json,text/plain";
-    input.addEventListener("change", () => resolve(input.files?.[0] ?? null), { once: true });
-    input.click();
-  });
-}
-
-function uniqueSavedRecipeId(name) {
-  const base = slugify(name || "recipe");
-  let id = `local:${base}`;
-  const existing = new Set(registry.savedRecipes.map((recipe) => recipe.id));
-  if (!existing.has(id)) return id;
-  let i = 2;
-  while (existing.has(`${id}-${i}`)) i++;
-  return `${id}-${i}`;
-}
-
-function slugify(value) {
-  const slug = String(value ?? "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return slug || "recipe";
-}
-
-function inferRecipeName(source) {
-  try {
-    return compileDsl(source).dsl?.recipe?.name ?? null;
-  } catch {
-    const match = String(source).match(/^\s*recipe\s+"([^"]+)"/m);
-    return match?.[1] ?? null;
+function recipeFieldNames(recipe) {
+  const out = new Set();
+  for (const group of [recipe?.pipeline?.dsl?.fields, recipe?.pipeline?.dsl?.declared, recipe?.fields]) {
+    for (const decl of Array.isArray(group) ? group : []) {
+      const name = typeof decl === "string" ? decl : decl?.name;
+      if (name) out.add(name);
+    }
   }
+  return out;
+}
+
+function savedRecipeIds() {
+  return registry.savedRecipes.map((recipe) => recipe.id);
 }
 
 export function prepareRecipeState(recipe, state) {
@@ -881,23 +786,21 @@ export function prepareRecipeState(recipe, state) {
 
 function applyDslRecipeMetadata(recipe, dsl, getParam) {
   if (!recipe || !dsl) return;
-  if (dsl.recipe?.name) recipe.name = dsl.recipe.name;
-  if (dsl.recipe?.summary) recipe.summary = dsl.recipe.summary;
-  if (dsl.recipe?.recommendedPreset) recipe.recommendedPreset = dsl.recipe.recommendedPreset;
-  if (dsl.planet && Object.keys(dsl.planet).length > 0) recipe.planet = { ...dsl.planet };
-  if (dsl.constants?.length) recipe.constants = dsl.constants.map((decl) => ({ ...decl }));
-  if (dsl.fields?.length) recipe.fields = mergeFieldDecls(dsl.fields, declaredPipelineFieldDecls(dsl));
-  if (dsl.presets?.length) recipe.presets = buildDslPresetDecls(dsl.presets, dsl, getParam);
+  recipe.name = dsl.recipe?.name ?? recipe.name;
+  recipe.summary = dsl.recipe?.summary ?? "";
+  recipe.recommendedPreset = dsl.recipe?.recommendedPreset ?? null;
+  recipe.planet = { ...(dsl.planet ?? {}) };
+  recipe.constants = (dsl.constants ?? []).map((decl) => ({ ...decl }));
+  recipe.fields = mergeFieldDecls(dsl.fields ?? [], declaredPipelineFieldDecls(dsl));
+  recipe.presets = buildDslPresetDecls(dsl.presets ?? [], dsl, getParam);
   recipe.stamps = buildDslStampDecls(dsl.stamps ?? [], dsl, getParam);
-  if (dsl.settings?.length) recipe.settings = dsl.settings.map((decl) => ({ ...decl }));
-  if (dsl.settings?.length || dsl.parameters?.length) {
-    recipe.parameters = (dsl.parameters ?? []).map((decl) => ({ ...decl }));
-    recipe.defaultParameters = Object.fromEntries(
-      [...(dsl.settings ?? []), ...(dsl.parameters ?? [])]
-        .filter((decl) => Object.hasOwn(decl, "default"))
-        .map((decl) => [decl.name, decl.default]),
-    );
-  }
+  recipe.settings = (dsl.settings ?? []).map((decl) => ({ ...decl }));
+  recipe.parameters = (dsl.parameters ?? []).map((decl) => ({ ...decl }));
+  recipe.defaultParameters = Object.fromEntries(
+    [...(dsl.settings ?? []), ...(dsl.parameters ?? [])]
+      .filter((decl) => Object.hasOwn(decl, "default"))
+      .map((decl) => [decl.name, decl.default]),
+  );
 }
 
 function declaredPipelineFieldDecls(dsl) {

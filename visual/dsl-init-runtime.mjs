@@ -1,4 +1,5 @@
 import { TAU, clamp, hashNoise, smoothstep, spatialNoise } from "../kernel/kernel.mjs";
+import { evalExpression } from "../dsl/expression-runtime.mjs";
 
 export function buildDslPresetDecls(presets, dsl, getParam) {
   return presets.map((preset) => ({
@@ -138,36 +139,10 @@ function runPresetCellActions(state, actions, cell) {
 }
 
 function evalInitExpr(ast, state, cell) {
-  switch (ast.type) {
-    case "Number":
-      return Number(ast.value);
-    case "Identifier":
-      return evalInitIdentifier(ast.name, state, cell);
-    case "Member": {
-      const object = evalInitExpr(ast.object, state, cell);
-      if (object == null || !Object.hasOwn(object, ast.prop)) {
-        throw new Error(`unknown init property ${ast.prop}`);
-      }
-      return object[ast.prop];
-    }
-    case "Unary": {
-      const value = evalInitExpr(ast.expr, state, cell);
-      if (ast.op === "-") return -value;
-      if (ast.op === "+") return +value;
-      if (ast.op === "!") return !value;
-      throw new Error(`unknown unary op ${ast.op}`);
-    }
-    case "Binary":
-      return evalInitBinary(ast.op, evalInitExpr(ast.left, state, cell), evalInitExpr(ast.right, state, cell));
-    case "Conditional":
-      return evalInitExpr(ast.test, state, cell)
-        ? evalInitExpr(ast.consequent, state, cell)
-        : evalInitExpr(ast.alternate, state, cell);
-    case "Call":
-      return evalInitCall(ast, state, cell);
-    default:
-      throw new Error(`unknown init expression node ${ast.type}`);
-  }
+  return evalExpression(ast, {
+    resolveIdentifier: (name) => evalInitIdentifier(name, state, cell),
+    callFunction: (name, args) => evalInitCall(name, args, cell),
+  });
 }
 
 function evalInitIdentifier(name, state, cell) {
@@ -199,31 +174,7 @@ function evalInitIdentifier(name, state, cell) {
   throw new Error(`unknown init identifier ${name}`);
 }
 
-function evalInitBinary(op, left, right) {
-  switch (op) {
-    case "??": return left ?? right;
-    case "||": return left || right;
-    case "&&": return left && right;
-    case "===": return left === right;
-    case "!==": return left !== right;
-    case "==": return left == right;
-    case "!=": return left != right;
-    case ">": return left > right;
-    case ">=": return left >= right;
-    case "<": return left < right;
-    case "<=": return left <= right;
-    case "+": return left + right;
-    case "-": return left - right;
-    case "*": return left * right;
-    case "/": return left / right;
-    case "%": return left % right;
-    default: throw new Error(`unknown binary op ${op}`);
-  }
-}
-
-function evalInitCall(ast, state, cell) {
-  const name = ast.callee.type === "Identifier" ? ast.callee.name : null;
-  const args = ast.args.map((arg) => evalInitExpr(arg, state, cell));
+function evalInitCall(name, args, cell) {
   if (name === "clamp") return clamp(args[0], args[1], args[2]);
   if (name === "smoothstep") return smoothstep(args[0], args[1], args[2]);
   if (name === "max") return Math.max(...args);

@@ -1225,6 +1225,8 @@ export function mountPipelineGraph(rootEl, api) {
     refresh,
     refreshPreviews: renderPreviews,
     hasPreviewPopouts() { return previewPopouts.size > 0; },
+    getCurrentPipelineDsl() { return composePipelineDsl(); },
+    isPipelineDslDirty() { return Boolean(dslDirty); },
     select(id) { selectNode(id); },
     setStatus(message, isError) {
       dslStatus.textContent = message ?? "";

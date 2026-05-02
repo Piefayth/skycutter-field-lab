@@ -31,14 +31,12 @@ import { buildMenuBar } from "./menu.mjs";
 import { createGeodesicPreview } from "./geodesic-preview.mjs";
 import { createDslDocsContent, registerDslDocsWindow } from "./dsl-docs.mjs";
 
-const {
-  canvas,
-  renderer,
-  scene,
-  camera,
-  orbitControls,
-  globe,
-} = await createThreeSetup();
+let canvas = null;
+let renderer = null;
+let scene = null;
+let camera = null;
+let orbitControls = null;
+let globe = null;
 
 const state = createState();
 // Don't destructure — state.fields and its inner Float32Arrays get
@@ -439,7 +437,16 @@ function windowMenuItems(windows) {
 // =========================================================================
 // Boot
 // =========================================================================
-export function bootApp() {
+export async function bootApp() {
+  ({
+    canvas,
+    renderer,
+    scene,
+    camera,
+    orbitControls,
+    globe,
+  } = await createThreeSetup());
+
   initControls(ui);
   initPaint({
     canvas, camera, globe, ui, state, controls,

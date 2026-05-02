@@ -491,7 +491,7 @@ function compileActions(actions, ctx) {
     if (action.type === "let") {
       const lifted = liftReductions(action.expr, ctx);
       out.push(...lifted.statements);
-      out.push(`let ${action.name} = ${compileExpr(lifted.expr, { ...ctx, locals: new Set([...ctx.locals, action.name]) })};`);
+      out.push(`let ${action.name} = ${compileExpr(lifted.expr, ctx)};`);
       ctx.locals.add(action.name);
     } else if (action.type === "add") {
       if (action.field === ctx.target) {
@@ -635,6 +635,7 @@ function compileExpr(ast, ctx) {
 
 function compileIdentifier(name, ctx) {
   if (name === "true" || name === "false") return name;
+  if (ctx.locals.has(name)) return name;
   if (name === "dt") return "params.dt";
   if (name === "frame") return "params.frame";
   if (ctx.reads.has(name)) return readVar(name);
@@ -652,7 +653,6 @@ function compileIdentifier(name, ctx) {
   if (ctx.layout.planet.includes(name)) return `params.planet_${name}`;
   if (name === "PI" || name === "TAU" || name === "N") return name;
   if (name === "x" || name === "y" || name === "u" || name === "v" || name === "lon" || name === "lat" || name === "px" || name === "py" || name === "pz" || name === "i") return name;
-  if (ctx.locals.has(name)) return name;
   return name;
 }
 

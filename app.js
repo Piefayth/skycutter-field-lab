@@ -1,3 +1,5 @@
 import { bootApp } from "./visual/boot.mjs";
 
-bootApp();
+bootApp().catch((error) => {
+  console.error("Field Lab boot failed:", error);
+});

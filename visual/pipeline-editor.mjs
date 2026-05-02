@@ -23,6 +23,8 @@ const registry = {
   refreshPreviews: null,
   hasPreviewPopouts: null,
   applyPipelineDsl: null,
+  getCurrentPipelineDsl: null,
+  isPipelineDslDirty: null,
   getState: null,
   getPreviewView: null,
   isVisible: null,
@@ -46,6 +48,8 @@ export function initEditors({ pipelineWindow, getState, getPreviewView }) {
   registry.refreshAll = refreshAll;
   registry.refreshPreviews = () => pipelineEditorAPI?.refreshPreviews?.();
   registry.hasPreviewPopouts = () => Boolean(pipelineEditorAPI?.hasPreviewPopouts?.());
+  registry.getCurrentPipelineDsl = () => pipelineEditorAPI?.getCurrentPipelineDsl?.() ?? null;
+  registry.isPipelineDslDirty = () => Boolean(pipelineEditorAPI?.isPipelineDslDirty?.());
   registry.isVisible = () => Boolean(pipelineWin?.isVisible?.() && !pipelineWin?.isMinimized?.());
 }
 

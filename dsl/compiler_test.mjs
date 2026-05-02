@@ -653,6 +653,34 @@ test("validator rejects stage writes and stamps to immutable sources", () => {
   `), "immutable source S");
 });
 
+test("validator rejects locals that shadow fields and builtins", () => {
+  assertThrows(() => compileDsl(`
+    use sim cell
+
+    stage bad "Bad" {
+      reads A
+      writes A
+      cell {
+        let A = 1
+        add A = A
+      }
+    }
+  `), "local 'A' shadows a field");
+
+  assertThrows(() => compileDsl(`
+    use sim cell
+
+    stage bad "Bad" {
+      reads A
+      writes A
+      cell {
+        let dt = 1
+        add A = dt
+      }
+    }
+  `), "local 'dt' shadows a builtin");
+});
+
 test("diagnoseDsl returns structured success and failure", () => {
   const good = diagnoseDsl(`
     use sim cell

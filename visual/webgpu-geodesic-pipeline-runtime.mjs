@@ -3,6 +3,7 @@ import {
   buildWebGpuGeodesicUniforms,
   compileWebGpuGeodesicPipeline,
 } from "../dsl/webgpu-geodesic-compiler.mjs";
+import { evalExpression } from "../dsl/expression-runtime.mjs";
 import { clamp, hashNoise, smoothstep, spatialNoise } from "../kernel/kernel.mjs";
 import { createWebGpuGeodesicRuntime } from "./webgpu-geodesic-runtime.mjs";
 
@@ -128,38 +129,10 @@ function recipeFieldNames(dsl) {
 }
 
 function evalUniformExpr(expr, env) {
-  if (expr === undefined || expr === null || expr === "") throw new Error("missing primitive uniform expression");
-  if (typeof expr === "number") return expr;
-  switch (expr.type) {
-    case "Number":
-      return Number(expr.value);
-    case "Identifier":
-      return evalUniformIdentifier(expr.name, env);
-    case "Member": {
-      const object = evalUniformExpr(expr.object, env);
-      if (object == null || !Object.hasOwn(object, expr.prop)) {
-        throw new Error(`unknown primitive uniform property ${expr.prop}`);
-      }
-      return object[expr.prop];
-    }
-    case "Unary": {
-      const value = evalUniformExpr(expr.expr, env);
-      if (expr.op === "-") return -value;
-      if (expr.op === "+") return +value;
-      if (expr.op === "!") return !value;
-      throw new Error(`unknown primitive uniform unary op ${expr.op}`);
-    }
-    case "Binary":
-      return evalUniformBinary(expr.op, evalUniformExpr(expr.left, env), evalUniformExpr(expr.right, env));
-    case "Conditional":
-      return evalUniformExpr(expr.test, env)
-        ? evalUniformExpr(expr.consequent, env)
-        : evalUniformExpr(expr.alternate, env);
-    case "Call":
-      return evalUniformCall(expr, env);
-    default:
-      throw new Error(`unknown primitive uniform expression node ${expr.type}`);
-  }
+  return evalExpression(expr, {
+    resolveIdentifier: (name) => evalUniformIdentifier(name, env),
+    callFunction: (name, args) => evalUniformCall(name, args),
+  });
 }
 
 function evalUniformIdentifier(name, env) {
@@ -177,31 +150,7 @@ function evalUniformIdentifier(name, env) {
   throw new Error(`unknown primitive uniform identifier ${name}`);
 }
 
-function evalUniformBinary(op, left, right) {
-  switch (op) {
-    case "??": return left ?? right;
-    case "||": return left || right;
-    case "&&": return left && right;
-    case "===": return left === right;
-    case "!==": return left !== right;
-    case "==": return left == right;
-    case "!=": return left != right;
-    case ">": return left > right;
-    case ">=": return left >= right;
-    case "<": return left < right;
-    case "<=": return left <= right;
-    case "+": return left + right;
-    case "-": return left - right;
-    case "*": return left * right;
-    case "/": return left / right;
-    case "%": return left % right;
-    default: throw new Error(`unknown primitive uniform binary op ${op}`);
-  }
-}
-
-function evalUniformCall(ast, env) {
-  const name = ast.callee.type === "Identifier" ? ast.callee.name : null;
-  const args = ast.args.map((arg) => evalUniformExpr(arg, env));
+function evalUniformCall(name, args) {
   if (name === "clamp") return clamp(args[0], args[1], args[2]);
   if (name === "smoothstep") return smoothstep(args[0], args[1], args[2]);
   if (name === "max") return Math.max(...args);

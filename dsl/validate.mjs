@@ -386,6 +386,12 @@ function validateUniformExpr(ast, label, declaredParams, declaredConstants, decl
 function validateActions(actions, stage, reads, writes, declares, visibleFields, mode, declaredParams, declaredConstants, declaredPlanet, imports, locals = new Set()) {
   for (const action of actions) {
     if (action.type === "let") {
+      validateLocalName(
+        action.name,
+        `${stage.id} let ${action.name}`,
+        new Set([...visibleFields, ...writes, ...declares]),
+        locals,
+      );
       validateExpr(action.expr, visibleFields, locals, `${stage.id} let ${action.name}`, declaredParams, declaredConstants, declaredPlanet, imports, GEO_IDENTIFIERS);
       locals.add(action.name);
     } else if (action.type === "add" || action.type === "set") {
@@ -496,15 +502,27 @@ function validateNeighborReduce(ast, visibleFields, locals, label, declaredParam
   const bodyLocals = new Set(locals);
   for (const binding of ast.bindings) {
     requireVisibleField(binding.field, visibleFields, label, `neighbor ${ast.op} field`);
-    if (bodyLocals.has(binding.name)) {
-      throw new Error(`${label}: neighbor ${ast.op} binding '${binding.name}' shadows an existing local`);
-    }
+    validateLocalName(
+      binding.name,
+      `${label} neighbor ${ast.op} binding`,
+      visibleFields,
+      bodyLocals,
+    );
     bodyLocals.add(binding.name);
   }
   // Body validates with the binding(s) in scope — `n` from `n in theta`
   // resolves as a local; `theta` (the field name) still resolves as the
   // cell's value via the regular visibleFields path.
   validateExpr(ast.body, visibleFields, bodyLocals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers, allowImplicitGeo);
+}
+
+function validateLocalName(name, label, visibleFields, locals) {
+  if (!name) throw new Error(`${label}: local name is required`);
+  if (locals.has(name)) throw new Error(`${label}: local '${name}' is already declared in this scope`);
+  if (visibleFields.has(name)) throw new Error(`${label}: local '${name}' shadows a field`);
+  if (CLOCK_IDENTIFIERS.has(name) || GEO_IDENTIFIERS.has(name) || RESERVED_NAMES.has(name)) {
+    throw new Error(`${label}: local '${name}' shadows a builtin/reserved identifier`);
+  }
 }
 
 function containsNeighborReduce(expr) {
