@@ -79,6 +79,16 @@ export function initRecipes({
 }) {
   if (registry.loadById) throw new Error("recipes.mjs: initRecipes called twice");
 
+  // Per-name reader over the live controls. Threaded into the init
+  // runtime so preset / stamp / eachCell expressions can reference
+  // recipe-declared params at apply time. `getParams()` returns an
+  // object keyed by name; we expose a per-name function because that's
+  // what dsl-init-runtime expects.
+  const getParamLive = (name) => {
+    const all = typeof getParams === "function" ? getParams() : null;
+    return all ? all[name] : undefined;
+  };
+
   // Active recipe state.
   let activeRecipe = null;
   let activeRecipeId = null;
@@ -171,7 +181,7 @@ export function initRecipes({
     const recipe = materializeRecipe(baseModule);
     recipe.pipelineDsl = snapshot.pipelineDsl;
     recipe.pipeline = compileDsl(snapshot.pipelineDsl);
-    applyDslRecipeMetadata(recipe, recipe.pipeline.dsl);
+    applyDslRecipeMetadata(recipe, recipe.pipeline.dsl, getParamLive);
     recipe.name = snapshot.name ?? recipe.name;
     recipe.summary = snapshot.summary ?? recipe.summary;
     return recipe;
@@ -287,7 +297,7 @@ export function initRecipes({
     const pipeline = compileDsl(source);
     activeRecipe.pipelineDsl = source;
     activeRecipe.pipeline = pipeline;
-    applyDslRecipeMetadata(activeRecipe, pipeline.dsl);
+    applyDslRecipeMetadata(activeRecipe, pipeline.dsl, getParamLive);
     applyRecipe(activeRecipe, activeRecipeId);
     refreshView();
     pipelineEditor.setStatus(`applied DSL for "${activeRecipe.name ?? activeRecipeId}"`);
@@ -326,7 +336,7 @@ export function initRecipes({
     if (!recipe?.pipeline) throw new Error("recipe missing pipeline");
     if (recipe.pipelineDsl) {
       recipe.pipeline = compileDsl(applyGeodesicTileOverride(recipe.pipelineDsl));
-      applyDslRecipeMetadata(recipe, recipe.pipeline.dsl);
+      applyDslRecipeMetadata(recipe, recipe.pipeline.dsl, getParamLive);
     }
     const prepared = prepareRecipeState(recipe, state);
     activeFieldDecls = prepared.fieldDecls;
@@ -869,7 +879,7 @@ export function prepareRecipeState(recipe, state) {
   return { fieldDecls };
 }
 
-function applyDslRecipeMetadata(recipe, dsl) {
+function applyDslRecipeMetadata(recipe, dsl, getParam) {
   if (!recipe || !dsl) return;
   if (dsl.recipe?.name) recipe.name = dsl.recipe.name;
   if (dsl.recipe?.summary) recipe.summary = dsl.recipe.summary;
@@ -877,8 +887,8 @@ function applyDslRecipeMetadata(recipe, dsl) {
   if (dsl.planet && Object.keys(dsl.planet).length > 0) recipe.planet = { ...dsl.planet };
   if (dsl.constants?.length) recipe.constants = dsl.constants.map((decl) => ({ ...decl }));
   if (dsl.fields?.length) recipe.fields = mergeFieldDecls(dsl.fields, declaredPipelineFieldDecls(dsl));
-  if (dsl.presets?.length) recipe.presets = buildDslPresetDecls(dsl.presets, dsl);
-  recipe.stamps = buildDslStampDecls(dsl.stamps ?? [], dsl);
+  if (dsl.presets?.length) recipe.presets = buildDslPresetDecls(dsl.presets, dsl, getParam);
+  recipe.stamps = buildDslStampDecls(dsl.stamps ?? [], dsl, getParam);
   if (dsl.settings?.length) recipe.settings = dsl.settings.map((decl) => ({ ...decl }));
   if (dsl.settings?.length || dsl.parameters?.length) {
     recipe.parameters = (dsl.parameters ?? []).map((decl) => ({ ...decl }));

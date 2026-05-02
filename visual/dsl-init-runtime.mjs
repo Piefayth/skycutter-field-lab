@@ -1,41 +1,51 @@
 import { TAU, clamp, hashNoise, smoothstep, spatialNoise } from "../kernel/kernel.mjs";
 
-export function buildDslPresetDecls(presets, dsl) {
+export function buildDslPresetDecls(presets, dsl, getParam) {
   return presets.map((preset) => ({
     id: preset.id,
     label: preset.label ?? preset.id,
-    run: (state) => runDslPreset(state, preset, dsl),
+    run: (state) => runDslPreset(state, preset, dsl, getParam),
   }));
 }
 
-export function buildDslStampDecls(stamps, dsl) {
+export function buildDslStampDecls(stamps, dsl, getParam) {
   return stamps.map((stamp) => ({
     id: stamp.id,
     label: stamp.label ?? stamp.id,
-    run: (state, x, y, r, hit = null) => runDslStamp(state, stamp, x, y, r, dsl, hit),
+    run: (state, x, y, r, hit = null) => runDslStamp(state, stamp, x, y, r, dsl, hit, getParam),
   }));
 }
 
-function runDslPreset(state, preset, dsl) {
-  const context = initContext(dsl);
+function runDslPreset(state, preset, dsl, getParam) {
+  const context = initContext(dsl, getParam);
   for (const action of preset.actions ?? []) runPresetAction(state, action, context);
 }
 
-function runDslStamp(state, stamp, x, y, r, dsl, hit = null) {
+function runDslStamp(state, stamp, x, y, r, dsl, hit = null, getParam) {
   const cell = {
     x, y, r,
     ...(hit ?? {}),
     locals: Object.create(null),
     field: Object.create(null),
-    ...initContext(dsl),
+    ...initContext(dsl, getParam),
   };
   for (const action of stamp.actions ?? []) runPresetAction(state, action, cell);
 }
 
-function initContext(dsl) {
+function initContext(dsl, getParam) {
+  // Snapshot param values once at preset-apply time. Each call to
+  // applyPreset re-builds this, so reset-after-slider-change picks up
+  // the new value. Falls back to the declared default when the runtime
+  // hasn't installed a controls reader (tests, materializeRecipe).
+  const params = {};
+  for (const decl of dsl?.parameters ?? []) {
+    const live = typeof getParam === "function" ? getParam(decl.name) : undefined;
+    params[decl.name] = live !== undefined && live !== null ? live : (decl.default ?? 0);
+  }
   return {
     consts: Object.fromEntries((dsl?.constants ?? []).map((decl) => [decl.name, decl.value])),
     planet: { ...(dsl?.planet ?? {}) },
+    params,
   };
 }
 
@@ -92,6 +102,7 @@ function runPresetAction(state, action, cell) {
         field,
         consts: cell?.consts ?? {},
         planet: cell?.planet ?? {},
+        params: cell?.params ?? {},
       });
     }
     return;
@@ -181,6 +192,7 @@ function evalInitIdentifier(name, state, cell) {
   if (name === "i") return cell?.i ?? 0;
   if (cell?.consts && Object.hasOwn(cell.consts, name)) return cell.consts[name];
   if (cell?.planet && Object.hasOwn(cell.planet, name)) return cell.planet[name];
+  if (cell?.params && Object.hasOwn(cell.params, name)) return cell.params[name];
   if (cell?.field && Object.hasOwn(cell.field, name)) return cell.field[name];
   const arr = state.fields?.[name];
   if (arr && cell) return arr[cell.i];
