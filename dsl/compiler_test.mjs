@@ -498,14 +498,14 @@ test("cell expressions can read recipe constants and planet constants", () => {
 test("each blocks expose stencil reads and side-effect writes as IR", () => {
   const pipeline = compileDsl(`
     use sim each
-    use core neighborMax
+    use core neighbor
     param threshold slider min 0 max 1 default 0.5
 
     stage mark "Mark" {
       reads W, R
       writes spreadMask
       each {
-        when W < threshold and R <= 0.1 and neighborMax(W) > 0.5 {
+        when W < threshold and R <= 0.1 and neighbor max n in W { n } > 0.5 {
           set spreadMask = 1
         }
       }
@@ -580,19 +580,19 @@ test("validator rejects bad function arity", () => {
   `), "clamp expects 3 args");
 });
 
-test("validator rejects neighborMax of undeclared fields", () => {
+test("validator rejects neighbor reductions over undeclared fields", () => {
   assertThrows(() => compileDsl(`
     use sim each
-    use core neighborMax
+    use core neighbor
 
     stage bad "Bad" {
       reads A
       writes A
       each {
-        add A = neighborMax(B)
+        add A = neighbor max n in B { n }
       }
     }
-  `), "neighborMax field references undeclared field B");
+  `), "neighbor max field references undeclared field B");
 });
 
 test("validator rejects per-cell identifiers in primitive uniform expressions", () => {

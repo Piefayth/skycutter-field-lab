@@ -43,6 +43,7 @@ const DECLARATION_KEYWORDS = new Set([
 // `(`-lookahead in token() routes the call form to "function" first.
 const CONTROL_KEYWORDS = new Set([
   "cell", "event", "each", "eachCell", "when", "if", "else",
+  "neighbor",
 ]);
 
 // Statement verbs inside stage / preset / stamp bodies.

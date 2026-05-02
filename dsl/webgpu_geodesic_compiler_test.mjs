@@ -142,6 +142,103 @@ stage push "Push" {
   assert(pass.source.includes("spatialNoise((vec3<f32>(px, py, pz) * (2.5"), "scale arg not multiplied into coords");
 });
 
+test("neighbor sum lifts to a per-cell loop", () => {
+  const recipe = compileDsl(`
+recipe "Sum"
+use sim cell
+use clock dt
+use geo px, py, pz
+use core neighbor
+field A
+
+stage sum "Sum" {
+  reads A
+  writes A
+  cell {
+    let lap = neighbor sum n in A { n - A }
+    add A = lap * dt
+  }
+}
+`);
+  const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
+  assert(pass.needsNeighbors === true, "stage should bind neighbor arrays");
+  assert(pass.source.includes("var __nr_0: f32 = 0.0;"), "sum accumulator initialized to 0");
+  assert(pass.source.includes("for (var __nr_0_slot: u32 = 0u"), "loop emitted");
+  assert(pass.source.includes("let n: f32 = f_A[u32(neighbors[cell * 6u + __nr_0_slot])]"), "binding read from neighbor");
+  assert(pass.source.includes("__nr_0 = __nr_0 + ((n - v_A))"), "sum body accumulated");
+});
+
+test("neighbor mean divides by neighbor count", () => {
+  const recipe = compileDsl(`
+recipe "Mean"
+use sim cell
+use clock dt
+use geo px, py, pz
+use core neighbor
+field A
+
+stage avg "Avg" {
+  reads A
+  writes A
+  cell {
+    let lap = neighbor mean n in A { n }
+    add A = (lap - A) * dt
+  }
+}
+`);
+  const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
+  assert(pass.source.includes("var __nr_0_sum: f32 = 0.0;"), "mean uses a sum accumulator");
+  assert(pass.source.includes("__nr_0 = select(0.0, __nr_0_sum / f32(__nr_0_count)"), "mean divides by count");
+});
+
+test("neighbor max uses -infinity sentinel", () => {
+  const recipe = compileDsl(`
+recipe "Max"
+use sim cell
+use clock dt
+use geo px, py, pz
+use core neighbor
+field A
+
+stage hi "Hi" {
+  reads A
+  writes A
+  cell {
+    let m = neighbor max n in A { n }
+    set A = m
+  }
+}
+`);
+  const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
+  assert(pass.source.includes("var __nr_0: f32 = -1.0e38;"), "max seeded with -infinity");
+  assert(pass.source.includes("__nr_0 = max(__nr_0, (n))"), "max body uses WGSL max");
+});
+
+test("validator rejects nested neighbor reductions", () => {
+  let threw = null;
+  try {
+    compileDsl(`
+recipe "Nested"
+use sim cell
+use clock dt
+use geo px, py, pz
+use core neighbor
+field A
+
+stage bad "Bad" {
+  reads A
+  writes A
+  cell {
+    add A = neighbor sum n in A { neighbor sum m in A { m } } * dt
+  }
+}
+`);
+  } catch (error) {
+    threw = error.message;
+  }
+  assert(threw && threw.includes("nested neighbor reductions"), `expected nested-rejection, got: ${threw}`);
+});
+
 test("compiles a local event stage to per-field WGSL passes", () => {
   const recipe = compileDsl(`
 recipe "Event"
@@ -170,12 +267,12 @@ stage discharge "Discharge" {
   assert(passes.some((pass) => pass.source.includes("atomicAdd(&eventCounter.value, 1u);")), "event counter increment missing");
 });
 
-test("compiles geodesic neighborMax in each stages", () => {
+test("compiles neighbor reduction inside each stage", () => {
   const recipe = compileDsl(`
 recipe "Neighbor"
 use sim each
 use geo x, y, i, lon, lat, u, v, px, py, pz, N, PI, TAU
-use core neighborMax
+use core neighbor
 field W, R, spreadMask
 param threshold slider min 0 max 1 step 0.01 default 0.5
 
@@ -183,7 +280,7 @@ stage mark "Mark" {
   reads W, R
   writes spreadMask
   each {
-    when W < threshold and R <= 0.1 and neighborMax(W) > 0.5 {
+    when W < threshold and R <= 0.1 and neighbor max n in W { n } > 0.5 {
       set spreadMask = 1
     }
   }
@@ -192,9 +289,10 @@ stage mark "Mark" {
   const passes = compileWebGpuGeodesicEachStage(recipe.dsl.stages[0], recipe.dsl);
   const pass = passes.find((item) => item.field === "spreadMask");
   assert(pass, "spreadMask pass missing");
-  assert(pass.needsNeighbors === true, "neighborMax pass did not request neighbor buffers");
+  assert(pass.needsNeighbors === true, "stage did not request neighbor buffers");
   assert(pass.source.includes("var<storage, read> neighbors"), "neighbor storage binding missing");
-  assert(pass.source.includes("fn neighborMax_W"), "neighborMax helper missing");
+  assert(pass.source.includes("var __nr_0: f32 = -1.0e38;"), "max accumulator initialized to -infinity");
+  assert(pass.source.includes("let n: f32 = f_W[u32(neighbors[cell * 6u + __nr_0_slot])]"), "binding read from neighbor");
   assert(pass.source.includes("let v_W = f_W[cell];"), "read variable should avoid W constant collision");
 });
 

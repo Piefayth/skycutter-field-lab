@@ -143,7 +143,7 @@ export function compileWebGpuGeodesicEventStage(stage, dsl = {}) {
 function compileActionPass({ stage, field, reads, actions, layout, key, eventCounter = null }) {
   const passReads = readsForTarget(actions, field, reads);
   const targetActions = filterActionsForTarget(actions, field);
-  const needsNeighbors = actionsUseNeighborMax(targetActions);
+  const needsNeighbors = actionsUseNeighborReduce(targetActions);
   return {
     kind: "cell",
     stageId: stage.id,
@@ -192,21 +192,17 @@ struct EventCounter {
 };
 @group(0) @binding(${eventCounterBinding}) var<storage, read_write> eventCounter: EventCounter;
 ` : "";
-  const neighborFns = needsNeighbors ? reads.map((name) => `
-fn neighborMax_${name}(cell: u32) -> f32 {
-  var best = f_${name}[cell];
-  let count = neighborCounts[cell];
-  for (var slot = 0u; slot < count; slot = slot + 1u) {
-    let neighbor = neighbors[cell * 6u + slot];
-    best = max(best, f_${name}[u32(neighbor)]);
-  }
-  return best;
-}
-`).join("\n") : "";
+  // No per-field helper functions any more — `neighbor MOD ...` reductions
+  // emit their loops inline at the call site (see compileActions). The
+  // previous `neighborMax_${name}` global helpers became dead.
+  const neighborFns = "";
   const initial = reads.includes(field) ? readVar(field) : "0.0";
-  const neighborTouch = needsNeighbors
-    ? "  let _neighborLayoutTouch = f32(neighborCounts[cell]) * 0.0 + f32(neighbors[cell * 6u]) * 0.0;"
-    : "";
+  // The buffer layout includes the neighbor arrays whenever needsNeighbors
+  // is true, but if the action body happens not to reference them in any
+  // emitted statement (e.g. the loop is conditional on `when`-stripped
+  // branches), WGSL would warn about unused bindings. The reduction
+  // emission unconditionally references both arrays, so no touch hack.
+  const neighborTouch = "";
   const body = compileActions(actions, {
     reads: new Set(reads),
     target: field,
@@ -315,7 +311,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let N = params.cellCount;
 ${neighborTouch}
 ${readValues.join("\n")}
-  var outValue = ${initial}${needsNeighbors ? " + _neighborLayoutTouch" : ""};
+  var outValue = ${initial};
 ${eventCount}
 ${indent(body, 2)}
   outputField[cell] = outValue;
@@ -432,6 +428,13 @@ function visitExpr(expr, onIdentifier) {
       visitExpr(expr.callee, onIdentifier);
       for (const arg of expr.args ?? []) visitExpr(arg, onIdentifier);
       break;
+    case "NeighborReduce":
+      // The bound name shadows enclosing scope inside the body, but we
+      // need the field name visible to the dependency walker so the
+      // surrounding stage knows it's a read. Surface both.
+      for (const binding of expr.bindings ?? []) onIdentifier(binding.field);
+      visitExpr(expr.body, onIdentifier);
+      break;
   }
 }
 
@@ -450,44 +453,60 @@ function filterActionList(actions, target, locals) {
   return out;
 }
 
-function actionsUseNeighborMax(actions) {
+function actionsUseNeighborReduce(actions) {
   for (const action of actions ?? []) {
-    if (action.condition && exprUsesNeighborMax(action.condition)) return true;
-    if (action.expr && exprUsesNeighborMax(action.expr)) return true;
-    if (actionsUseNeighborMax(action.actions)) return true;
+    if (action.condition && exprUsesNeighborReduce(action.condition)) return true;
+    if (action.expr && exprUsesNeighborReduce(action.expr)) return true;
+    if (actionsUseNeighborReduce(action.actions)) return true;
   }
   return false;
 }
 
-function exprUsesNeighborMax(expr) {
+function exprUsesNeighborReduce(expr) {
   if (!expr) return false;
-  if (expr.type === "Call" && expr.callee?.type === "Identifier" && expr.callee.name === "neighborMax") return true;
-  if (expr.type === "Member") return exprUsesNeighborMax(expr.object);
-  if (expr.type === "Unary") return exprUsesNeighborMax(expr.expr);
-  if (expr.type === "Binary") return exprUsesNeighborMax(expr.left) || exprUsesNeighborMax(expr.right);
-  if (expr.type === "Conditional") return exprUsesNeighborMax(expr.test) || exprUsesNeighborMax(expr.consequent) || exprUsesNeighborMax(expr.alternate);
-  if (expr.type === "Call") return exprUsesNeighborMax(expr.callee) || (expr.args ?? []).some(exprUsesNeighborMax);
+  if (expr.type === "NeighborReduce") return true;
+  if (expr.type === "Member") return exprUsesNeighborReduce(expr.object);
+  if (expr.type === "Unary") return exprUsesNeighborReduce(expr.expr);
+  if (expr.type === "Binary") return exprUsesNeighborReduce(expr.left) || exprUsesNeighborReduce(expr.right);
+  if (expr.type === "Conditional") return exprUsesNeighborReduce(expr.test) || exprUsesNeighborReduce(expr.consequent) || exprUsesNeighborReduce(expr.alternate);
+  if (expr.type === "Call") return exprUsesNeighborReduce(expr.callee) || (expr.args ?? []).some(exprUsesNeighborReduce);
   return false;
 }
 
 const RESERVED_IDENTIFIERS = new Set([
   "true", "false", "dt", "frame", "PI", "TAU", "N", "x", "y", "u", "v", "lon", "lat", "px", "py", "pz", "i",
   "params", "consts", "planet",
-  "cellNoise", "neighborMax", "max", "min", "abs", "sin", "asin", "cos", "exp", "sqrt", "pow", "smoothstep", "clamp", "hypot",
+  "neighbor",
+  "cellNoise", "max", "min", "abs", "sin", "asin", "cos", "exp", "sqrt", "pow", "smoothstep", "clamp", "hypot",
 ]);
 
 function compileActions(actions, ctx) {
   const out = [];
+  // The reduction counter is shared across all actions in the stage so
+  // the lifted accumulator names (`__nr_<idx>`) don't collide.
+  if (ctx.nrCounter == null) ctx.nrCounter = { value: 0 };
   for (const action of actions) {
     if (action.type === "let") {
-      out.push(`let ${action.name} = ${compileExpr(action.expr, { ...ctx, locals: new Set([...ctx.locals, action.name]) })};`);
+      const lifted = liftReductions(action.expr, ctx);
+      out.push(...lifted.statements);
+      out.push(`let ${action.name} = ${compileExpr(lifted.expr, { ...ctx, locals: new Set([...ctx.locals, action.name]) })};`);
       ctx.locals.add(action.name);
     } else if (action.type === "add") {
-      if (action.field === ctx.target) out.push(`outValue = outValue + ${compileExpr(action.expr, ctx)};`);
+      if (action.field === ctx.target) {
+        const lifted = liftReductions(action.expr, ctx);
+        out.push(...lifted.statements);
+        out.push(`outValue = outValue + ${compileExpr(lifted.expr, ctx)};`);
+      }
     } else if (action.type === "set") {
-      if (action.field === ctx.target) out.push(`outValue = ${compileExpr(action.expr, ctx)};`);
+      if (action.field === ctx.target) {
+        const lifted = liftReductions(action.expr, ctx);
+        out.push(...lifted.statements);
+        out.push(`outValue = ${compileExpr(lifted.expr, ctx)};`);
+      }
     } else if (action.type === "when") {
-      out.push(`if (${compileExpr(action.condition, ctx)}) {`);
+      const lifted = liftReductions(action.condition, ctx);
+      out.push(...lifted.statements);
+      out.push(`if (${compileExpr(lifted.expr, ctx)}) {`);
       out.push(indent(compileActions(action.actions ?? [], { ...ctx, locals: new Set(ctx.locals) }), 2));
       out.push("}");
     } else {
@@ -495,6 +514,100 @@ function compileActions(actions, ctx) {
     }
   }
   return out.join("\n");
+}
+
+// Lift `NeighborReduce` nodes out of an expression — they can't compile
+// to a single WGSL expression because they need a loop. For each one,
+// emit a pre-statement reduction loop into `statements` and replace the
+// node with an Identifier referring to the lifted accumulator.
+//
+// Nested reductions (a reduction inside another reduction's body) aren't
+// supported on the geodesic substrate — we don't have neighbor-of-
+// neighbor access — and the validator rejects them, so this function
+// can assume the body is reduction-free and lift in a single pass.
+function liftReductions(expr, ctx) {
+  const statements = [];
+  const rewritten = rewriteWithLifts(expr, ctx, statements);
+  return { expr: rewritten, statements };
+}
+
+function rewriteWithLifts(expr, ctx, statements) {
+  if (!expr) return expr;
+  if (expr.type === "NeighborReduce") {
+    return emitReduction(expr, ctx, statements);
+  }
+  if (expr.type === "Binary") {
+    return {
+      ...expr,
+      left: rewriteWithLifts(expr.left, ctx, statements),
+      right: rewriteWithLifts(expr.right, ctx, statements),
+    };
+  }
+  if (expr.type === "Unary") {
+    return { ...expr, expr: rewriteWithLifts(expr.expr, ctx, statements) };
+  }
+  if (expr.type === "Conditional") {
+    return {
+      ...expr,
+      test: rewriteWithLifts(expr.test, ctx, statements),
+      consequent: rewriteWithLifts(expr.consequent, ctx, statements),
+      alternate: rewriteWithLifts(expr.alternate, ctx, statements),
+    };
+  }
+  if (expr.type === "Call") {
+    return { ...expr, args: expr.args.map((arg) => rewriteWithLifts(arg, ctx, statements)) };
+  }
+  if (expr.type === "Member") {
+    return { ...expr, object: rewriteWithLifts(expr.object, ctx, statements) };
+  }
+  return expr;
+}
+
+function emitReduction(node, ctx, statements) {
+  const idx = ctx.nrCounter.value++;
+  const accName = `__nr_${idx}`;
+  const slot = `${accName}_slot`;
+  const count = `${accName}_count`;
+  const sumName = `${accName}_sum`;
+  const binding = node.bindings[0];
+
+  // Compile the body with the binding in scope as a local. The body
+  // itself can reference declared fields (which read as `v_<name>`,
+  // i.e. the cell's value at stage entry — same as outside the body).
+  const bodyCtx = { ...ctx, locals: new Set([...ctx.locals, binding.name]) };
+  const bodyWgsl = compileExpr(node.body, bodyCtx);
+  const fieldRead = `f_${binding.field}[u32(neighbors[cell * 6u + ${slot}])]`;
+
+  if (node.op === "sum") {
+    statements.push(`var ${accName}: f32 = 0.0;`);
+  } else if (node.op === "max") {
+    statements.push(`var ${accName}: f32 = -1.0e38;`);
+  } else if (node.op === "min") {
+    statements.push(`var ${accName}: f32 = 1.0e38;`);
+  } else if (node.op === "mean") {
+    statements.push(`var ${sumName}: f32 = 0.0;`);
+    statements.push(`var ${accName}: f32 = 0.0;`);
+  } else {
+    throw new Error(`Unsupported neighbor reduction op: ${node.op}`);
+  }
+  statements.push(`{`);
+  statements.push(`  let ${count}: u32 = neighborCounts[cell];`);
+  statements.push(`  for (var ${slot}: u32 = 0u; ${slot} < ${count}; ${slot} = ${slot} + 1u) {`);
+  statements.push(`    let ${binding.name}: f32 = ${fieldRead};`);
+  if (node.op === "sum") {
+    statements.push(`    ${accName} = ${accName} + (${bodyWgsl});`);
+  } else if (node.op === "max" || node.op === "min") {
+    statements.push(`    ${accName} = ${node.op}(${accName}, (${bodyWgsl}));`);
+  } else if (node.op === "mean") {
+    statements.push(`    ${sumName} = ${sumName} + (${bodyWgsl});`);
+  }
+  statements.push(`  }`);
+  if (node.op === "mean") {
+    statements.push(`  ${accName} = select(0.0, ${sumName} / f32(${count}), ${count} > 0u);`);
+  }
+  statements.push(`}`);
+
+  return { type: "Identifier", name: accName };
 }
 
 function compileExpr(ast, ctx) {
@@ -559,11 +672,6 @@ function compileCall(ast, ctx) {
   if (ast.callee.type !== "Identifier") throw new Error("Unsupported WebGPU geodesic call target");
   const args = ast.args.map((arg) => compileExpr(arg, ctx));
   switch (ast.callee.name) {
-    case "neighborMax": {
-      const [field] = ast.args;
-      if (field?.type !== "Identifier") throw new Error("neighborMax(field) requires a field identifier");
-      return `neighborMax_${field.name}(cell)`;
-    }
     case "cellNoise": {
       // 1-arg: natural sphere scale. 2-arg: scale-multiplied sphere coords.
       const scale = args.length >= 2 ? args[1] : null;

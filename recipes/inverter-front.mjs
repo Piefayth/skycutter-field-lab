@@ -38,7 +38,7 @@ grid geodesic tiles 64
 use clock dt, frame
 use geo x, y, i, lon, lat, u, v, px, py, pz, N, PI, TAU
 use sim wind, advect, diffuse, clamp, normalize, cell, event, each
-use core clamp, smoothstep, max, min, abs, hypot, cellNoise, neighborMax
+use core clamp, smoothstep, max, min, abs, hypot, cellNoise, neighbor
 use init fill, eachCell
 
 field A, B, W, R, spreadMask
@@ -74,7 +74,7 @@ stage markSpread "Mark wave-spread targets (read-only into spreadMask)" {
   reads W, R
   writes spreadMask
   each {
-    when W < waveThreshold and R <= 0.1 and neighborMax(W) > 0.5 {
+    when W < waveThreshold and R <= 0.1 and neighbor max n in W { n } > 0.5 {
       set spreadMask = 1
     }
   }

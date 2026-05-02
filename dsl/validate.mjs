@@ -97,6 +97,11 @@ function collectParamRefsFromExpr(ast, add) {
       collectParamRefsFromExpr(ast.callee, add);
       for (const arg of ast.args ?? []) collectParamRefsFromExpr(arg, add);
       return;
+    case "NeighborReduce":
+      // Bindings introduce locals, but the body itself can still
+      // reference params freely. Recurse — `add` will skip non-params.
+      collectParamRefsFromExpr(ast.body, add);
+      return;
     default:
       return;
   }
@@ -461,21 +466,61 @@ function validateExpr(
     case "Call":
       validateCall(ast, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers, allowImplicitGeo);
       return;
+    case "NeighborReduce":
+      validateNeighborReduce(ast, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers, allowImplicitGeo);
+      return;
     default:
       throw new Error(`${label}: unknown expression node ${ast.type}`);
   }
 }
 
-function validateCall(ast, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers, allowImplicitGeo = true) {
-  if (ast.callee.type === "Identifier" && ast.callee.name === "neighborMax") {
-    requireImport(imports, "core", "neighborMax", label);
-    if (ast.args.length !== 1) throw new Error(`${label}: neighborMax expects 1 argument`);
-    const [field] = ast.args;
-    if (field.type !== "Identifier") throw new Error(`${label}: neighborMax first argument must be a field name`);
-    requireVisibleField(field.name, visibleFields, label, "neighborMax field");
-    return;
-  }
+const NEIGHBOR_REDUCTION_OPS = new Set(["sum", "max", "min", "mean"]);
 
+function validateNeighborReduce(ast, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers, allowImplicitGeo) {
+  if (!NEIGHBOR_REDUCTION_OPS.has(ast.op)) {
+    throw new Error(`${label}: neighbor reduction has unknown op '${ast.op}'`);
+  }
+  requireImport(imports, "core", "neighbor", label);
+
+  if (!Array.isArray(ast.bindings) || ast.bindings.length === 0) {
+    throw new Error(`${label}: neighbor ${ast.op} requires at least one binding`);
+  }
+  // Nested reductions aren't supported on the geodesic substrate — we
+  // don't have neighbor-of-neighbor access. Reject early with a clear
+  // message rather than letting the WGSL compiler emit something broken.
+  if (containsNeighborReduce(ast.body)) {
+    throw new Error(`${label}: nested neighbor reductions aren't supported (no neighbor-of-neighbor access on the geodesic substrate)`);
+  }
+  // Each binding's field must be visible to the surrounding stage; the
+  // bound name is added to the body's local scope.
+  const bodyLocals = new Set(locals);
+  for (const binding of ast.bindings) {
+    requireVisibleField(binding.field, visibleFields, label, `neighbor ${ast.op} field`);
+    if (bodyLocals.has(binding.name)) {
+      throw new Error(`${label}: neighbor ${ast.op} binding '${binding.name}' shadows an existing local`);
+    }
+    bodyLocals.add(binding.name);
+  }
+  // Body validates with the binding(s) in scope — `n` from `n in theta`
+  // resolves as a local; `theta` (the field name) still resolves as the
+  // cell's value via the regular visibleFields path.
+  validateExpr(ast.body, visibleFields, bodyLocals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers, allowImplicitGeo);
+}
+
+function containsNeighborReduce(expr) {
+  if (!expr) return false;
+  if (expr.type === "NeighborReduce") return true;
+  if (expr.type === "Binary") return containsNeighborReduce(expr.left) || containsNeighborReduce(expr.right);
+  if (expr.type === "Unary") return containsNeighborReduce(expr.expr);
+  if (expr.type === "Conditional") {
+    return containsNeighborReduce(expr.test) || containsNeighborReduce(expr.consequent) || containsNeighborReduce(expr.alternate);
+  }
+  if (expr.type === "Call") return (expr.args ?? []).some(containsNeighborReduce);
+  if (expr.type === "Member") return containsNeighborReduce(expr.object);
+  return false;
+}
+
+function validateCall(ast, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers, allowImplicitGeo = true) {
   if (ast.callee.type !== "Identifier" || !EXPR_FUNC_TARGETS.has(ast.callee.name)) {
     throw new Error(`${label}: unknown function ${formatCallee(ast.callee)}`);
   }

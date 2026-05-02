@@ -149,12 +149,11 @@ export const MATH_FUNCTIONS = [
 
 export const STENCIL_HELPERS = [
   {
-    name: "neighborMax",
-    arity: 1,
+    name: "neighbor",
     importNamespace: "core",
-    signature: "neighborMax(field)",
-    doc: "Maximum value of FIELD across the current cell's neighbors. Useful for threshold-spread events (fire spread, wave propagation).",
-    example: "event when tree > 0.5 and neighborMax(burning) > 0.5 { set burning = 1 }",
+    signature: "neighbor MOD BIND in FIELD { EXPR }",
+    doc: "Per-neighbor reduction. For each neighbor of the current cell, evaluate EXPR with the bound name BIND set to that neighbor's value of FIELD, then combine the per-neighbor values with MOD ∈ {sum, max, min, mean}. Reductions are neighbors-only — the center cell's value is not included. Use inside `cell` / `each` / `event` blocks. The classic Laplacian is `neighbor mean n in field { n } - field`; Kuramoto coupling is `neighbor sum n in theta { sin(n - theta - alpha) }`.",
+    example: "let coupling = K * neighbor sum n in theta { sin(n - theta - alpha) }\nlet onFire   = neighbor max n in burning { n } > 0.5\nlet lap      = neighbor mean n in field { n } - field",
   },
 ];
 

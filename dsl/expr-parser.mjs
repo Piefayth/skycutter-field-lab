@@ -79,7 +79,7 @@ export function tokenizeExpr(source) {
       continue;
     }
 
-    const op = ["===", "!==", "??", "&&", "||", ">=", "<=", "==", "!=", "+", "-", "*", "/", "%", ">", "<", "!", "?", ":", ".", "(", ")", ","]
+    const op = ["===", "!==", "??", "&&", "||", ">=", "<=", "==", "!=", "+", "-", "*", "/", "%", ">", "<", "!", "?", ":", ".", "(", ")", ",", "{", "}"]
       .find((candidate) => source.startsWith(candidate, i));
     if (op) {
       tokens.push({ type: EXPR_BINARY_PRECEDENCE.has(op) || op === "!" ? "op" : "punc", value: op });
@@ -161,6 +161,14 @@ function parsePrimary(parser) {
     return { type: "Number", value: token.value };
   }
   if (token.type === "ident") {
+    // Neighbor reduction: `neighbor MOD BIND in FIELD { EXPR }`. Disambiguated
+    // by lookahead — only fires when followed by a recognized modifier; an
+    // identifier named `neighbor` used in any other position falls through
+    // to the regular Identifier branch (ill-advised but not parser-broken).
+    if (token.value === "neighbor") {
+      const nrAst = tryParseNeighborReduce(parser);
+      if (nrAst) return nrAst;
+    }
     parser.index++;
     return { type: "Identifier", name: token.value };
   }
@@ -170,6 +178,55 @@ function parsePrimary(parser) {
     return expr;
   }
   throw new Error(`Expected expression, got ${token.value || token.type}`);
+}
+
+const NEIGHBOR_REDUCTION_OPS = new Set(["sum", "max", "min", "mean"]);
+
+// Parse `neighbor MOD BIND in FIELD { EXPR }`, returning a NeighborReduce
+// AST node with `bindings` always a length-1 array (the IR is
+// future-proofed for multi-binding; the syntax is single-binding for now).
+// If the lookahead doesn't match (the token after `neighbor` isn't one of
+// the known modifiers), returns null and the caller falls back to the
+// plain identifier path.
+function tryParseNeighborReduce(parser) {
+  const start = parser.index;
+  const headTok = peek(parser);
+  if (headTok.type !== "ident" || headTok.value !== "neighbor") return null;
+  const modTok = parser.tokens[parser.index + 1];
+  if (!modTok || modTok.type !== "ident" || !NEIGHBOR_REDUCTION_OPS.has(modTok.value)) return null;
+
+  // Commit: consume `neighbor MOD`.
+  parser.index += 2;
+  const op = modTok.value;
+
+  // Bind name.
+  const bindTok = expect(parser, "ident");
+
+  // `in` keyword. Tokenized as a regular ident; we accept it contextually.
+  const inTok = peek(parser);
+  if (inTok.type !== "ident" || inTok.value !== "in") {
+    throw new Error(`neighbor ${op}: expected 'in', got '${inTok.value || inTok.type}'`);
+  }
+  parser.index++;
+
+  // Field name.
+  const fieldTok = expect(parser, "ident");
+
+  // `{ body }`.
+  if (!match(parser, "{")) {
+    throw new Error(`neighbor ${op} ${bindTok.value} in ${fieldTok.value}: expected '{' before reduction body`);
+  }
+  const body = parseConditional(parser);
+  if (!match(parser, "}")) {
+    throw new Error(`neighbor ${op} ${bindTok.value} in ${fieldTok.value}: expected '}' after reduction body`);
+  }
+
+  return {
+    type: "NeighborReduce",
+    op,
+    bindings: [{ name: bindTok.value, field: fieldTok.value }],
+    body,
+  };
 }
 
 export function formatCallee(callee) {
