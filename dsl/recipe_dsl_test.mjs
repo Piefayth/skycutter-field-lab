@@ -7,6 +7,7 @@ import * as belousovZhabotinsky from "../recipes/belousov-zhabotinsky.mjs";
 import * as kuramotoChimera from "../recipes/kuramoto-chimera.mjs";
 import * as iceAlbedo from "../recipes/ice-albedo.mjs";
 import * as sirEpidemic from "../recipes/sir-epidemic.mjs";
+import * as klausmeier from "../recipes/klausmeier.mjs";
 import * as blank from "../recipes/blank.mjs";
 import { compileDsl, diagnoseDsl, parseStages, parseStamps, parseTopLevelDeclarations } from "./compiler.mjs";
 import { createPipelineMetadata } from "../visual/pipeline-metadata.mjs";
@@ -23,6 +24,7 @@ const recipes = [
   kuramotoChimera,
   iceAlbedo,
   sirEpidemic,
+  klausmeier,
   blank,
 ];
 

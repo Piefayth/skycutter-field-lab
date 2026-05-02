@@ -61,6 +61,12 @@
       "name": "SIR epidemic (example)",
       "path": "recipes/sir-epidemic.mjs",
       "summary": "Spatial Susceptible-Infected-Recovered model. Outbreak fronts propagate from seed points and leave a recovered trail behind them; β/γ controls wave speed and final attack rate."
+    },
+    {
+      "id": "klausmeier",
+      "name": "Klausmeier vegetation (example)",
+      "path": "recipes/klausmeier.mjs",
+      "summary": "Semi-arid biomass-water dynamics. Vegetation self-organizes into stripes perpendicular to the slope (Sahelian tiger bush). Drop FLOW SPEED to zero and the same kinetics produce Turing spots."
     }
   ]
 }
