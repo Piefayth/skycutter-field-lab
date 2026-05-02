@@ -22,7 +22,7 @@ import {
   autocompletion, completionKeymap, acceptCompletion,
 } from "@codemirror/autocomplete";
 import {
-  keymap, ViewPlugin, Decoration, WidgetType, EditorView,
+  keymap, Decoration, WidgetType, EditorView,
 } from "@codemirror/view";
 import { StateField, StateEffect, Prec } from "@codemirror/state";
 
@@ -472,6 +472,18 @@ function dslCompletionSource(context) {
 
 // ---------------------------------------------------------------------------
 // Inline ghost-text for the single-suggestion case.
+//
+// The ghost is a pure derivation of the editor state — given the current
+// cursor + doc, what's the unique completion (if any). We compute it
+// inside a StateField so it stays current with every transaction WITHOUT
+// dispatching new transactions from inside an update (which CodeMirror
+// forbids — that's the trap an earlier ViewPlugin-based version fell
+// into).
+//
+// Suppression for Esc: a separate StateField holds an integer cursor pos
+// the user dismissed the ghost at. Any doc change clears it. The main
+// ghost field reads from it during compute and returns null while the
+// cursor sits at the suppressed pos.
 // ---------------------------------------------------------------------------
 
 class GhostWidget extends WidgetType {
@@ -486,14 +498,67 @@ class GhostWidget extends WidgetType {
   eq(other) { return other.text === this.text; }
 }
 
-const setGhost = StateEffect.define();
+// Esc-suppression. When the user dismisses the ghost, we record the
+// cursor position; doc/selection changes invalidate the suppression so
+// the next round of typing re-enables ghosting normally.
+const suppressGhostAt = StateEffect.define();
 
-const ghostField = StateField.define({
-  create() { return null; },
+const ghostSuppressField = StateField.define({
+  create() { return -1; },
   update(value, tr) {
-    for (const effect of tr.effects) if (effect.is(setGhost)) return effect.value;
-    if (tr.docChanged || tr.selection) return null;
+    for (const effect of tr.effects) if (effect.is(suppressGhostAt)) return effect.value;
+    // Any doc edit moves us past the suppressed pos; let the ghost come
+    // back. A pure selection move (cursor-around) also clears it — the
+    // user is investigating a different position.
+    if (tr.docChanged || tr.selection) return -1;
     return value;
+  },
+});
+
+function wordBefore(state, pos) {
+  const line = state.doc.lineAt(pos);
+  const text = line.text.slice(0, pos - line.from);
+  const m = /[A-Za-z_$][A-Za-z0-9_$]*$/.exec(text);
+  if (!m) return null;
+  return { from: line.from + m.index, to: pos, text: m[0] };
+}
+
+// Pure function: given a state, return the ghost record (or null).
+// Reads suppressed-at to honor recent Esc.
+function computeGhost(state) {
+  const suppressedAt = state.field(ghostSuppressField, false);
+  const sel = state.selection.main;
+  if (!sel.empty) return null;
+  const pos = sel.head;
+  if (suppressedAt === pos) return null;
+  const word = wordBefore(state, pos);
+  if (!word || !word.text) return null;
+  const ctx = detectContext(state, word.from);
+  const mode = classifyContext(ctx);
+  const options = buildOptions(state, ctx, mode, word.text);
+  if (options.length !== 1) return null;
+  const only = options[0];
+  if (only.label === word.text) return null;
+  if (!only.label.toLowerCase().startsWith(word.text.toLowerCase())) return null;
+  return {
+    from: word.from,
+    to: word.to,
+    cursor: pos,
+    label: only.label,
+    prefixLen: word.text.length,
+    completion: only,
+  };
+}
+
+// Self-deriving ghost field. Recomputes on every transaction by reading
+// the new state directly — no view dispatches.
+const ghostField = StateField.define({
+  create(state) { return computeGhost(state); },
+  update(value, tr) {
+    if (!tr.docChanged && !tr.selection && !tr.effects.some((e) => e.is(suppressGhostAt))) {
+      return value;
+    }
+    return computeGhost(tr.state);
   },
 });
 
@@ -510,53 +575,6 @@ const ghostDecorations = EditorView.decorations.compute([ghostField], (state) =>
   ]);
 });
 
-const ghostUpdater = ViewPlugin.fromClass(class {
-  constructor(view) { this.view = view; this.recompute(); }
-  update(update) {
-    if (update.docChanged || update.selectionSet || update.focusChanged) {
-      this.recompute();
-    }
-  }
-  recompute() {
-    const state = this.view.state;
-    const sel = state.selection.main;
-    if (!sel.empty) return this.clear();
-    const pos = sel.head;
-    const word = wordBefore(state, pos);
-    if (!word || !word.text) return this.clear();
-    const ctx = detectContext(state, word.from);
-    const mode = classifyContext(ctx);
-    const options = buildOptions(state, ctx, mode, word.text);
-    if (options.length !== 1) return this.clear();
-    const only = options[0];
-    if (only.label === word.text) return this.clear();
-    if (!only.label.toLowerCase().startsWith(word.text.toLowerCase())) return this.clear();
-    this.view.dispatch({
-      effects: setGhost.of({
-        from: word.from,
-        to: word.to,
-        cursor: pos,
-        label: only.label,
-        prefixLen: word.text.length,
-        completion: only,
-      }),
-    });
-  }
-  clear() {
-    const cur = this.view.state.field(ghostField, false);
-    if (cur === null || cur === undefined) return;
-    this.view.dispatch({ effects: setGhost.of(null) });
-  }
-});
-
-function wordBefore(state, pos) {
-  const line = state.doc.lineAt(pos);
-  const text = line.text.slice(0, pos - line.from);
-  const m = /[A-Za-z_$][A-Za-z0-9_$]*$/.exec(text);
-  if (!m) return null;
-  return { from: line.from + m.index, to: pos, text: m[0] };
-}
-
 // Tab handler: accept the ghost if showing, else fall through.
 function acceptGhost(view) {
   const ghost = view.state.field(ghostField, false);
@@ -570,17 +588,14 @@ function acceptGhost(view) {
       selection: { anchor: ghost.from + completion.label.length },
     });
   }
-  view.dispatch({ effects: setGhost.of(null) });
   return true;
 }
 
-// Esc handler: dismiss the ghost without inserting. Fall through if
-// no ghost is showing so other Esc bindings (e.g., closing the popup)
-// still fire.
+// Esc handler: dismiss the ghost without inserting.
 function dismissGhost(view) {
   const ghost = view.state.field(ghostField, false);
   if (!ghost) return false;
-  view.dispatch({ effects: setGhost.of(null) });
+  view.dispatch({ effects: suppressGhostAt.of(view.state.selection.main.head) });
   return true;
 }
 
@@ -597,9 +612,11 @@ export function dslAutocomplete() {
       defaultKeymap: true,
       tooltipClass: () => "dsl-ac-tooltip",
     }),
+    // Order matters: ghostSuppressField must be defined before ghostField
+    // so ghostField.create / .update can read it.
+    ghostSuppressField,
     ghostField,
     ghostDecorations,
-    ghostUpdater,
     // Wrap in Prec.high so our Tab/Escape run before editor-core's
     // `indentWithTab` (which would otherwise eat Tab and indent instead
     // of accepting). `completionKeymap` only binds Enter for accept, so
