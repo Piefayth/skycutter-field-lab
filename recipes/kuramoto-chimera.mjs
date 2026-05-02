@@ -59,10 +59,19 @@ field theta, cosTheta
 source omega
 
 setting simRateHz slider min 0 max 360 step 1 default 60 label "SIM RATE"
-param K     slider min 0 max 8   step 0.05 default 2.4  label "COUPLING K"
-param alpha slider min 0 max 1.6 step 0.01 default 1.45 label "PHASE LAG α"
-param omegaSpread slider min 0 max 1 step 0.01 default 0.20 label "ω SPREAD"
-param rate  slider min 1 max 100 step 1 default 30 label "RATE"
+// K is per-neighbor coupling. Each cell sums over 5–6 neighbors,
+// so the effective coupling pressure is ~5–6 × K. Keep small.
+param K     slider min 0 max 2    step 0.01 default 0.30 label "COUPLING K"
+// α near π/2 (≈ 1.5708) is where Sakaguchi-Kuramoto's sync-vs-partial
+// transition lives. Above π/2 sync is unstable; below, it dominates.
+param alpha slider min 0 max 1.6  step 0.01 default 1.50 label "PHASE LAG α"
+// Heterogeneity of intrinsic frequencies. Higher = harder to fully
+// synchronize, more likely to see partial-sync regimes.
+param omegaSpread slider min 0 max 2 step 0.01 default 0.80 label "ω SPREAD"
+// Time scaling. dt = 1/60 already; rate amplifies the per-tick step
+// so phase evolution is visible. Keep modest — too high and a single
+// tick can flip phases through more than a half-cycle.
+param rate  slider min 0 max 8    step 0.05 default 2.0  label "RATE"
 
 stamp pulse "Phase pulse" {
   // Lift theta by π in a brush-radius patch — useful for kicking the

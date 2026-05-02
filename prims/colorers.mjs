@@ -102,6 +102,12 @@ export function phase(fieldName) {
 }
 
 function phaseToRgb(theta) {
+  // Guard against NaN/±Inf — without this the HSV math collapses to
+  // sector 0 (pure red) and an exploded simulation looks deceptively
+  // "fine but red," which is exactly the failure mode that surfaces
+  // when integration overshoots dt × K stability. Muted gray-purple
+  // is meant to read as "debug — values are not finite."
+  if (!Number.isFinite(theta)) return [80, 60, 90];
   const TAU_LOCAL = Math.PI * 2;
   const h = ((theta / TAU_LOCAL) % 1 + 1) % 1;   // [0, 1)
   const sector = Math.floor(h * 6);
