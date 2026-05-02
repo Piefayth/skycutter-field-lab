@@ -22,11 +22,58 @@
 //   emitted   = sigma * (T + offset)^4              (Stefan-Boltzmann-ish)
 //   dT/dt     = greenhouse * absorbed - emitted + diffusion(T)
 
-import { diverge, gray } from "../prims/colorers.mjs";
+import { gray } from "../prims/colorers.mjs";
 import { compileDsl } from "../dsl/compiler.mjs";
 
+// Multi-stop temperature palette tuned for the ice-albedo bistability.
+// The freezing point (T=0) is a stark white seam between cold/blue
+// (ice-covered) and warm/green-orange (ocean/land). This makes the
+// ice line — which is the actually-interesting part of the simulation
+// — visually unmistakable. A linear diverge() puts muddy purple
+// exactly where you want the contrast.
+const T_STOPS = [
+  { t: -0.8, c: [ 30,  60, 140] },  // deep polar blue
+  { t: -0.4, c: [120, 170, 230] },  // pale ice blue
+  { t: -0.05, c: [240, 248, 255] }, // brittle frost / approach to seam
+  { t:  0.05, c: [255, 252, 240] }, // seam — white-warm side of freezing
+  { t:  0.25, c: [110, 180, 130] }, // cool ocean / cold biome green
+  { t:  0.6,  c: [230, 200,  90] }, // dry / temperate amber
+  { t:  1.0,  c: [220,  80,  40] }, // tropical hot
+  { t:  1.5,  c: [120,  20,  20] }, // runaway hot
+];
+
+function tempColor(T) {
+  if (T <= T_STOPS[0].t) return T_STOPS[0].c;
+  if (T >= T_STOPS[T_STOPS.length - 1].t) return T_STOPS[T_STOPS.length - 1].c;
+  for (let s = 0; s < T_STOPS.length - 1; s++) {
+    const a = T_STOPS[s];
+    const b = T_STOPS[s + 1];
+    if (T >= a.t && T <= b.t) {
+      const f = (T - a.t) / (b.t - a.t);
+      return [
+        Math.round(a.c[0] + (b.c[0] - a.c[0]) * f),
+        Math.round(a.c[1] + (b.c[1] - a.c[1]) * f),
+        Math.round(a.c[2] + (b.c[2] - a.c[2]) * f),
+      ];
+    }
+  }
+  return [128, 128, 128];
+}
+
+function temperaturePalette(fieldName) {
+  const color = (i, fields) => tempColor(fields[fieldName][i]);
+  color.write = (i, fields, data, k) => {
+    const rgb = tempColor(fields[fieldName][i]);
+    data[k + 0] = rgb[0];
+    data[k + 1] = rgb[1];
+    data[k + 2] = rgb[2];
+  };
+  color.fields = [fieldName];
+  return color;
+}
+
 export const views = [
-  { id: "T", label: "Temperature", color: diverge("T", 1.5) },
+  { id: "T", label: "Temperature", color: temperaturePalette("T") },
   { id: "albedo", label: "Albedo", color: gray("albedo") },
 ];
 

@@ -23,10 +23,56 @@
 import { ramp, gray } from "../prims/colorers.mjs";
 import { compileDsl } from "../dsl/compiler.mjs";
 
+// Composite view: every cell shows whichever compartment dominates,
+// blended where they're close. Susceptible is a desaturated tan
+// (background population), infected pops as a hot orange-red wave,
+// recovered settles to a cool teal trail. Watching this view shows
+// the classic Murray "ring-of-fire" pattern: a thin orange wavefront
+// expanding outward, with cool teal recovered territory behind and
+// untouched tan ahead.
+const COL_S = [205, 195, 165]; // tan / dry grass — naive population
+const COL_I = [245, 110,  45]; // hot orange — actively infectious
+const COL_R = [ 80, 175, 175]; // cool teal — burned-out / immune
+
+function sirCompositeColor(s, infected, r) {
+  // Renormalize so we always blend by the relative shares (each cell
+  // should sum near 1, but stamps and roundoff can push it off; this
+  // keeps the composite stable).
+  const total = Math.max(s + infected + r, 1e-6);
+  const ws = s / total;
+  const wi = infected / total;
+  const wr = r / total;
+  // Boost the Infected contribution — it's the most informative
+  // signal (the wave) but rarely dominates by raw fraction. Squashes
+  // S/R proportionally so the orange wavefront is always readable.
+  const iBoost = Math.min(1, wi * 4);
+  const remaining = 1 - iBoost;
+  const sw = ws / Math.max(ws + wr, 1e-6) * remaining;
+  const rw = wr / Math.max(ws + wr, 1e-6) * remaining;
+  return [
+    Math.round(COL_S[0] * sw + COL_I[0] * iBoost + COL_R[0] * rw),
+    Math.round(COL_S[1] * sw + COL_I[1] * iBoost + COL_R[1] * rw),
+    Math.round(COL_S[2] * sw + COL_I[2] * iBoost + COL_R[2] * rw),
+  ];
+}
+
+function sirComposite() {
+  const color = (i, fields) => sirCompositeColor(fields.S[i], fields.I[i], fields.R[i]);
+  color.write = (i, fields, data, k) => {
+    const rgb = sirCompositeColor(fields.S[i], fields.I[i], fields.R[i]);
+    data[k + 0] = rgb[0];
+    data[k + 1] = rgb[1];
+    data[k + 2] = rgb[2];
+  };
+  color.fields = ["S", "I", "R"];
+  return color;
+}
+
 export const views = [
-  { id: "I",     label: "Infected (I)",     color: ramp("I", [12, 12, 22], [240, 90, 70]) },
-  { id: "R",     label: "Recovered (R)",   color: ramp("R", [16, 22, 28], [120, 200, 240]) },
-  { id: "S",     label: "Susceptible (S)", color: gray("S") },
+  { id: "composite", label: "S / I / R",        color: sirComposite() },
+  { id: "I",         label: "Infected (I)",     color: ramp("I", [12, 12, 22], [255, 110, 50], 1.5) },
+  { id: "R",         label: "Recovered (R)",    color: ramp("R", [16, 22, 28], [120, 200, 240]) },
+  { id: "S",         label: "Susceptible (S)",  color: gray("S") },
 ];
 
 export const overlays = [];
@@ -62,24 +108,27 @@ field S, I, R
 
 setting simRateHz slider min 0 max 360 step 1 default 60 label "SIM RATE"
 // Infection rate per S·I contact. Together with gamma sets R0 = β/γ.
-param beta      slider min 0 max 4 step 0.01 default 1.40 label "β (INFECT)"
-// Recovery rate. Higher = faster transition out of I.
-param gamma     slider min 0 max 2 step 0.01 default 0.40 label "γ (RECOVER)"
+// Default 2.5 gives R0 ≈ 8 — strong epidemic, sharp visible front.
+param beta      slider min 0 max 4 step 0.01 default 2.50 label "β (INFECT)"
+// Recovery rate. Higher = faster transition out of I, narrower
+// infected band (less time spent in I before reaching R). Slowing
+// gamma fattens the wavefront.
+param gamma     slider min 0 max 2 step 0.01 default 0.30 label "γ (RECOVER)"
 // Mobility of infected — how fast the outbreak diffuses across cells.
-// In real-world terms: how mixed the population is.
-param mobility  slider min 0 max 4 step 0.01 default 0.60 label "MOBILITY"
+// In real-world terms: how mixed the population is. Higher = faster-
+// moving wavefront, more dramatic ring-of-fire visual.
+param mobility  slider min 0 max 4 step 0.01 default 1.20 label "MOBILITY"
 // Waning immunity — recovered cells lose immunity at this rate and
 // flow back into S. With waning > 0 the model becomes SIRS instead
 // of SIR; the planet can support recurrent epidemic waves rather
-// than a single one-shot burnout. Default is small but nonzero so
-// the recipe stays alive past the first wave.
-param waning    slider min 0 max 0.5 step 0.001 default 0.025 label "WANING (R→S)"
+// than a single one-shot burnout. Set to 0 to recover pure SIR.
+param waning    slider min 0 max 0.5 step 0.001 default 0.02 label "WANING (R→S)"
 // Background introduction rate — small fraction of S converted to
 // I each tick. Ensures a re-seeded outbreak after a quiet stretch
-// without needing user intervention.
-param immigration slider min 0 max 0.001 step 0.00002 default 0.00005 label "IMMIGRATE"
+// without needing user intervention. 0 = no spontaneous outbreaks.
+param immigration slider min 0 max 0.001 step 0.00001 default 0.00012 label "IMMIGRATE"
 // Time scaling.
-param rate      slider min 1 max 100 step 1 default 30 label "RATE"
+param rate      slider min 1 max 100 step 1 default 24 label "RATE"
 
 stamp seed "Plant outbreak" {
   // Drop a fresh outbreak. Reduces local S to make sure infection
