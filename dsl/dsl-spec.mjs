@@ -195,6 +195,23 @@ export const CLOCK_BUILTINS = [
 ];
 
 // ---------------------------------------------------------------------------
+// Time-domain helpers. Function-form like math fns, but they're temporal
+// state lookups rather than spatial / arithmetic operations — kept in the
+// `clock` namespace alongside `dt` and `frame` for that reason.
+// ---------------------------------------------------------------------------
+
+export const CLOCK_HELPERS = [
+  {
+    name: "prev",
+    arity: 1,
+    importNamespace: "clock",
+    signature: "prev(field)",
+    doc: "Reads FIELD as of the start of the current simulation tick. The argument must be a bare field identifier — \\`prev(u + v)\\`, \\`prev(3)\\`, etc. are rejected at compile time. The field must have been declared with \\`history\\` ≥ 1 (e.g. \\`field u history 1\\`). History advances exactly once per tick at the tick boundary; per-pass buffer swaps inside the tick don't disturb prev. Stamps update the current value only — recipe authors can mirror stamp deltas into history with an explicit stage if they want sync semantics. Use for second-order time integration: the wave equation lowers to \\`u_new = 2*u - prev(u) + c²·dt²·∇²u\\`.",
+    example: "field u history 1\nstage propagate \"Wave step\" {\n  reads u\n  writes u\n  cell {\n    let lap = neighbor sum n in u { n - u }\n    set u = 2 * u - prev(u) + c * c * dt * dt * lap\n  }\n}",
+  },
+];
+
+// ---------------------------------------------------------------------------
 // Geodesic-substrate position builtins. Per-cell, `use geo NAME` to
 // import. Recipe authors can shadow these by declaring a same-named
 // field — the field wins per the validator's resolution order.
@@ -656,6 +673,7 @@ export const GRID_KEYWORDS = [
   track("MATH_FUNCTIONS", MATH_FUNCTIONS);
   track("STENCIL_HELPERS", STENCIL_HELPERS);
   track("CLOCK_BUILTINS", CLOCK_BUILTINS);
+  track("CLOCK_HELPERS", CLOCK_HELPERS);
   track("GEO_BUILTINS", GEO_BUILTINS);
   track("GEO_CONSTANTS", GEO_CONSTANTS);
   track("STAMP_EXTRAS", STAMP_EXTRAS);
@@ -684,6 +702,7 @@ export const RESERVED_NAMES = new Set([
   ...LITERALS.map((s) => s.name),
   ...MATH_FUNCTIONS.map((s) => s.name),
   ...STENCIL_HELPERS.map((s) => s.name),
+  ...CLOCK_HELPERS.map((s) => s.name),
 ]);
 
 // All symbols flat, with an attached `kind` matching the visual catalog's
@@ -703,6 +722,7 @@ export function allDslSymbolsFlat() {
   push("MATH_FUNCTIONS",     "mathFn",        MATH_FUNCTIONS);
   push("STENCIL_HELPERS",    "mathFn",        STENCIL_HELPERS);
   push("CLOCK_BUILTINS",     "builtin",       CLOCK_BUILTINS);
+  push("CLOCK_HELPERS",      "mathFn",        CLOCK_HELPERS);
   push("GEO_BUILTINS",       "builtin",       GEO_BUILTINS);
   push("GEO_CONSTANTS",      "mathConst",     GEO_CONSTANTS);
   push("STAMP_EXTRAS",       "builtin",       STAMP_EXTRAS);

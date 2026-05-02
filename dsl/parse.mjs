@@ -153,12 +153,38 @@ function skipNamedBlock(source, start, keyword) {
 }
 
 function parseFieldDirective(line, keyword, kind) {
-  return line
-    .replace(new RegExp(`^${keyword}\\s+`), "")
+  // Strip the leading keyword.
+  const rest = line.replace(new RegExp(`^${keyword}\\s+`), "");
+  // Detect optional `history N` suffix. Only allowed on single-name
+  // declarations — `field a, b history 1` is ambiguous about whether
+  // the modifier applies to one name or both, and tightening the
+  // grammar is cheaper than disambiguating mid-parse. Sources don't
+  // get history (they're immutable forcing maps; no past values to
+  // retain).
+  const historyMatch = /\bhistory\s+(\d+)\s*$/.exec(rest);
+  let history = 0;
+  let body = rest;
+  if (historyMatch) {
+    history = Number(historyMatch[1]);
+    body = rest.slice(0, historyMatch.index).trim();
+    if (kind === "source") {
+      throw new Error(`history is only valid on \`field\`, not \`source\`: ${line}`);
+    }
+    if (!Number.isFinite(history) || history < 1) {
+      throw new Error(`Invalid history count: ${line}`);
+    }
+  }
+  const names = body
     .split(",")
     .map((part) => part.trim())
-    .filter(Boolean)
-    .map((name) => ({ name, kind }));
+    .filter(Boolean);
+  if (history > 0 && names.length !== 1) {
+    throw new Error(
+      "`history` requires a single-name field declaration; " +
+      `split into separate lines: ${line}`,
+    );
+  }
+  return names.map((name) => ({ name, kind, history }));
 }
 
 function parseQuotedOrBareDirective(line, key) {

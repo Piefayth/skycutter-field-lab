@@ -317,6 +317,114 @@ test("compiles a full DSL pipeline into stage passes and event counters", () => 
   assert(Array.isArray(compiled.eventCounters), "event counters missing");
 });
 
+test("history field declaration carries history count", () => {
+  const recipe = compileDsl(`
+recipe "Hist"
+use sim cell
+use clock dt, frame, prev
+use geo px, py, pz
+field u history 1
+
+stage step "Step" {
+  reads u
+  writes u
+  cell {
+    add u = (u - prev(u)) * dt
+  }
+}
+`);
+  const decl = recipe.dsl.fields.find((d) => d.name === "u");
+  assert(decl?.history === 1, "u should carry history=1 on its declaration");
+});
+
+test("validator rejects prev() on a non-history field", () => {
+  let threw = null;
+  try {
+    compileDsl(`
+recipe "NoHist"
+use sim cell
+use clock dt, frame, prev
+field u
+
+stage step "Step" {
+  reads u
+  writes u
+  cell {
+    add u = prev(u) * dt
+  }
+}
+`);
+  } catch (error) { threw = error.message; }
+  assert(threw && threw.includes("history"), `expected history-required error; got: ${threw}`);
+});
+
+test("validator rejects prev() of an expression", () => {
+  let threw = null;
+  try {
+    compileDsl(`
+recipe "PrevExpr"
+use sim cell
+use clock dt, frame, prev
+field u history 1
+
+stage step "Step" {
+  reads u
+  writes u
+  cell {
+    add u = prev(u + 1) * dt
+  }
+}
+`);
+  } catch (error) { threw = error.message; }
+  assert(threw && threw.includes("bare field identifier"), `expected bare-id error; got: ${threw}`);
+});
+
+test("history field declaration with multi-name field rejects", () => {
+  let threw = null;
+  try {
+    compileDsl(`
+recipe "BadList"
+use sim cell
+field a, b history 1
+`);
+  } catch (error) { threw = error.message; }
+  assert(threw && threw.includes("single-name"), `expected single-name error; got: ${threw}`);
+});
+
+test("history is rejected on `source` declarations", () => {
+  let threw = null;
+  try {
+    compileDsl(`
+recipe "BadSrc"
+use sim cell
+source w history 1
+`);
+  } catch (error) { threw = error.message; }
+  assert(threw && threw.includes("history is only valid on"), `expected source-rejection error; got: ${threw}`);
+});
+
+test("WGSL compiler emits f_<name>_prev binding for prev() reads", () => {
+  const recipe = compileDsl(`
+recipe "Hist"
+use sim cell
+use clock dt, frame, prev
+use geo px, py, pz
+field u history 1
+
+stage step "Step" {
+  reads u
+  writes u
+  cell {
+    add u = (u - prev(u)) * dt
+  }
+}
+`);
+  const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
+  assert(Array.isArray(pass.prevReads) && pass.prevReads.includes("u"), "pass.prevReads must include u");
+  assert(pass.source.includes("var<storage, read> f_u_prev"), "WGSL must declare the prev binding");
+  assert(pass.source.includes("f_u_prev[cell]"), "WGSL must read prev from f_u_prev");
+});
+
 function test(name, fn) {
   try {
     fn();

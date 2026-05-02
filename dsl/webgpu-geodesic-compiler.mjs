@@ -144,12 +144,21 @@ function compileActionPass({ stage, field, reads, actions, layout, key, eventCou
   const passReads = readsForTarget(actions, field, reads);
   const targetActions = filterActionsForTarget(actions, field);
   const needsNeighbors = actionsUseNeighborReduce(targetActions);
+  // `prev(field)` reads the named field's value as of the tick boundary.
+  // The runtime keeps a separate `f_<name>_prev` buffer per history-
+  // declared field; the compiler emits an additional binding for each
+  // such field used by this pass. The set of prev-read field names is
+  // intersected with `reads` because a stage that doesn't already read
+  // a field shouldn't be allowed to peek at its prev value either —
+  // that would silently bypass the `reads` declaration.
+  const prevReads = collectPrevReads(targetActions).filter((name) => passReads.includes(name));
   return {
     kind: "cell",
     stageId: stage.id,
     key,
     field,
     reads: passReads,
+    prevReads,
     layout,
     needsNeighbors,
     eventCounter,
@@ -157,6 +166,7 @@ function compileActionPass({ stage, field, reads, actions, layout, key, eventCou
       stage,
       field,
       reads: passReads,
+      prevReads,
       actions: targetActions,
       layout,
       needsNeighbors,
@@ -173,9 +183,15 @@ export function buildWebGpuGeodesicUniforms(layout, { dt = 0, frame = 0, cellCou
   return new Float32Array(values);
 }
 
-function compileCellShader({ stage, field, reads, actions, layout, needsNeighbors = false, eventCounter = null }) {
+function compileCellShader({ stage, field, reads, prevReads = [], actions, layout, needsNeighbors = false, eventCounter = null }) {
   const readBindings = reads.map((name, index) => `@group(0) @binding(${index}) var<storage, read> f_${name}: array<f32>;`);
-  const outputBinding = reads.length;
+  // Prev-read bindings sit between the regular reads and the output
+  // binding so existing binding indices for params / positions /
+  // neighbors / event-counter only need to shift by `prevReads.length`.
+  const prevReadBindings = prevReads.map(
+    (name, index) => `@group(0) @binding(${reads.length + index}) var<storage, read> f_${name}_prev: array<f32>;`,
+  );
+  const outputBinding = reads.length + prevReads.length;
   const paramsBinding = outputBinding + 1;
   const positionsBinding = outputBinding + 2;
   const neighborsBinding = outputBinding + 3;
@@ -230,6 +246,7 @@ ${layout.planet.map((name) => `  planet_${name}: f32,`).join("\n")}
 };
 
 ${readBindings.join("\n")}
+${prevReadBindings.join("\n")}
 @group(0) @binding(${outputBinding}) var<storage, read_write> outputField: array<f32>;
 @group(0) @binding(${paramsBinding}) var<uniform> params: Params;
 @group(0) @binding(${positionsBinding}) var<storage, read> positions: array<f32>;
@@ -453,6 +470,43 @@ function filterActionList(actions, target, locals) {
   return out;
 }
 
+// Walk the action body looking for `prev(IDENT)` calls. Returns the
+// distinct field names referenced by such calls (in source-order).
+// The validator already guarantees prev's argument is a bare Identifier,
+// so we don't need to second-guess shape here.
+function collectPrevReads(actions) {
+  const out = [];
+  const seen = new Set();
+  function visitAction(action) {
+    if (!action) return;
+    if (action.expr) walkExpr(action.expr);
+    if (action.condition) walkExpr(action.condition);
+    if (action.actions) action.actions.forEach(visitAction);
+  }
+  function walkExpr(expr) {
+    if (!expr) return;
+    if (expr.type === "Call" && expr.callee?.type === "Identifier" && expr.callee.name === "prev") {
+      const arg = expr.args?.[0];
+      if (arg?.type === "Identifier" && !seen.has(arg.name)) {
+        seen.add(arg.name);
+        out.push(arg.name);
+      }
+      return;
+    }
+    if (expr.type === "Member") walkExpr(expr.object);
+    else if (expr.type === "Unary") walkExpr(expr.expr);
+    else if (expr.type === "Binary") { walkExpr(expr.left); walkExpr(expr.right); }
+    else if (expr.type === "Conditional") { walkExpr(expr.test); walkExpr(expr.consequent); walkExpr(expr.alternate); }
+    else if (expr.type === "Call") {
+      walkExpr(expr.callee);
+      (expr.args ?? []).forEach(walkExpr);
+    }
+    else if (expr.type === "NeighborReduce") walkExpr(expr.body);
+  }
+  (actions ?? []).forEach(visitAction);
+  return out;
+}
+
 function actionsUseNeighborReduce(actions) {
   for (const action of actions ?? []) {
     if (action.condition && exprUsesNeighborReduce(action.condition)) return true;
@@ -476,8 +530,8 @@ function exprUsesNeighborReduce(expr) {
 const RESERVED_IDENTIFIERS = new Set([
   "true", "false", "dt", "frame", "PI", "TAU", "N", "x", "y", "u", "v", "lon", "lat", "px", "py", "pz", "i",
   "params", "consts", "planet",
-  "neighbor",
-  "cellNoise", "max", "min", "abs", "sin", "asin", "cos", "exp", "sqrt", "pow", "smoothstep", "clamp", "hypot",
+  "neighbor", "prev",
+  "cellNoise", "cellRand", "wrapAngle", "max", "min", "abs", "sin", "asin", "cos", "exp", "sqrt", "pow", "smoothstep", "clamp", "hypot",
 ]);
 
 function compileActions(actions, ctx) {
@@ -672,6 +726,17 @@ function compileBinary(ast, ctx) {
 
 function compileCall(ast, ctx) {
   if (ast.callee.type !== "Identifier") throw new Error("Unsupported WebGPU geodesic call target");
+  // Special case: prev(IDENT) reads from the field's history binding,
+  // not its current-tick read variable. Intercepted before generic
+  // arg compilation — otherwise the inner Identifier would lower to
+  // the current-tick read (the bug the agent's review caught).
+  if (ast.callee.name === "prev") {
+    const arg = ast.args[0];
+    if (arg?.type !== "Identifier") {
+      throw new Error("prev requires a bare field identifier");
+    }
+    return `f_${arg.name}_prev[cell]`;
+  }
   const args = ast.args.map((arg) => compileExpr(arg, ctx));
   switch (ast.callee.name) {
     case "cellNoise": {

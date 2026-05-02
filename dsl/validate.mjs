@@ -166,6 +166,15 @@ export function validateStages(stages, schema = {}) {
     }
   }
   const imports = buildImportSets(schema.imports ?? []);
+  // Side-channel: stash the per-field history counts on the imports
+  // object so `validateCall` can verify `prev(u)` references a field
+  // declared with `history >= 1` without threading another positional
+  // arg through the entire validate-* recursion.
+  imports.historyFields = new Map(
+    (schema.fields ?? [])
+      .filter((decl) => (decl?.history ?? 0) > 0)
+      .map((decl) => [decl.name, decl.history]),
+  );
   const availableDeclaredFields = new Set();
   for (const stage of stages) {
     if (ids.has(stage.id)) throw new Error(`Duplicate stage id: ${stage.id}`);
@@ -539,6 +548,38 @@ function containsNeighborReduce(expr) {
 }
 
 function validateCall(ast, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers, allowImplicitGeo = true) {
+  // Special case: prev() is a temporal-state lookup, not a regular
+  // function call. The argument MUST be a bare field identifier — we
+  // intercept here so generic call-arg compilation never touches it
+  // (otherwise the inner Identifier would lower to current-tick read).
+  if (ast.callee.type === "Identifier" && ast.callee.name === "prev") {
+    requireImport(imports, "clock", "prev", label);
+    if (ast.args.length !== 1) {
+      throw new Error(`${label}: prev expects 1 argument, got ${ast.args.length}`);
+    }
+    const arg = ast.args[0];
+    if (arg.type !== "Identifier") {
+      throw new Error(
+        `${label}: prev argument must be a bare field identifier ` +
+        `(prev(field), not prev(expression))`,
+      );
+    }
+    if (!visibleFields.has(arg.name)) {
+      throw new Error(
+        `${label}: prev(${arg.name}) — field is not visible to this stage; ` +
+        `add ${arg.name} to the stage's reads`,
+      );
+    }
+    const historyFields = imports?.historyFields;
+    if (!historyFields || !historyFields.has(arg.name)) {
+      throw new Error(
+        `${label}: prev(${arg.name}) requires the field to be declared with ` +
+        `\`history N\` (e.g. \`field ${arg.name} history 1\`)`,
+      );
+    }
+    return;
+  }
+
   if (ast.callee.type !== "Identifier" || !EXPR_FUNC_TARGETS.has(ast.callee.name)) {
     throw new Error(`${label}: unknown function ${formatCallee(ast.callee)}`);
   }

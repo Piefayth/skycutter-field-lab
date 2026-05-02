@@ -34,6 +34,13 @@ export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGri
   const { stages, eventCounters } = compileWebGpuGeodesicPipeline(dsl);
   const consts = Object.fromEntries((dsl.constants ?? []).map((decl) => [decl.name, decl.value]));
   const planet = dsl.planet ?? {};
+  // Allocate the per-tick history buffer for every history-declared
+  // field. Recorded once at recipe load; the snapshot routine in
+  // runTick uses this list to copy current → history at tick boundary.
+  const historyFieldNames = (dsl.fields ?? [])
+    .filter((decl) => (decl?.history ?? 0) > 0)
+    .map((decl) => decl.name);
+  for (const name of historyFieldNames) runtime.ensureHistory(name);
 
   return {
     grid,
@@ -61,6 +68,10 @@ export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGri
     runTick(dt) {
       const params = getParams?.() ?? {};
       const frame = getFrame?.() ?? 0;
+      // Tick-boundary history snapshot. Done BEFORE any stage runs,
+      // so prev(field) reads the value as of the start of this tick
+      // throughout — per-pass swaps inside the loop don't disturb it.
+      if (historyFieldNames.length) runtime.snapshotHistory(historyFieldNames);
       for (const stage of stages) {
         const delayedCellSwaps = stage.passes.length > 1 && stage.passes.every((pass) => pass.kind === "cell");
         const fieldsToSwap = [];
@@ -72,6 +83,7 @@ export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGri
               source: pass.source,
               field: pass.field,
               reads: pass.reads,
+              prevReads: pass.prevReads ?? [],
               needsNeighbors: pass.needsNeighbors,
               eventCounter: pass.eventCounter,
               swapAfter: !delayedCellSwaps,

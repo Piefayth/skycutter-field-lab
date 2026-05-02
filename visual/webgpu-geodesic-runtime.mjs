@@ -71,9 +71,57 @@ export class WebGpuGeodesicRuntime {
         this.device.createBuffer({ size: this.byteLength, usage: fieldUsage() }),
       ],
       index: 0,
+      // Allocated on demand for history-declared fields; null for the
+      // common case. Holds the field's value as of the last tick
+      // boundary — read by `prev(field)` in cell shaders.
+      historyBuffer: null,
     };
     this.fields.set(name, entry);
     return entry;
+  }
+
+  // Allocate (idempotently) the per-tick history buffer for a field.
+  // Returns the buffer. Called by the pipeline runtime at recipe load
+  // for every field declared with `history N >= 1`.
+  ensureHistory(name) {
+    const field = this.ensureField(name);
+    if (!field.historyBuffer) {
+      field.historyBuffer = this.device.createBuffer({
+        size: this.byteLength,
+        usage: fieldUsage(),
+      });
+    }
+    return field.historyBuffer;
+  }
+
+  historyBuffer(name) {
+    const field = this.fields.get(name);
+    if (!field?.historyBuffer) {
+      throw new Error(`field ${name} was not allocated with history`);
+    }
+    return field.historyBuffer;
+  }
+
+  // Copy each named field's current buffer into its history buffer in
+  // a single GPU command submission. Called at the tick boundary —
+  // before any stage runs — so `prev(field)` reads the value that was
+  // current at the start of the tick, regardless of how many per-pass
+  // swaps happen during the tick.
+  snapshotHistory(names = []) {
+    if (!names.length) return;
+    const encoder = this.device.createCommandEncoder();
+    let didCopy = false;
+    for (const name of names) {
+      const field = this.fields.get(name);
+      if (!field?.historyBuffer) continue;
+      encoder.copyBufferToBuffer(
+        field.buffers[field.index], 0,
+        field.historyBuffer, 0,
+        this.byteLength,
+      );
+      didCopy = true;
+    }
+    if (didCopy) this.device.queue.submit([encoder.finish()]);
   }
 
   currentBuffer(name) {
@@ -99,6 +147,13 @@ export class WebGpuGeodesicRuntime {
     if (!values) return;
     const field = this.ensureField(name);
     this.device.queue.writeBuffer(field.buffers[field.index], 0, values.buffer, values.byteOffset, values.byteLength);
+    // Initialize history slot to match. After preset apply / paint /
+    // any direct upload, the next-tick prev() should see this value
+    // rather than the stale previous frame's data — otherwise the
+    // first tick after init produces an artificial jump.
+    if (field.historyBuffer) {
+      this.device.queue.writeBuffer(field.historyBuffer, 0, values.buffer, values.byteOffset, values.byteLength);
+    }
   }
 
   uploadState(state, names = Object.keys(state?.fields ?? {})) {
@@ -267,13 +322,19 @@ export class WebGpuGeodesicRuntime {
     this.swap(lift);
   }
 
-  runCellPass({ key, source, field, reads = [], uniforms = null, needsNeighbors = false, eventCounter = null, swapAfter = true }) {
+  runCellPass({ key, source, field, reads = [], prevReads = [], uniforms = null, needsNeighbors = false, eventCounter = null, swapAfter = true }) {
     const pipeline = this.pipeline(key, source);
     this.writeUniforms(uniforms ?? new Float32Array([0, 0, this.cellCount, 0]));
     const entries = [];
     let binding = 0;
     for (const name of reads) {
       entries.push({ binding, resource: { buffer: this.currentBuffer(name) } });
+      binding++;
+    }
+    // Prev-bindings sit between regular reads and the output binding —
+    // matches the WGSL compiler's layout (see compileCellShader).
+    for (const name of prevReads) {
+      entries.push({ binding, resource: { buffer: this.historyBuffer(name) } });
       binding++;
     }
     entries.push({ binding, resource: { buffer: this.nextBuffer(field) } });

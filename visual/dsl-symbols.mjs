@@ -21,6 +21,7 @@ const CATEGORY_BY_GROUP = {
   MATH_FUNCTIONS:      "Math functions",
   STENCIL_HELPERS:     "Math functions",
   CLOCK_BUILTINS:      "Time builtins",
+  CLOCK_HELPERS:       "Time builtins",
   GEO_BUILTINS:        "Geodesic position builtins",
   GEO_CONSTANTS:       "Math constants",
   STAMP_EXTRAS:        "Geodesic position builtins",
