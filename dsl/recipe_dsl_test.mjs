@@ -6,6 +6,7 @@ import * as iceAlbedo from "../recipes/ice-albedo.mjs";
 import * as sirEpidemic from "../recipes/sir-epidemic.mjs";
 import * as klausmeier from "../recipes/klausmeier.mjs";
 import * as predatorPrey from "../recipes/predator-prey.mjs";
+import * as waveEquation from "../recipes/wave-equation.mjs";
 import * as blank from "../recipes/blank.mjs";
 import { compileDsl, diagnoseDsl, parseStages, parseStamps, parseTopLevelDeclarations } from "./compiler.mjs";
 import { createPipelineMetadata } from "../visual/pipeline-metadata.mjs";
@@ -21,6 +22,7 @@ const recipes = [
   sirEpidemic,
   klausmeier,
   predatorPrey,
+  waveEquation,
   blank,
 ];
 

@@ -55,6 +55,12 @@
       "name": "Predator-prey (example)",
       "path": "recipes/predator-prey.mjs",
       "summary": "Rosenzweig-MacArthur with diffusion. Prey colonizes empty cells, predators follow eating, a void trails the predators which is then re-colonized. Sustained chase-wave limit cycle."
+    },
+    {
+      "id": "wave-equation",
+      "name": "Wave equation (example)",
+      "path": "recipes/wave-equation.mjs",
+      "summary": "Hyperbolic wave on a sphere — leapfrog second-order time integration via history fields. Drop a stone, watch the ripple bounce around the sphere forever (γ=0) or decay smoothly (γ>0)."
     }
   ]
 }
