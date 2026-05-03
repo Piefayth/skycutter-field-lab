@@ -41,9 +41,13 @@ const DECLARATION_KEYWORDS = new Set([
 
 // Control-flow blocks. `when` doubles as a function helper; the
 // `(`-lookahead in token() routes the call form to "function" first.
-// `step` is the v2 tick-block wrapper. `for` introduces `for each cell`.
+// Note: `step` is intentionally NOT here — it collides with the slider
+// modifier (`param x slider 0..1 step 0.1 default 0.5`) and falls
+// through to MODIFIER_KEYWORDS, which is the more frequent case.
+// `step { }` blocks still highlight cleanly, just with modifier
+// styling rather than control-keyword styling.
 const CONTROL_KEYWORDS = new Set([
-  "step", "cell", "for", "when", "if", "else",
+  "cell", "for", "when", "if", "else",
   "neighbors", "neighbor",
 ]);
 
@@ -79,6 +83,7 @@ const MODIFIER_KEYWORDS = new Set([
   "slider", "toggle", "boolean", "label",
   "step", "default",
   "geodesic", "frequency",
+  // `step` lands here too — see the comment on CONTROL_KEYWORDS above.
 ]);
 
 const LOGICAL_OPS = new Set(["and", "or", "not"]);
