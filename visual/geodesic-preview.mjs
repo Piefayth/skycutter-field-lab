@@ -20,21 +20,29 @@ export async function createGeodesicPreview({ scene, globe, frequency = 48, grid
   mesh.name = "geodesic-state-preview";
   scene.add(mesh);
 
-  // Optional `arrows` overlay — a single LineSegments mesh sized for
-  // the maximum-density case (one arrow per cell). populateArrows()
-  // fills as many slots as needed and setDrawRange() crops to the
-  // active count, so subsampling via stride doesn't allocate.
-  const arrowsBuffer = new Float32Array(grid.cellCount * 6);
+  // Optional `arrows` overlay — rendered as solid triangle glyphs
+  // (NOT lines: WebGL line widths are clamped to 1 px on Chrome and
+  // Safari, so a true LineSegments mesh is essentially invisible).
+  // Each arrow is a single isoceles triangle: a wide base at the
+  // cell center, a tip in the direction of the vec2 field. Three
+  // vertices per arrow, nine floats per cell. Pre-allocated for the
+  // max-density case (one arrow per cell); setDrawRange() crops to
+  // the stride-decimated count.
+  const arrowsBuffer = new Float32Array(grid.cellCount * 9);
   const arrowsGeometry = new THREE.BufferGeometry();
   arrowsGeometry.setAttribute("position", new THREE.BufferAttribute(arrowsBuffer, 3));
   arrowsGeometry.setDrawRange(0, 0);
-  const arrowsMaterial = new THREE.LineBasicMaterial({
+  const arrowsMaterial = new THREE.MeshBasicMaterial({
     color: 0xffffff,
-    transparent: true,
-    opacity: 0.85,
+    side: THREE.DoubleSide,
+    transparent: false,
+    depthTest: true,
     depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
   });
-  const arrowsMesh = new THREE.LineSegments(arrowsGeometry, arrowsMaterial);
+  const arrowsMesh = new THREE.Mesh(arrowsGeometry, arrowsMaterial);
   arrowsMesh.name = "geodesic-arrow-overlay";
   arrowsMesh.visible = false;
   arrowsMesh.renderOrder = 5;
@@ -75,13 +83,21 @@ export async function createGeodesicPreview({ scene, globe, frequency = 48, grid
 }
 
 // Per-refresh: project the active view's vec2 field onto each cell's
-// east/north tangent basis and write line-segment endpoints into the
-// arrows mesh. Hides the mesh entirely when the view has no arrows
-// clause or the field isn't allocated yet.
+// east/north tangent basis and write triangle vertices into the
+// arrows mesh. Each arrow is an isoceles triangle: base at the cell
+// center, tip in the field's direction. Hides the mesh entirely when
+// the view has no arrows clause or the field isn't allocated yet.
 //
-// Layout per arrow: 6 floats (start xyz + end xyz). DrawRange caps
-// the active slot count so subsampling via `stride` is just a count
+// Layout per arrow: 9 floats (3 verts × xyz). DrawRange caps the
+// vertex count so subsampling via `stride` is just a count
 // reduction, not a buffer realloc.
+//
+// Visual scale: a cell on a freq-N icosphere has typical neighbor
+// distance ≈ 2π / (5.5 × N) sphere-radians. Use that as the
+// base unit; `length=1` should produce arrows ~ one neighbor-spacing
+// long. Default length=0.5 → half a cell. Width is 30% of length
+// — makes the triangle pointy enough that direction reads clearly,
+// not so thin it disappears at small sizes.
 function populateArrows({ grid, fields = {}, viewSpec, arrowsBuffer, arrowsGeometry, arrowsMesh }) {
   const arrows = viewSpec?.arrows;
   if (!arrows) {
@@ -93,13 +109,13 @@ function populateArrows({ grid, fields = {}, viewSpec, arrowsBuffer, arrowsGeome
     arrowsMesh.visible = false;
     return;
   }
-  // Sphere-radius offset so arrows sit just above the tile mesh.
-  const r = 1.012;
-  // Visual scale: cell-radius proxy from the icosphere's mean
-  // edge length (≈ 2π / sqrt(20) / freq). Tunable per-recipe via
-  // the `length=N` knob.
-  const baseScale = (2 * Math.PI / Math.sqrt(20)) / Math.max(1, grid.frequency ?? 32);
-  const scale = baseScale * arrows.length;
+  // Sphere-radius offset so arrows sit just above the tile mesh
+  // (tiles at 1.006 + polygonOffset). Bumping arrows to 1.020 keeps
+  // them visually atop the tiles even at extreme camera angles.
+  const r = 1.020;
+  const baseScale = (2 * Math.PI) / (5.5 * Math.max(1, grid.frequency ?? 32));
+  const length = baseScale * arrows.length;
+  const halfWidth = length * 0.18;
   const stride = Math.max(1, arrows.stride | 0);
   let writeIdx = 0;
   let arrowCount = 0;
@@ -107,9 +123,7 @@ function populateArrows({ grid, fields = {}, viewSpec, arrowsBuffer, arrowsGeome
     const cx = grid.positions[cell * 3 + 0];
     const cy = grid.positions[cell * 3 + 1];
     const cz = grid.positions[cell * 3 + 2];
-    // East / north tangent basis at this cell. Same construction as
-    // dsl-init-runtime's tangentBasis() — east = horizontal-only
-    // tangent, north = center × east.
+    // East / north tangent basis at this cell.
     let ex = -cz, ey = 0, ez = cx;
     let elen = Math.hypot(ex, ey, ez);
     if (elen < 1e-6) { ex = 1; ey = 0; ez = 0; elen = 1; }
@@ -121,21 +135,40 @@ function populateArrows({ grid, fields = {}, viewSpec, arrowsBuffer, arrowsGeome
     const vx = fieldVal[cell * 2];
     const vy = fieldVal[cell * 2 + 1];
     if (!Number.isFinite(vx) || !Number.isFinite(vy)) continue;
-    const dx = vx * ex + vy * nx;
-    const dy = vx * ey + vy * ny;
-    const dz = vx * ez + vy * nz;
+    const mag = Math.hypot(vx, vy);
+    if (mag < 1e-6) continue;
+    // Normalize the field direction so arrow length is set by
+    // the `length=N` knob, not by the underlying field's magnitude.
+    // (Magnitude could feed visual scaling later, but uniform
+    // length keeps the direction lattice readable.)
+    const ux = vx / mag, uy = vy / mag;
+    const dx = ux * ex + uy * nx;
+    const dy = ux * ey + uy * ny;
+    const dz = ux * ez + uy * nz;
+    // Perpendicular in tangent plane: rotate (ux, uy) by 90°.
+    const px = -uy * ex + ux * nx;
+    const py = -uy * ey + ux * ny;
+    const pz = -uy * ez + ux * nz;
 
-    const sx = cx * r, sy = cy * r, sz = cz * r;
-    arrowsBuffer[writeIdx++] = sx;
-    arrowsBuffer[writeIdx++] = sy;
-    arrowsBuffer[writeIdx++] = sz;
-    arrowsBuffer[writeIdx++] = sx + dx * scale;
-    arrowsBuffer[writeIdx++] = sy + dy * scale;
-    arrowsBuffer[writeIdx++] = sz + dz * scale;
+    const cxr = cx * r, cyr = cy * r, czr = cz * r;
+    // base-left, base-right, tip
+    const blx = cxr - px * halfWidth, bly = cyr - py * halfWidth, blz = czr - pz * halfWidth;
+    const brx = cxr + px * halfWidth, bry = cyr + py * halfWidth, brz = czr + pz * halfWidth;
+    const tipx = cxr + dx * length, tipy = cyr + dy * length, tipz = czr + dz * length;
+
+    arrowsBuffer[writeIdx++] = blx;
+    arrowsBuffer[writeIdx++] = bly;
+    arrowsBuffer[writeIdx++] = blz;
+    arrowsBuffer[writeIdx++] = brx;
+    arrowsBuffer[writeIdx++] = bry;
+    arrowsBuffer[writeIdx++] = brz;
+    arrowsBuffer[writeIdx++] = tipx;
+    arrowsBuffer[writeIdx++] = tipy;
+    arrowsBuffer[writeIdx++] = tipz;
     arrowCount++;
   }
   arrowsGeometry.attributes.position.needsUpdate = true;
-  arrowsGeometry.setDrawRange(0, arrowCount * 2);
+  arrowsGeometry.setDrawRange(0, arrowCount * 3);
   arrowsMesh.visible = arrowCount > 0;
 }
 
