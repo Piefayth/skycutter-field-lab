@@ -159,7 +159,16 @@ function createGlyphLayer(scene, grid) {
       polygonOffsetUnits: -2,
     });
     const mesh = new THREE.InstancedMesh(geometry, material, grid.cellCount);
-    mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(grid.cellCount * 3), 3);
+    // Force Three.js to lazy-create instanceColor via its own setColorAt
+    // path. Pre-assigning a manually-built InstancedBufferAttribute
+    // can leave the renderer's per-frame upload path uninitialized
+    // — the symptom is "every glyph renders at uniform white because
+    // the per-instance color attribute never makes it to the GPU".
+    // setColorAt(0, anything) bootstraps the attribute correctly.
+    const seed = new THREE.Color(0, 0, 0);
+    mesh.setColorAt(0, seed);
+    mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     mesh.count = 0;
     mesh.frustumCulled = false;
     mesh.visible = false;
