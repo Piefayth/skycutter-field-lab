@@ -64,7 +64,18 @@ export function blockStackAt(cst, pos, { knownOnly = true } = {}) {
 }
 
 export function statementAt(cst, pos) {
-  return (cst?.statements ?? []).find((stmt) => stmt.from <= pos && pos <= stmt.to) ?? null;
+  return (cst?.statements ?? [])
+    .filter((stmt) => stmt.from <= pos && pos <= stmt.to)
+    .sort((a, b) => (a.to - a.from) - (b.to - b.from))[0] ?? null;
+}
+
+export function expectedAt(cst, pos) {
+  const stmt = statementAt(cst, pos);
+  if (!stmt) return [];
+  const zones = stmt.expectedZones ?? [];
+  return zones
+    .filter((zone) => zone.from <= pos && pos <= zone.to)
+    .flatMap((zone) => zone.expected);
 }
 
 export function cursorContextAt(cst, pos) {
@@ -76,6 +87,7 @@ export function cursorContextAt(cst, pos) {
     stack,
     mode: classifyMode(stack),
     statement,
+    expected: unique(expectedAt(cst, pos)),
     symbols: visibleSymbolsAt(cst, pos),
   };
 }
@@ -249,33 +261,226 @@ function scanStatements(source, sanitized, root, blocks) {
   const statements = [];
   const lineRanges = computeLineRanges(source);
   for (const line of lineRanges) {
-    const text = source.slice(line.from, line.to);
-    const clean = sanitized.slice(line.from, line.to);
-    const words = [...clean.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)];
-    if (words.length === 0) continue;
-    const keyword = words[0][0];
-    const nameMatch = words[1] ?? null;
-    const name = nameMatch?.[0] ?? null;
-    const block = innermostBlockForLine(root, blocks, line.from);
-    const stmt = {
-      type: "Statement",
-      keyword,
-      name,
-      nameFrom: nameMatch ? line.from + nameMatch.index : null,
-      nameTo: nameMatch ? line.from + nameMatch.index + name.length : null,
-      from: line.from,
-      to: line.to,
-      line: line.number,
-      text,
-      cleanText: clean,
-      block,
-      blockKeyword: block.keyword,
-      role: classifyStatement(keyword, block.keyword),
-    };
-    statements.push(stmt);
-    block.statements.push(stmt);
+    for (const segment of statementSegmentsForLine(sanitized, line)) {
+      const text = source.slice(segment.from, segment.to);
+      const clean = sanitized.slice(segment.from, segment.to);
+      const words = [...clean.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)];
+      if (words.length === 0) continue;
+      const keyword = words[0][0];
+      const nameMatch = words[1] ?? null;
+      const name = nameMatch?.[0] ?? null;
+      const block = innermostBlockForLine(root, blocks, segment.from);
+      const stmt = {
+        type: "Statement",
+        keyword,
+        name,
+        nameFrom: nameMatch ? segment.from + nameMatch.index : null,
+        nameTo: nameMatch ? segment.from + nameMatch.index + name.length : null,
+        from: segment.from,
+        to: segment.to,
+        line: line.number,
+        text,
+        cleanText: clean,
+        block,
+        blockKeyword: block.keyword,
+        role: classifyStatement(keyword, block.keyword),
+        parts: {},
+        expressions: [],
+        expectedZones: [],
+      };
+      annotateStatement(stmt);
+      statements.push(stmt);
+      block.statements.push(stmt);
+    }
   }
   return statements;
+}
+
+function statementSegmentsForLine(sanitized, line) {
+  const raw = sanitized.slice(line.from, line.to);
+  const points = [0];
+  for (let i = 0; i < raw.length; i++) {
+    if (raw[i] === "{" || raw[i] === ";") points.push(i + 1);
+  }
+  const out = [];
+  for (const point of points) {
+    let from = point;
+    while (from < raw.length && /\s/.test(raw[from])) from++;
+    if (from >= raw.length || raw[from] === "}") continue;
+    let to = raw.length;
+    for (let i = from; i < raw.length; i++) {
+      if (raw[i] === "}" || raw[i] === ";") { to = i; break; }
+    }
+    while (to > from && /\s/.test(raw[to - 1])) to--;
+    if (to > from) out.push({ from: line.from + from, to: line.from + to });
+  }
+  return out;
+}
+
+function annotateStatement(stmt) {
+  const line = stmt.cleanText;
+  const base = stmt.from;
+  const addZone = (from, to, expected, kind) => {
+    if (from == null || to == null || to < from) return;
+    stmt.expectedZones.push({
+      type: "ExpectedZone",
+      kind,
+      expected: Array.isArray(expected) ? expected : [expected],
+      from: base + from,
+      to: base + to,
+    });
+  };
+  const addExpr = (from, to, kind = "expression") => {
+    if (from == null || to == null || to < from) return;
+    const expr = {
+      type: "ExpressionSpan",
+      kind,
+      from: base + from,
+      to: base + to,
+      text: stmt.text.slice(from, to),
+    };
+    stmt.expressions.push(expr);
+    addZone(from, to, "expression", kind);
+  };
+  const firstTokenEnd = line.search(/\s/);
+  const afterKeyword = firstTokenEnd < 0 ? line.length : firstTokenEnd;
+
+  if (stmt.keyword === "reads" || stmt.keyword === "writes") {
+    addZone(afterKeyword, line.length, "fieldName", "stageFieldList");
+    return;
+  }
+
+  if (stmt.keyword === "set" || stmt.keyword === "add") {
+    const target = /^\s*(set|add)\s+([A-Za-z_][A-Za-z0-9_]*)?/.exec(line);
+    const targetFrom = line.indexOf(stmt.keyword) + stmt.keyword.length;
+    const eq = line.indexOf("=");
+    addZone(targetFrom, eq >= 0 ? eq : line.length, "fieldName", "assignmentTarget");
+    if (target?.[2]) {
+      const rel = line.indexOf(target[2], target.index + target[1].length);
+      stmt.parts.target = { name: target[2], from: base + rel, to: base + rel + target[2].length };
+    }
+    if (eq >= 0) addExpr(eq + 1, line.length, "assignmentExpr");
+    return;
+  }
+
+  if (stmt.keyword === "let") {
+    const match = /^\s*let\s+([A-Za-z_][A-Za-z0-9_]*)?/.exec(line);
+    if (match?.[1]) {
+      const rel = line.indexOf(match[1], match.index + 3);
+      stmt.parts.local = { name: match[1], from: base + rel, to: base + rel + match[1].length };
+    }
+    const eq = line.indexOf("=");
+    if (eq >= 0) addExpr(eq + 1, line.length, "letExpr");
+    return;
+  }
+
+  if (stmt.keyword === "when") {
+    const start = line.indexOf("when") + "when".length;
+    const brace = line.indexOf("{", start);
+    addExpr(start, brace >= 0 ? brace : line.length, "condition");
+    return;
+  }
+
+  if (stmt.keyword === "field" || stmt.keyword === "source") {
+    const colon = line.indexOf(":");
+    if (colon >= 0) addZone(colon + 1, line.length, "fieldType", "fieldType");
+    return;
+  }
+
+  if (stmt.keyword === "recommendedPreset") {
+    addZone(afterKeyword, line.length, "scenarioName", "recommendedPreset");
+    return;
+  }
+
+  if (stmt.keyword === "spot" || stmt.keyword === "ellipse" || stmt.keyword === "region") {
+    const firstModifier = firstPositive([
+      line.indexOf(" at ", afterKeyword),
+      line.indexOf(" where ", afterKeyword),
+      line.indexOf(" amount", afterKeyword),
+      line.length,
+    ]);
+    addZone(afterKeyword, firstModifier, "fieldName", "initTarget");
+    annotateNamedArgExpressions(stmt, line, base, addExpr);
+    return;
+  }
+
+  if (stmt.keyword === "metric") {
+    const eq = line.indexOf("=");
+    if (eq >= 0) {
+      const where = line.indexOf("where", eq);
+      const bodyOpen = line.indexOf("{", eq);
+      const bodyClose = line.lastIndexOf("}");
+      if (bodyOpen >= 0) addExpr(bodyOpen + 1, bodyClose > bodyOpen ? bodyClose : line.length, "metricBody");
+      if (where >= 0) addExpr(where + "where".length, bodyOpen >= 0 ? bodyOpen : line.length, "metricPredicate");
+    }
+    return;
+  }
+
+  if (stmt.keyword === "color") {
+    annotateColorStatement(stmt, line, base, addZone, addExpr);
+    return;
+  }
+
+  if (stmt.keyword === "stop") {
+    const color = line.indexOf("color");
+    if (color >= 0) addZone(color + "color".length, line.length, "colorTriple", "paletteColor");
+  }
+}
+
+function annotateNamedArgExpressions(stmt, line, base, addExpr) {
+  for (const match of line.matchAll(/\b(amount|radius|rx|ry|angle|lon|lat|lonMin|lonMax|latMin|latMax)\s*=/g)) {
+    const start = match.index + match[0].length;
+    const rest = line.slice(start);
+    const next = /\s+\b(amount|radius|rx|ry|angle|lon|lat|lonMin|lonMax|latMin|latMax)\s*=/.exec(rest);
+    const end = next ? start + next.index : line.length;
+    addExpr(start, end, `${match[1]}Arg`);
+  }
+}
+
+function annotateColorStatement(stmt, line, base, addZone, addExpr) {
+  const color = line.indexOf("color");
+  const kindMatch = /\bcolor\s+([A-Za-z_][A-Za-z0-9_]*)?/.exec(line);
+  const afterColor = color >= 0 ? color + "color".length : 0;
+  addZone(afterColor, kindMatch?.[1] ? line.indexOf(kindMatch[1], afterColor) + kindMatch[1].length : line.length, "colorKind", "colorKind");
+  const kind = kindMatch?.[1];
+  if (!kind) return;
+  const afterKind = line.indexOf(kind, afterColor) + kind.length;
+  if (kind === "ramp" || kind === "wheel") {
+    const fieldMatch = /\bcolor\s+(ramp|wheel)\s+([A-Za-z_][A-Za-z0-9_]*)?/.exec(line);
+    const fieldStart = afterKind;
+    const range = line.indexOf("range", afterKind);
+    const palette = line.indexOf("palette", afterKind);
+    const stops = line.indexOf("stops", afterKind);
+    const fieldEnd = firstPositive([range, palette, stops, line.length]);
+    addZone(fieldStart, fieldEnd, "fieldName", "colorField");
+    if (fieldMatch?.[2]) {
+      const rel = line.indexOf(fieldMatch[2], fieldStart);
+      stmt.parts.field = { name: fieldMatch[2], from: base + rel, to: base + rel + fieldMatch[2].length };
+    }
+    if (range >= 0) {
+      const open = line.indexOf("[", range);
+      const close = line.indexOf("]", range);
+      if (open >= 0) {
+        const innerEnd = close >= 0 ? close : line.length;
+        const comma = line.indexOf(",", open);
+        if (comma >= 0 && comma < innerEnd) {
+          addExpr(open + 1, comma, "rangeLower");
+          addExpr(comma + 1, innerEnd, "rangeUpper");
+        } else {
+          addExpr(open + 1, innerEnd, "rangeBound");
+        }
+      }
+    }
+    if (palette >= 0) {
+      addZone(palette + "palette".length, line.length, "paletteName", "paletteRef");
+    }
+  } else if (kind === "expr") {
+    addZone(afterKind, line.length, "exprBlock", "colorExprBlock");
+  }
+}
+
+function firstPositive(values) {
+  return Math.min(...values.filter((v) => Number.isFinite(v) && v >= 0));
 }
 
 function computeLineRanges(source) {

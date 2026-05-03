@@ -1,6 +1,7 @@
 import {
   blockStackAt,
   cursorContextAt,
+  expectedAt,
   parseDslCst,
   statementAt,
 } from "./cst-v2.mjs";
@@ -69,6 +70,16 @@ test("CST cursor context exposes mode, stack, and current statement", () => {
   assertEq(ctx.stack.map((block) => block.keyword), ["step", "stage", "cell"]);
   assertEq(statementAt(cst, pos).keyword, "set");
   assert(ctx.symbols.some((symbol) => symbol.kind === "local" && symbol.name === "lap"));
+});
+
+test("CST annotates expression spans and expected cursor zones", () => {
+  const cst = parseDslCst(SOURCE);
+  const setStmt = statementAt(cst, SOURCE.indexOf("set u ="));
+  assertEq(setStmt.parts.target.name, "u");
+  assertEq(setStmt.expressions.map((expr) => expr.kind), ["assignmentExpr"]);
+  assertEq(expectedAt(cst, SOURCE.indexOf("reads u") + "reads ".length), ["fieldName"]);
+  assertEq(expectedAt(cst, SOURCE.lastIndexOf("palette P") + "palette ".length), ["paletteName"]);
+  assertEq(expectedAt(cst, SOURCE.indexOf("u + lap")), ["expression"]);
 });
 
 test("CST is tolerant of unclosed blocks", () => {

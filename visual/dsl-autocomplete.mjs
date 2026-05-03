@@ -396,7 +396,28 @@ function activeLineSegment(line) {
   return cut >= 0 ? line.slice(cut + 1) : line;
 }
 
+function optionsForExpectedContext(ctx, prefix) {
+  const expected = new Set(ctx.cursor?.expected ?? []);
+  if (expected.size === 0 || expected.has("expression")) return null;
+  const structural = (options) => filterOptions(options, prefix);
+  if (expected.has("fieldName")) return structural(fieldsFromAst(ctx));
+  if (expected.has("paletteName")) return structural(palettesFromAst(ctx));
+  if (expected.has("scenarioName")) return structural(scenariosFromAst(ctx));
+  if (expected.has("fieldType")) return structural(FIELD_TYPE_COMPLETIONS);
+  if (expected.has("colorKind")) {
+    return structural([
+      structuralOption("ramp", "color ramp field palette PALETTE"),
+      structuralOption("wheel", "color wheel field"),
+      structuralOption("expr", "color expr { ... }"),
+    ]);
+  }
+  return null;
+}
+
 function optionsForGrammarPosition(ctx, mode, prefix) {
+  const expectedOptions = optionsForExpectedContext(ctx, prefix);
+  if (expectedOptions) return expectedOptions;
+
   const before = lineWithoutPrefix(ctx);
   const fullLine = before.replace(/\/\/.*$/, "");
   const line = mode.mode === "topLevel" || mode.mode === "v2Import"
