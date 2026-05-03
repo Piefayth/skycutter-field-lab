@@ -1,4 +1,4 @@
-import { cellActionsCstToAst, expressionCstToAst } from "./cst-to-ast-v2.mjs";
+import { cellActionsCstToAst, expressionCstToAst, stageCstToAst } from "./cst-to-ast-v2.mjs";
 import { parseDslCst } from "./cst-v2.mjs";
 import { parseV2 } from "./parse-v2.mjs";
 
@@ -58,6 +58,27 @@ step {
   const cst = parseDslCst(source);
   const cellBlock = cst.blocks.find((block) => block.keyword === "cell");
   const actual = cellActionsCstToAst(cst, cellBlock);
+  assertEq(actual, expected);
+});
+
+test("CST stage projection matches parse-v2 for reads/writes/cell", () => {
+  const source = `
+recipe "Projection"
+substrate geodesic frequency 16
+field u: f32
+field v: f32
+step {
+  stage s "Step label" {
+    reads u previous, v
+    writes u
+    cell {
+      set u = u@prev + v
+    }
+  }
+}`;
+  const expected = parseV2(source).stages[0];
+  const cst = parseDslCst(source);
+  const actual = stageCstToAst(cst, cst.blocks.find((block) => block.keyword === "stage"));
   assertEq(actual, expected);
 });
 

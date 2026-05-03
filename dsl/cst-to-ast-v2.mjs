@@ -89,6 +89,60 @@ export function cellActionCstToAst(cst, stmt) {
   throw new Error(`v2 CST projection: unsupported cell action ${stmt.keyword}`);
 }
 
+export function stageCstToAst(cst, stageBlock) {
+  if (!stageBlock || stageBlock.keyword !== "stage") {
+    throw new Error("v2 CST projection: expected stage block");
+  }
+  const reads = [];
+  const writes = [];
+  const previousReads = new Set();
+  const statements = [];
+  for (const stmt of [...(stageBlock.statements ?? [])].sort((a, b) => a.from - b.from)) {
+    if (stmt.keyword === "reads") {
+      for (const item of fieldListFromStatement(stmt)) {
+        reads.push(item.name);
+        if (item.previous) previousReads.add(item.name);
+      }
+    } else if (stmt.keyword === "writes") {
+      for (const item of fieldListFromStatement(stmt)) writes.push(item.name);
+    }
+  }
+  const cellBlock = (stageBlock.children ?? []).find((block) => block.keyword === "cell");
+  if (cellBlock) {
+    statements.push({ type: "cell", actions: cellActionsCstToAst(cst, cellBlock) });
+  }
+  return {
+    id: stageBlock.id,
+    name: stageLabel(cst, stageBlock),
+    reads: dedupe(reads),
+    writes: dedupe(writes),
+    declares: [],
+    body: { statements },
+    previousReads: [...previousReads],
+  };
+}
+
+function fieldListFromStatement(stmt) {
+  const afterKeyword = stmt.cleanText.slice(stmt.cleanText.indexOf(stmt.keyword) + stmt.keyword.length);
+  const items = [];
+  for (const part of afterKeyword.split(",")) {
+    const words = [...part.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)].map((m) => m[0]);
+    if (words.length === 0) continue;
+    items.push({ name: words[0], previous: words.includes("previous") });
+  }
+  return items;
+}
+
+function stageLabel(cst, stageBlock) {
+  const header = cst.source.slice(stageBlock.headerFrom, stageBlock.headerTo);
+  const label = /"([^"]*)"/.exec(header);
+  return label ? label[1] : stageBlock.id;
+}
+
+function dedupe(values) {
+  return [...new Set(values)];
+}
+
 function firstExpression(stmt) {
   const expr = stmt.expressions?.[0]?.node;
   if (!expr) throw new Error(`v2 CST projection: ${stmt.keyword} action is missing expression`);
