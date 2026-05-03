@@ -105,6 +105,12 @@
       "summary": "Excitation-inhibition neural field on a sphere. A narrow metric bell kernel gathers local excitation; a wider annular bell kernel gathers inhibition. The sigmoid firing response turns random seed activity into pulses, labyrinths, and breathing cortical-wave patterns."
     },
     {
+      "id": "nonlocal-ecology",
+      "name": "Nonlocal ecology (example)",
+      "path": "recipes/nonlocal-ecology.mjs",
+      "summary": "Resource-biomass ecology with nonlocal competition. Plants read nearby resource through a center-weighted metric kernel, while wider annular biomass creates crowding pressure. The competition radius sets patch spacing, producing gaps, mosaics, and invasion fronts without ordinary diffusion."
+    },
+    {
       "id": "gierer-meinhardt",
       "name": "Gierer-Meinhardt (example)",
       "path": "recipes/gierer-meinhardt.mjs",
