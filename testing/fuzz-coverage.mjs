@@ -7,10 +7,14 @@
 //   node --experimental-test-coverage \
 //        --test-coverage-include='dsl/**' \
 //        --test testing/fuzz-coverage.mjs
+//
+// Drives the full static pipeline: parse → validate → typecheck →
+// WGSL emit. Without wgsl: true the WGSL emitter shows ~13% from
+// incidental imports only.
 
 import test from "node:test";
 import { runFuzz } from "./fuzz-v2.mjs";
 
 test("fuzz 500 seeds for coverage measurement", async () => {
-  await runFuzz({ count: 500, seedStart: 1, log: () => {} });
+  await runFuzz({ count: 500, seedStart: 1, wgsl: true, log: () => {} });
 });

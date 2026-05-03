@@ -102,12 +102,29 @@ export async function makeHarness({ recipeDsl, dsl, frequency = 16 } = {}) {
   const device = await adapter.requestDevice();
   const runtime = new WebGpuGeodesicRuntime({ device, grid, fieldNames, fieldTypes });
 
+  // Upgrade history fields to 3-buffer rotation. The compile pipeline
+  // marks any field used with `@prev` as `history: 1`; the runtime
+  // needs ensureHistory() called explicitly so its currentBuffer /
+  // historyBuffer accessors don't throw "field X was not allocated
+  // with history". Mirrors what the production pipeline runtime does
+  // at recipe load.
+  for (const decl of fieldDecls) {
+    if ((decl.history ?? 0) > 0) runtime.ensureHistory(decl.name);
+  }
+
   // Each pass in `stagesPipeline.stages[i].passes` corresponds to one
   // (stage, output-field) pair the WGSL compiler emits separately.
   // The harness exposes them flat so tests can address them by index.
   const passes = stagesPipeline.stages.flatMap((stage) =>
     stage.passes.map((pass) => ({ stageId: stage.id, ...pass })),
   );
+
+  // History fields rotate at end-of-tick rather than swap per-pass.
+  // tick() needs to know which fields are history-flavoured so it
+  // can pass swapAfter=false on those passes and call rotateHistory
+  // afterward. Mirrors webgpu-geodesic-pipeline-runtime.mjs.
+  const historyFieldNames = fieldDecls.filter(d => (d.history ?? 0) > 0).map(d => d.name);
+  const historyFieldSet = new Set(historyFieldNames);
 
   return {
     runtime,
@@ -145,6 +162,9 @@ export async function makeHarness({ recipeDsl, dsl, frequency = 16 } = {}) {
       const uniforms = buildWebGpuGeodesicUniforms(pass.layout, {
         dt, frame, cellCount: grid.cellCount, params, consts,
       });
+      // History-field passes must not swap mid-tick — rotation
+      // happens via rotateHistory at end-of-tick.
+      const swapAfter = !historyFieldSet.has(pass.field);
       runtime.runCellPass({
         key: pass.key,
         source: pass.source,
@@ -153,6 +173,7 @@ export async function makeHarness({ recipeDsl, dsl, frequency = 16 } = {}) {
         prevReads: pass.prevReads,
         uniforms,
         needsNeighbors: pass.needsNeighbors,
+        swapAfter,
       });
     },
 
@@ -168,6 +189,11 @@ export async function makeHarness({ recipeDsl, dsl, frequency = 16 } = {}) {
       for (let i = 0; i < passes.length; i++) {
         this.runPass(i, { dt, frame, params, consts });
       }
+      // End-of-tick rotation for history fields — promotes the
+      // freshly-written `next` slot to `current` and demotes
+      // `current` to `prev` (so the next tick's @prev reads what
+      // we just wrote). Mirrors the production pipeline runtime.
+      if (historyFieldNames.length) runtime.rotateHistory(historyFieldNames);
       const err = await device.popErrorScope();
       if (err) throw new Error(`WGSL tick failed: ${err.message}`);
     },

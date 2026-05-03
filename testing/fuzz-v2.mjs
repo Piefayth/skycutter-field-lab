@@ -70,6 +70,7 @@ class FuzzCtx {
   }
 
   scalarFields() { return this.fields.filter(f => f.type === "f32"); }
+  vec2Fields()   { return this.fields.filter(f => f.type === "vec2"); }
   scalarNames() {
     return [
       ...this.scalarFields().map(f => f.name),
@@ -82,33 +83,45 @@ class FuzzCtx {
 // -- Expression generators -----------------------------------------------------
 
 // Generate an f32-valued cell-stage expression. May reference fields
-// from the *allowed-fields* set (i.e. the enclosing stage's `reads`
-// clause), plus all params, consts, locals, or numeric literals.
-// Bounded by `depth` to avoid runaway nesting.
+// from the stage's `reads` clause (split into scalar + vec2), plus
+// params, consts, locals, or numeric literals. Bounded by `depth`
+// to avoid runaway nesting.
 //
 // scope:
-//   .allowedFields — field names in the enclosing stage's `reads`
+//   .scalarReads   — f32 field names in the enclosing stage's `reads`
+//   .vec2Reads     — vec2 field names in the same `reads` clause
 //   .locals        — `let`-bound names declared earlier in the body
 //   .neighborBound — name of the neighbor coord if inside a reduction,
 //                    else null (controls whether `f@n` is in scope)
-//   .prevAllowed   — fields that may legally appear as `f@prev`
+//   .allowPrev     — true if the enclosing stage may use `field@prev`
+//                    (single-stage recipes only — multi-stage recipes
+//                    have cross-stage history-field invariants the
+//                    generator deliberately doesn't try to satisfy)
 function genCellExpr(ctx, scope, depth = 0) {
   const r = ctx.rng;
   const leafBias = 0.35 + depth * 0.18;
   if (depth >= 3 || r() < leafBias) {
-    const scalars = [
-      ...scope.allowedFields,
+    // Scalar leaf candidates: scalar fields, params, consts, locals,
+    // and vec2 component access (.x / .y / length(...)) for any vec2
+    // field in scope. The vec2 access patterns are how we exercise
+    // the WGSL emitter's vec2-read codepaths from within scalar-typed
+    // expressions.
+    const leaves = [
+      ...scope.scalarReads,
       ...ctx.params.map(p => p.name),
       ...ctx.consts.map(c => c.name),
       ...scope.locals,
     ];
-    if (scalars.length === 0 || maybe(r, 0.35)) {
+    for (const v of scope.vec2Reads) {
+      leaves.push(`${v}.x`, `${v}.y`, `length(${v})`);
+    }
+    if (leaves.length === 0 || maybe(r, 0.35)) {
       return round(r() * 4 - 1).toString();
     }
-    return pick(r, scalars);
+    return pick(r, leaves);
   }
   const choice = r();
-  if (choice < 0.30) {
+  if (choice < 0.28) {
     const op = pick(r, BIN_OPS);
     const lhs = genCellExpr(ctx, scope, depth + 1);
     const rhs = genCellExpr(ctx, scope, depth + 1);
@@ -117,7 +130,7 @@ function genCellExpr(ctx, scope, depth = 0) {
     }
     return `(${lhs} ${op} ${rhs})`;
   }
-  if (choice < 0.50) {
+  if (choice < 0.46) {
     const fn = pick(r, MATH_FUNCS_1);
     let arg = genCellExpr(ctx, scope, depth + 1);
     // WGSL's parser does compile-time const-eval for math intrinsics
@@ -127,38 +140,64 @@ function genCellExpr(ctx, scope, depth = 0) {
     if (fn === "sqrt") arg = `abs(${arg})`;
     return `${fn}(${arg})`;
   }
-  if (choice < 0.65) {
+  if (choice < 0.60) {
     const fn = pick(r, MATH_FUNCS_2);
     let a = genCellExpr(ctx, scope, depth + 1);
     const b = genCellExpr(ctx, scope, depth + 1);
-    // pow(base, exp) is mathematically real-undefined when base is
-    // negative AND exp is non-integer; WGSL flags some const-eval
-    // forms at compile time. Same trick as sqrt — wrap base in abs.
     if (fn === "pow") a = `abs(${a})`;
     return `${fn}(${a}, ${b})`;
   }
-  if (choice < 0.78) {
+  if (choice < 0.72) {
     const x = genCellExpr(ctx, scope, depth + 1);
     const lo = round(-(0.5 + r() * 1.5));
     const hi = round(0.5 + r() * 4);
     return `clamp(${x}, ${lo}, ${hi})`;
   }
-  // f@prev — only at the top level of an expression, only for
-  // fields in scope, and only when the enclosing stage allows it.
-  if (choice < 0.85 && scope.prevAllowed.length > 0) {
-    return pick(r, scope.prevAllowed) + "@prev";
+  // divergence(vec2_field) — scalar result. Only on bare field names
+  // (the validator rejects let-locals inside stencil args).
+  if (choice < 0.79 && scope.vec2Reads.length > 0) {
+    return `divergence(${pick(r, scope.vec2Reads)})`;
   }
-  // f@n — only inside a neighbor reduction; otherwise the validator
-  // rejects @n as out of scope.
-  if (choice < 0.92 && scope.neighborBound && scope.allowedFields.length > 0) {
-    return pick(r, scope.allowedFields) + `@${scope.neighborBound}`;
+  // f@prev — only when allowPrev (single-stage recipe) and field
+  // is one this stage *writes* (history needs a writer or the
+  // validator rejects).
+  if (choice < 0.85 && scope.allowPrev && scope.prevAllowedFields.length > 0) {
+    return pick(r, scope.prevAllowedFields) + "@prev";
+  }
+  // f@n — only inside a neighbor reduction; the validator rejects
+  // @n as out of scope outside one.
+  if (choice < 0.92 && scope.neighborBound && scope.scalarReads.length > 0) {
+    return pick(r, scope.scalarReads) + `@${scope.neighborBound}`;
   }
   // Neighbor reduction — only at top level of a *non-reduction* scope.
-  if (!scope.neighborBound && scope.allowedFields.length > 0 && depth <= 1) {
+  if (!scope.neighborBound && scope.scalarReads.length > 0 && depth <= 1) {
     return genNeighborReduce(ctx, scope, depth + 1);
   }
-  // Fallback to a leaf.
   return round(r() * 2).toString();
+}
+
+// Generate a vec2-valued expression for vec2 field assignments.
+// Forms: bare vec2 field (with optional @prev), gradient(scalar),
+// vec2(scalar, scalar) constructor.
+function genVec2Expr(ctx, scope, depth = 0) {
+  const r = ctx.rng;
+  const choice = r();
+  // Bare vec2 field with optional @prev. @prev only when the
+  // stage writes this field (else "history field has no writing
+  // stage").
+  if (scope.vec2Reads.length > 0 && choice < 0.30) {
+    const f = pick(r, scope.vec2Reads);
+    const writesThisVec2 = scope.prevAllowedVec2?.includes(f);
+    if (scope.allowPrev && writesThisVec2 && maybe(r, 0.4)) return `${f}@prev`;
+    return f;
+  }
+  // gradient(scalar_field) — produces vec2 from a scalar field's
+  // tangent-frame gradient. Bare field name only (no let-locals).
+  if (scope.scalarReads.length > 0 && choice < 0.55) {
+    return `gradient(${pick(r, scope.scalarReads)})`;
+  }
+  // vec2 constructor over two scalar expressions.
+  return `vec2(${genCellExpr(ctx, scope, depth + 1)}, ${genCellExpr(ctx, scope, depth + 1)})`;
 }
 
 function genNeighborReduce(ctx, parentScope, depth) {
@@ -166,7 +205,7 @@ function genNeighborReduce(ctx, parentScope, depth) {
   const op = pick(r, REDUCE_OPS);
   const innerScope = { ...parentScope, neighborBound: "n" };
   // Body must produce a scalar; common idiom is `f@n - f` (Laplacian).
-  const f = pick(r, parentScope.allowedFields);
+  const f = pick(r, parentScope.scalarReads);
   const shape = r();
   let body;
   if (shape < 0.5) {
@@ -181,36 +220,55 @@ function genNeighborReduce(ctx, parentScope, depth) {
 
 // -- Stage generation ----------------------------------------------------------
 
-function genStage(ctx, name) {
+// Generate one stage. Writes can target any declared field type
+// (f32 or vec2); the body generator dispatches on the target's type
+// to produce shape-correct expressions.
+//
+// allowPrev: only true when the recipe has exactly one stage, since
+// multi-stage recipes carry cross-stage history-field invariants
+// (single-writer-per-step, reads-before-write ordering) the
+// generator deliberately doesn't try to satisfy.
+function genStage(ctx, name, { allowPrev = false } = {}) {
   const r = ctx.rng;
-  const f32s = ctx.scalarFields();
-  if (f32s.length === 0) return null;
-  const numWrites = intIn(r, 1, Math.min(2, f32s.length));
+  const allFields = ctx.fields;
+  if (allFields.length === 0) return null;
+  const numWrites = intIn(r, 1, Math.min(2, allFields.length));
   const writes = [];
   while (writes.length < numWrites) {
-    const f = pick(r, f32s);
+    const f = pick(r, allFields);
     if (!writes.includes(f.name)) writes.push(f.name);
   }
-  // Reads: writes + maybe one extra
+  // Reads: writes + maybe one extra (mixed types are fine)
   const reads = [...writes];
-  if (f32s.length > writes.length && maybe(r, 0.4)) {
-    const extra = f32s.find(f => !reads.includes(f.name));
+  if (allFields.length > writes.length && maybe(r, 0.5)) {
+    const extra = allFields.find(f => !reads.includes(f.name));
     if (extra) reads.push(extra.name);
   }
-  // Body — generates 0-2 lets and one set/add per write field. The
-  // expression scope only sees fields in `reads`.
-  //
-  // @prev is intentionally NOT generated here: history fields carry
-  // cross-stage invariants (single writer per step, reads-before-
-  // write ordering) that the basic generator can't coordinate
-  // without becoming as complex as the validator. A targeted
-  // history-field strategy is worth its own subgenerator later.
+  const fieldType = (name) => allFields.find(f => f.name === name).type;
+  const scalarReads = reads.filter(n => fieldType(n) === "f32");
+  const vec2Reads   = reads.filter(n => fieldType(n) === "vec2");
+
+  // @prev is allowed only on fields this stage *writes*. The
+  // validator enforces that any history-using field has exactly one
+  // writer per step; a single-stage recipe that reads-without-writing
+  // a field would still fail because `@prev` allocates a history
+  // buffer with no writer.
+  const prevAllowedSet = allowPrev
+    ? new Set(writes.filter(n => fieldType(n) === "f32"))
+    : new Set();
+  const prevAllowedVec2Set = allowPrev
+    ? new Set(writes.filter(n => fieldType(n) === "vec2"))
+    : new Set();
+
   const body = [];
   const scope = {
-    allowedFields: reads,
+    scalarReads,
+    vec2Reads,
     locals: [],
     neighborBound: null,
-    prevAllowed: [],
+    allowPrev,
+    prevAllowedFields: [...prevAllowedSet],
+    prevAllowedVec2:   [...prevAllowedVec2Set],
   };
   const numLets = intIn(r, 0, 2);
   for (let i = 0; i < numLets; i++) {
@@ -219,21 +277,32 @@ function genStage(ctx, name) {
     scope.locals.push(lname);
   }
   for (const w of writes) {
+    const wType = fieldType(w);
     const verb = maybe(r, 0.5) && reads.includes(w) ? "add" : "set";
-    if (verb === "add") {
-      body.push(`add ${w} = (${genCellExpr(ctx, scope)}) * dt`);
+    if (wType === "vec2") {
+      const expr = genVec2Expr(ctx, scope);
+      // vec2 fields use vec2-shaped writes — `add v = vec2(...) * dt`
+      // broadcasts dt across both components.
+      if (verb === "add") {
+        body.push(`add ${w} = (${expr}) * dt`);
+      } else {
+        body.push(`set ${w} = ${expr}`);
+      }
     } else {
-      body.push(`set ${w} = clamp(${genCellExpr(ctx, scope)}, -10, 10)`);
+      if (verb === "add") {
+        body.push(`add ${w} = (${genCellExpr(ctx, scope)}) * dt`);
+      } else {
+        body.push(`set ${w} = clamp(${genCellExpr(ctx, scope)}, -10, 10)`);
+      }
     }
   }
   // Sometimes wrap a set/add inside a `when` to exercise the
-  // conditional path. Only one level of nesting; the predicate is a
-  // simple comparison.
-  if (maybe(r, 0.25) && body.length > 0) {
+  // conditional path. Predicate references a scalar in scope.
+  if (maybe(r, 0.25) && body.length > 0 && scalarReads.length > 0) {
     const lastIdx = body.length - 1;
     const last = body[lastIdx];
     if (last.startsWith("set ") || last.startsWith("add ")) {
-      const predField = pick(r, reads);
+      const predField = pick(r, scalarReads);
       const threshold = round(r() * 2 - 1, 2);
       body[lastIdx] = `when ${predField} > ${threshold} { ${last} }`;
     }
@@ -321,11 +390,18 @@ export function generateRecipe(seed) {
   }
   lines.push("");
 
-  // Step + stages
+  // Step + stages.
+  //
+  // @prev usage requires single-stage recipes — multi-stage @prev
+  // brings the whole single-writer-per-step / reads-before-write
+  // ordering soup, which the generator deliberately doesn't try
+  // to satisfy. So decide stage count first, then enable @prev only
+  // when stages == 1.
   const numStages = intIn(r, 1, 2);
+  const allowPrev = numStages === 1;
   const stages = [];
   for (let i = 0; i < numStages; i++) {
-    const s = genStage(ctx, `stg${i}`);
+    const s = genStage(ctx, `stg${i}`, { allowPrev });
     if (s) stages.push(s);
   }
   if (stages.length === 0) {
