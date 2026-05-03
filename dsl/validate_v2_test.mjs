@@ -634,7 +634,39 @@ step {
 `), "expected bool");
 });
 
-test("type-check rejects vec2 inside neighbor reduction body", () => {
+test("vec2 sum reduction is well-typed (result is vec2)", () => {
+  // sum n in neighbors { wind@n } now returns vec2 directly (no
+  // need to component-split). Assign to a vec2 field — clean.
+  compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field wind: vec2
+field windSum: vec2
+step {
+  stage s { reads wind; writes windSum; cell {
+    set windSum = sum n in neighbors { wind@n }
+  } }
+}
+`);
+});
+
+test("vec2 mean reduction is well-typed (result is vec2)", () => {
+  compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field wind: vec2
+field windMean: vec2
+step {
+  stage s { reads wind; writes windMean; cell {
+    set windMean = mean n in neighbors { wind@n }
+  } }
+}
+`);
+});
+
+test("vec2 sum reduction result must match assignment field type", () => {
+  // Result of vec2 reduction is vec2; assigning to f32 field is
+  // caught by the type checker via checkFieldAssignment.
   expectThrow(() => compileV2(`
 recipe "X"
 substrate geodesic frequency 16
@@ -645,7 +677,21 @@ step {
     set u = sum n in neighbors { wind@n }
   } }
 }
-`), "vec2");
+`), "assigning vec2 to f32 field");
+});
+
+test("vec2 max reduction is rejected (no clean componentwise meaning)", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field wind: vec2
+field windMax: vec2
+step {
+  stage s { reads wind; writes windMax; cell {
+    set windMax = max n in neighbors { wind@n }
+  } }
+}
+`), "max over a vec2 isn't well-defined");
 });
 
 // -----------------------------------------------------------------------------

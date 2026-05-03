@@ -965,15 +965,23 @@ function emitReduction(node, ctx, statements) {
   const bodyCtx = { ...ctx, locals: bodyLocals, coordReadResolver };
   const bodyWgsl = compileExpr(node.body, bodyCtx);
 
+  // Detect the body's WGSL type. vec2 sum/mean reductions need a
+  // vec2 accumulator; f32 keeps the original f32 path. The type
+  // checker already rejected vec2 max/min upstream.
+  const bodyType = inferReductionBodyType(node.body, bindings, ctx);
+  const isVec2 = bodyType === "vec2";
+  const wgslType = isVec2 ? "vec2<f32>" : "f32";
+  const zeroLit = isVec2 ? "vec2<f32>(0.0, 0.0)" : "0.0";
+
   if (node.op === "sum") {
-    statements.push(`var ${accName}: f32 = 0.0;`);
+    statements.push(`var ${accName}: ${wgslType} = ${zeroLit};`);
   } else if (node.op === "max") {
     statements.push(`var ${accName}: f32 = -1.0e38;`);
   } else if (node.op === "min") {
     statements.push(`var ${accName}: f32 = 1.0e38;`);
   } else if (node.op === "mean") {
-    statements.push(`var ${sumName}: f32 = 0.0;`);
-    statements.push(`var ${accName}: f32 = 0.0;`);
+    statements.push(`var ${sumName}: ${wgslType} = ${zeroLit};`);
+    statements.push(`var ${accName}: ${wgslType} = ${zeroLit};`);
   } else {
     throw new Error(`Unsupported neighbor reduction op: ${node.op}`);
   }
@@ -1007,11 +1015,71 @@ function emitReduction(node, ctx, statements) {
   }
   statements.push(`  }`);
   if (node.op === "mean") {
-    statements.push(`  ${accName} = select(0.0, ${sumName} / f32(${count}), ${count} > 0u);`);
+    // Divide by count, with the empty-neighbor guard. WGSL's `select`
+    // takes the same type for both branches, so the zero literal
+    // matches the accumulator type. Vec2 / f32 → vec2 (component-
+    // wise) is fine.
+    statements.push(`  ${accName} = select(${zeroLit}, ${sumName} / f32(${count}), ${count} > 0u);`);
   }
   statements.push(`}`);
 
   return { type: "Identifier", name: accName };
+}
+
+// Reduction body type is dictated by the data flowing through it.
+// We need just enough type inference to choose between f32 and
+// vec2 accumulators — a full re-run of the typechecker is overkill.
+// Cases:
+//   - CoordRead → field's declared type
+//   - Member access (.x / .y) → always f32 (component extract)
+//   - Identifier of a per-neighbor binding → bound field's type
+//   - Identifier of self-field → field's declared type
+//   - Call: vec2(...)/gradient(...) → vec2; length/divergence/most → f32
+//   - Binary with any vec2 operand → vec2
+//   - Unary / Conditional → recurse on operand / branches
+// Anything else falls through to f32 (the safe default).
+function inferReductionBodyType(ast, bindings, ctx) {
+  if (!ast || typeof ast !== "object") return "f32";
+  const fieldTypes = ctx.layout?.fieldTypes ?? {};
+  const bindingType = (name) => {
+    const binding = bindings.find((b) => b.name === name);
+    if (!binding) return null;
+    return fieldTypes[binding.field] ?? "f32";
+  };
+  switch (ast.type) {
+    case "Number":
+      return "f32";
+    case "Identifier": {
+      // Per-neighbor binding (`_n_<field>`) — type matches the field.
+      const fromBinding = bindingType(ast.name);
+      if (fromBinding) return fromBinding;
+      // Self-field reference inside the reduction body.
+      if (fieldTypes[ast.name]) return fieldTypes[ast.name];
+      return "f32";
+    }
+    case "Member":
+      // .x / .y on a vec2 always yields a scalar component.
+      return "f32";
+    case "Unary":
+      return inferReductionBodyType(ast.expr, bindings, ctx);
+    case "Binary": {
+      const lt = inferReductionBodyType(ast.left, bindings, ctx);
+      const rt = inferReductionBodyType(ast.right, bindings, ctx);
+      return lt === "vec2" || rt === "vec2" ? "vec2" : "f32";
+    }
+    case "Conditional":
+      return inferReductionBodyType(ast.consequent, bindings, ctx);
+    case "Call": {
+      const name = ast.callee?.name;
+      if (name === "vec2" || name === "gradient") return "vec2";
+      // length, divergence, dot, plus all the scalar math fns.
+      return "f32";
+    }
+    case "CoordRead":
+      return fieldTypes[ast.field] ?? "f32";
+    default:
+      return "f32";
+  }
 }
 
 function compileExpr(ast, ctx) {

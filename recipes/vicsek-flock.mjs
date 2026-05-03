@@ -144,14 +144,11 @@ step {
     reads heading
     writes heading
     cell {
-      // Component-wise neighbor-mean. The type checker rejects vec2
-      // bodies in neighbor reductions today, so we pull each
-      // component separately — the WGSL emitter combines the two
-      // passes into one neighbor loop in the inner emitReduction
-      // path so this isn't a perf hit.
-      let mx = mean n in neighbors { heading@n.x }
-      let my = mean n in neighbors { heading@n.y }
-      let avg = vec2(mx, my)
+      // Vec2 neighbor-mean — single reduction, vec2 result. (Earlier
+      // versions of v2 required pulling .x and .y as separate scalar
+      // reductions; sum/mean now accept vec2 bodies directly and
+      // emit a vec2<f32> accumulator.)
+      let avg = mean n in neighbors { heading@n }
       // Normalize the neighborhood mean. When neighbors agree, the
       // mean is unit length already; when they disagree, the mean
       // shrinks toward zero and normalization commits to whichever
@@ -182,9 +179,7 @@ step {
       // Local alignment = |neighborhood-mean heading|. 1.0 means
       // every neighbor (and self) point the same way; 0.0 means the
       // mean cancels (a defect core).
-      let mx = mean n in neighbors { heading@n.x }
-      let my = mean n in neighbors { heading@n.y }
-      set align = length(vec2(mx, my))
+      set align = length(mean n in neighbors { heading@n })
     }
   }
 }

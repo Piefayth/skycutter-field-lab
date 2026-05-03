@@ -474,22 +474,32 @@ function typeOfCall(ast, locals, ctx, label) {
 
 function typeOfNeighborReduce(ast, locals, ctx, label) {
   const bodyLabel = `${label} ${ast.op}-reduction`;
-  // Bindings (v1-shape) introduce neighbor names that are scalar reads
-  // of their bound fields.
+  // Legacy v1-shape bindings — pre-neighbor field name + value name.
+  // The v2 shape uses CoordRead inside the body and doesn't go through
+  // this branch.
   const innerLocals = new Map(locals);
   for (const binding of ast.bindings ?? []) {
     const ftype = ctx.fieldTypes.get(binding.field);
     if (ftype === "vec2") {
-      throwTypeError(`${bodyLabel}: binding "${binding.name}" is bound to vec2 field "${binding.field}" — neighbor reductions only carry scalar values today`);
+      throwTypeError(`${bodyLabel}: binding "${binding.name}" is bound to vec2 field "${binding.field}" — v1-shape bindings only carry scalar values`);
     }
     innerLocals.set(binding.name, ftype ?? "unknown");
   }
   const bodyType = typeOfExpr(ast.body, innerLocals, ctx, bodyLabel);
-  if (bodyType === "vec2") {
-    throwTypeError(`${bodyLabel}: neighbor reduction body produces a vec2 — reductions accumulate scalars; take a component or use \`length(...)\``);
-  }
   if (bodyType === "bool") {
     throwTypeError(`${bodyLabel}: neighbor reduction body produces a bool — reductions accumulate numeric values`);
+  }
+  // Vec2 bodies are now allowed for `sum` and `mean` — accumulator is
+  // `vec2<f32>(0, 0)` and the per-neighbor value adds component-wise.
+  // `max` / `min` over vec2 has no clean meaning (component-wise max
+  // is rarely what you want — does pyramid.x = max(a.x, b.x), .y =
+  // max(a.y, b.y) get you anywhere?), so reject those explicitly with
+  // a redirect.
+  if (bodyType === "vec2") {
+    if (ast.op === "max" || ast.op === "min") {
+      throwTypeError(`${bodyLabel}: ${ast.op} over a vec2 isn't well-defined — split into per-component reductions or take \`length(...)\` if you want magnitude`);
+    }
+    return "vec2";
   }
   return "f32";
 }

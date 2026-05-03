@@ -317,6 +317,59 @@ step {
     "vec2(...) call lowers to WGSL native constructor");
 });
 
+test("vec2 sum reduction emits vec2 accumulator + zero literal", () => {
+  // `sum n in neighbors { wind@n }` over a vec2 field produces a
+  // vec2-typed accumulator: `var nr_0: vec2<f32> = vec2<f32>(0.0, 0.0)`,
+  // and the per-tick body adds the per-neighbor vec2 onto it.
+  const recipe = compileV2(`
+recipe "VecSum"
+substrate geodesic frequency 16
+field wind: vec2
+field windSum: vec2
+
+step {
+  stage s "Sum" {
+    reads wind
+    writes windSum
+    cell {
+      set windSum = sum n in neighbors { wind@n }
+    }
+  }
+}
+`);
+  const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
+  assert(pass.source.includes("var nr_0: vec2<f32> = vec2<f32>(0.0, 0.0)"),
+    "vec2 sum body must emit a vec2 accumulator initialised to (0,0)");
+  assert(/nr_0\s*=\s*nr_0\s*\+\s*\(_n_wind\)/.test(pass.source),
+    "loop body must accumulate the vec2 per-neighbor read directly");
+});
+
+test("vec2 mean reduction divides the vec2 sum by neighbor count", () => {
+  const recipe = compileV2(`
+recipe "VecMean"
+substrate geodesic frequency 16
+field wind: vec2
+field windAvg: vec2
+
+step {
+  stage s "Mean" {
+    reads wind
+    writes windAvg
+    cell {
+      set windAvg = mean n in neighbors { wind@n }
+    }
+  }
+}
+`);
+  const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
+  assert(pass.source.includes("var nr_0_sum: vec2<f32> = vec2<f32>(0.0, 0.0)"),
+    "mean's sum accumulator must be vec2");
+  assert(pass.source.includes("var nr_0: vec2<f32> = vec2<f32>(0.0, 0.0)"),
+    "mean's result accumulator must be vec2");
+  assert(/select\(vec2<f32>\(0\.0,\s*0\.0\),\s*nr_0_sum\s*\/\s*f32\(nr_0_count\)/.test(pass.source),
+    "empty-neighbor guard must select between matching vec2<f32> branches");
+});
+
 test("neighbor reduction over vec2 field component emits per-neighbor vec2 local", () => {
   // Regression: emitReduction hardcoded the per-neighbor binding's
   // WGSL type as f32, so a body like `mean n in neighbors {
