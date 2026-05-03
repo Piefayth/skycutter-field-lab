@@ -29,11 +29,17 @@ export async function createGeodesicPreview({ scene, globe, frequency = 48, grid
   // max-density case (one arrow per cell); setDrawRange() crops to
   // the stride-decimated count.
   const arrowsBuffer = new Float32Array(grid.cellCount * 9);
+  // Per-vertex colors: each arrow is shaded by the luminance of the
+  // tile underneath it. Bright tile → black arrow, dark tile → white
+  // arrow. Per-vertex (rather than per-arrow) so a future shading
+  // change (e.g. gradient from base to tip) drops in cleanly.
+  const arrowsColorsBuffer = new Float32Array(grid.cellCount * 9);
   const arrowsGeometry = new THREE.BufferGeometry();
   arrowsGeometry.setAttribute("position", new THREE.BufferAttribute(arrowsBuffer, 3));
+  arrowsGeometry.setAttribute("color", new THREE.BufferAttribute(arrowsColorsBuffer, 3));
   arrowsGeometry.setDrawRange(0, 0);
   const arrowsMaterial = new THREE.MeshBasicMaterial({
-    color: 0xffffff,
+    vertexColors: true,
     side: THREE.DoubleSide,
     transparent: false,
     depthTest: true,
@@ -66,7 +72,7 @@ export async function createGeodesicPreview({ scene, globe, frequency = 48, grid
       if (!force && key === lastRefreshKey) return;
       lastRefreshKey = key;
       refreshColors({ grid, geometry, fields, viewSpec });
-      populateArrows({ grid, fields, viewSpec, arrowsBuffer, arrowsGeometry, arrowsMesh });
+      populateArrows({ grid, geometry, fields, viewSpec, arrowsBuffer, arrowsColorsBuffer, arrowsGeometry, arrowsMesh });
     },
     update() {},
     dispose() {
@@ -98,7 +104,7 @@ export async function createGeodesicPreview({ scene, globe, frequency = 48, grid
 // long. Default length=0.5 → half a cell. Width is 30% of length
 // — makes the triangle pointy enough that direction reads clearly,
 // not so thin it disappears at small sizes.
-function populateArrows({ grid, fields = {}, viewSpec, arrowsBuffer, arrowsGeometry, arrowsMesh }) {
+function populateArrows({ grid, geometry, fields = {}, viewSpec, arrowsBuffer, arrowsColorsBuffer, arrowsGeometry, arrowsMesh }) {
   const arrows = viewSpec?.arrows;
   if (!arrows) {
     arrowsMesh.visible = false;
@@ -109,6 +115,11 @@ function populateArrows({ grid, fields = {}, viewSpec, arrowsBuffer, arrowsGeome
     arrowsMesh.visible = false;
     return;
   }
+  // Tile-mesh color buffer (just written by refreshColors). Sampled
+  // per cell to compute the contrasting arrow color — bright tile →
+  // black arrow, dark tile → white arrow.
+  const tileColors = geometry.getAttribute("color")?.array;
+  const tileStarts = geometry.userData.tileStarts;
   // Sphere-radius offset so arrows sit just above the tile mesh
   // (tiles at 1.006 + polygonOffset). Bumping arrows to 1.020 keeps
   // them visually atop the tiles even at extreme camera angles.
@@ -165,9 +176,32 @@ function populateArrows({ grid, fields = {}, viewSpec, arrowsBuffer, arrowsGeome
     arrowsBuffer[writeIdx++] = tipx;
     arrowsBuffer[writeIdx++] = tipy;
     arrowsBuffer[writeIdx++] = tipz;
+
+    // Pick contrasting color from the tile's luminance. tileColors is
+    // 0..1 per channel; tileStarts[cell] gives the first vertex of
+    // that cell's fan. Rec.601 luma weights — gives ~white on cold
+    // blue (matches lab convention) and ~black on warm yellow.
+    let r = 0, g = 0, b = 0;
+    if (tileColors && tileStarts) {
+      const v = tileStarts[cell] * 3;
+      r = tileColors[v]; g = tileColors[v + 1]; b = tileColors[v + 2];
+    }
+    const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+    const c = luma > 0.55 ? 0 : 1;
+    const colorIdx = arrowCount * 9;
+    arrowsColorsBuffer[colorIdx + 0] = c;
+    arrowsColorsBuffer[colorIdx + 1] = c;
+    arrowsColorsBuffer[colorIdx + 2] = c;
+    arrowsColorsBuffer[colorIdx + 3] = c;
+    arrowsColorsBuffer[colorIdx + 4] = c;
+    arrowsColorsBuffer[colorIdx + 5] = c;
+    arrowsColorsBuffer[colorIdx + 6] = c;
+    arrowsColorsBuffer[colorIdx + 7] = c;
+    arrowsColorsBuffer[colorIdx + 8] = c;
     arrowCount++;
   }
   arrowsGeometry.attributes.position.needsUpdate = true;
+  arrowsGeometry.attributes.color.needsUpdate = true;
   arrowsGeometry.setDrawRange(0, arrowCount * 3);
   arrowsMesh.visible = arrowCount > 0;
 }
