@@ -715,6 +715,15 @@ function visitExpr(expr, onIdentifier) {
       // surrounding stage / metric needs to know the field is read, so
       // we surface it as an Identifier hit.
       onIdentifier(expr.field);
+      // Continuous-position coords (`@upstream`) carry expressions for
+      // the velocity components and dt; their identifiers must be
+      // walked so the pass's read set picks up vector fields like the
+      // klausmeier `slope` referenced via `slope.x` / `slope.y`.
+      if (expr.coord?.kind === "upstream") {
+        visitExpr(expr.coord.velX, onIdentifier);
+        visitExpr(expr.coord.velY, onIdentifier);
+        visitExpr(expr.coord.dt, onIdentifier);
+      }
       break;
   }
 }

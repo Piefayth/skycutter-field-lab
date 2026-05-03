@@ -697,6 +697,63 @@ step {
     `expected gradient-on-vec2 error; got: ${threw}`);
 });
 
+test("@upstream coord-arg field references add the field to pass.reads", async () => {
+  // Regression: a stage that reads field `slope` only via the velocity
+  // arguments of `field@upstream(velX, velY, dt)` would silently drop
+  // `slope` from pass.reads, leaving the WGSL referencing an unbound
+  // identifier. The compiler must walk velX/velY/dt expressions when
+  // collecting per-target dependencies.
+  const { compileV2 } = await import("./compile-v2.mjs");
+  const recipe = compileV2(`
+recipe "Upstream args"
+substrate geodesic frequency 16
+field w: f32
+field slope: vec2
+
+step {
+  stage flow "Flow downhill" {
+    reads w, slope
+    writes w
+    cell {
+      set w = w@upstream(slope.x, slope.y, dt)
+    }
+  }
+}
+`);
+  const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
+  assert(pass.reads.includes("slope"), `pass.reads must include slope (got ${JSON.stringify(pass.reads)})`);
+  assert(pass.source.includes("var<storage, read> f_slope: array<vec2<f32>>"),
+    "slope must be bound as array<vec2<f32>>");
+  assert(pass.source.includes("v_slope.x") && pass.source.includes("v_slope.y"),
+    "@upstream args must reference the typed v_slope local");
+});
+
+test("validator rejects unknown identifier in @upstream coord arguments", async () => {
+  const { compileV2 } = await import("./compile-v2.mjs");
+  let threw = null;
+  try {
+    compileV2(`
+recipe "Bad upstream"
+substrate geodesic frequency 16
+field w: f32
+
+step {
+  stage flow "Flow downhill" {
+    reads w
+    writes w
+    cell {
+      set w = w@upstream(notDeclared, 0, dt)
+    }
+  }
+}
+`);
+  } catch (e) {
+    threw = e;
+  }
+  assert(threw, "expected validation error for unknown identifier in @upstream args");
+  assert(/notDeclared/.test(threw.message), `expected error to mention notDeclared, got: ${threw.message}`);
+});
+
 test("WGSL compiler emits f_<name>_prev binding for prev() reads", () => {
   const recipe = compileDsl(`
 recipe "Hist"

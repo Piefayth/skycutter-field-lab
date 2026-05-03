@@ -571,7 +571,7 @@ function validateExpr(
       validateNeighborReduce(ast, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers, allowImplicitGeo);
       return;
     case "CoordRead":
-      validateCoordRead(ast, visibleFields, locals, label, imports);
+      validateCoordRead(ast, visibleFields, locals, label, imports, declaredParams, declaredConstants, declaredPlanet, extraIdentifiers, allowImplicitGeo);
       return;
     default:
       throw new Error(`${label}: unknown expression node ${ast.type}`);
@@ -585,7 +585,7 @@ function validateExpr(
 // `prev` flavor additionally requires the field to be declared as a
 // history-eligible source (validated in the wider validateStages pass
 // via imports.historyFields, mirroring the legacy `prev()` Call check).
-function validateCoordRead(ast, visibleFields, locals, label, imports) {
+function validateCoordRead(ast, visibleFields, locals, label, imports, declaredParams = new Set(), declaredConstants = new Set(), declaredPlanet = new Set(), extraIdentifiers = new Set(), allowImplicitGeo = true) {
   if (!ast.field || !ast.coord?.kind) {
     throw new Error(`${label}: malformed CoordRead`);
   }
@@ -615,6 +615,15 @@ function validateCoordRead(ast, visibleFields, locals, label, imports) {
     // in webgpu-geodesic-compiler.mjs). Needs the same neighbor
     // topology binding NeighborReduce uses.
     requireImport(imports, "core", "neighbor", label);
+    // The velocity components and dt are arbitrary expressions — they
+    // commonly reference other fields (e.g. `slope.x` / `slope.y`),
+    // params, or locals. Walk them through the full expression
+    // validator so unknown identifiers fail at validation time rather
+    // than emerging as unbound symbols in WGSL.
+    const argLabel = `${label} (${ast.field}@upstream args)`;
+    validateExpr(ast.coord.velX, visibleFields, locals, argLabel, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers, allowImplicitGeo);
+    validateExpr(ast.coord.velY, visibleFields, locals, argLabel, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers, allowImplicitGeo);
+    validateExpr(ast.coord.dt,   visibleFields, locals, argLabel, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers, allowImplicitGeo);
     return;
   }
   throw new Error(`${label}: unsupported coord kind "${ast.coord.kind}"`);
