@@ -1,5 +1,6 @@
 import {
   blockStackAt,
+  cursorContextForAst,
   defaultFoldRanges,
   foldRangeForLine,
   lineIndentDepth,
@@ -81,6 +82,22 @@ test("AST scanner reports block context at a cursor", () => {
   const ast = parseDslAst(SOURCE);
   const pos = SOURCE.indexOf("color ramp");
   assertEq(blockStackAt(ast, pos).map((b) => b.keyword), ["views", "view"]);
+});
+
+test("AST scanner classifies scenario for-each bodies as init cell body", () => {
+  const source = `
+scenarios {
+  scenario seeded {
+    for each cell where lat > 0 {
+      set u = cellRand()
+    }
+  }
+}`;
+  const ast = parseDslAst(source);
+  const pos = source.indexOf("set u");
+  const ctx = cursorContextForAst(ast, pos);
+  assertEq(ctx.mode, "initCellBody");
+  assertEq(ctx.stack.map((b) => b.keyword), ["scenarios", "scenario", "for"]);
 });
 
 test("AST scanner derives indentation depth from block scope", () => {

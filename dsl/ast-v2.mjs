@@ -12,7 +12,7 @@ import {
 const KNOWN_BLOCKS = new Set([
   "views", "stamps", "scenarios",
   "palette", "view", "stamp", "scenario",
-  "step", "stage", "cell", "when",
+  "step", "stage", "cell", "when", "for",
 ]);
 
 export function parseDslAst(source) {

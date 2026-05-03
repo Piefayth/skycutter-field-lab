@@ -1095,6 +1095,7 @@ function classifyMode(stack) {
   for (let i = stack.length - 1; i >= 0; i--) {
     const keyword = stack[i].keyword;
     if (keyword === "?" || keyword === "when") continue;
+    if (keyword === "for") return "initCellBody";
     if (keyword === "cell") return "cellBody";
     if (keyword === "view") return "viewBody";
     if (keyword === "palette") return "paletteBody";

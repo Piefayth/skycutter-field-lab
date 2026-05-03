@@ -226,6 +226,7 @@ function classifyContext(ctx) {
     break;
   }
   if (!inner) return { mode: "topLevel" };
+  if (inner === "for") return { mode: "initCellBody" };
   if (inner === "cell") return { mode: "cellBody" };
   if (inner === "view") return { mode: "viewBody" };
   if (inner === "palette") return { mode: "paletteBody" };
@@ -573,6 +574,18 @@ function optionsForGrammarPosition(ctx, mode, prefix) {
   }
 
   if (mode.mode === "cellBody") {
+    if (/^\s*(set|add)\s+$/.test(line)) return structural(fieldsFromAst(ctx));
+    if (initial || /^\s*[A-Za-z_]*$/.test(trimmed)) {
+      return structural([
+        structuralOption("let", "let name = expr"),
+        structuralOption("set", "set field = expr"),
+        structuralOption("add", "add field = expr"),
+        structuralOption("when", "when condition { ... }"),
+      ]);
+    }
+  }
+
+  if (mode.mode === "initCellBody") {
     if (/^\s*(set|add)\s+$/.test(line)) return structural(fieldsFromAst(ctx));
     if (initial || /^\s*[A-Za-z_]*$/.test(trimmed)) {
       return structural([
