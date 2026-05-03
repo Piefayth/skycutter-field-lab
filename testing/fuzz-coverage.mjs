@@ -14,7 +14,12 @@
 
 import test from "node:test";
 import { runFuzz } from "./fuzz-v2.mjs";
+import { runNegativeFuzz } from "./negative-fuzz-v2.mjs";
 
 test("fuzz 500 seeds for coverage measurement", async () => {
   await runFuzz({ count: 500, seedStart: 1, wgsl: true, log: () => {} });
+});
+
+test("negative fuzz 500 seeds — exercise validator rejection branches", () => {
+  runNegativeFuzz({ count: 500, seedStart: 1, log: () => {} });
 });
