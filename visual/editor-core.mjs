@@ -9,7 +9,7 @@ import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers, drawSelection, highlightActiveLine, highlightActiveLineGutter, tooltips } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import {
-  syntaxHighlighting, indentOnInput, bracketMatching, foldGutter, foldKeymap,
+  syntaxHighlighting, indentOnInput, bracketMatching, foldGutter, foldKeymap, foldService,
 } from "@codemirror/language";
 import { lintGutter, setDiagnostics as setLintDiagnostics } from "@codemirror/lint";
 import { javascript } from "@codemirror/lang-javascript";
@@ -101,6 +101,7 @@ export function createEditorView({ parent, onApply, onDocChange, language = "jav
         languageCompartment.of(isFieldLab
           ? createFieldLabExtensions([])
           : [syntaxHighlighting(fieldLabHighlight), javascript()]),
+        ...(isFieldLab ? [fieldLabBraceFoldService] : []),
         ...(isFieldLab ? [dslHoverTooltip(), dslAutocomplete()] : []),
         // Tooltips render at the body level with `position: fixed` so
         // they (a) escape the floating window's `overflow: hidden`
@@ -168,4 +169,99 @@ export function createEditorView({ parent, onApply, onDocChange, language = "jav
   }
 
   return { view, setSource, getSource, setFieldNames, refreshLayout, setDiagnostics };
+}
+
+const fieldLabBraceFoldService = foldService.of((state, lineStart, lineEnd) => {
+  const line = state.doc.sliceString(lineStart, lineEnd);
+  const openOffset = findFoldOpeningBrace(line);
+  if (openOffset < 0) return null;
+
+  const openPos = lineStart + openOffset;
+  const closePos = findMatchingBrace(state.doc.toString(), openPos);
+  if (closePos < 0) return null;
+
+  const openLine = state.doc.lineAt(openPos);
+  const closeLine = state.doc.lineAt(closePos);
+  if (closeLine.number <= openLine.number) return null;
+
+  return { from: openPos + 1, to: closePos };
+});
+
+function findFoldOpeningBrace(line) {
+  let quote = null;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    const next = line[i + 1];
+    if (quote) {
+      if (ch === "\\") {
+        i++;
+      } else if (ch === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (ch === "/" && next === "/") return -1;
+    if (ch === "\"" || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "{") return i;
+  }
+  return -1;
+}
+
+function findMatchingBrace(text, openPos) {
+  let depth = 1;
+  let quote = null;
+  let lineComment = false;
+  let blockComment = false;
+
+  for (let i = openPos + 1; i < text.length; i++) {
+    const ch = text[i];
+    const next = text[i + 1];
+
+    if (lineComment) {
+      if (ch === "\n") lineComment = false;
+      continue;
+    }
+    if (blockComment) {
+      if (ch === "*" && next === "/") {
+        blockComment = false;
+        i++;
+      }
+      continue;
+    }
+    if (quote) {
+      if (ch === "\\") {
+        i++;
+      } else if (ch === quote) {
+        quote = null;
+      }
+      continue;
+    }
+
+    if (ch === "/" && next === "/") {
+      lineComment = true;
+      i++;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      blockComment = true;
+      i++;
+      continue;
+    }
+    if (ch === "\"" || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "{") {
+      depth++;
+      continue;
+    }
+    if (ch === "}") {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
 }

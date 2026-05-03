@@ -122,6 +122,9 @@ export { sourceRefTag };
 //
 // - "field-list" / "source-list": every subsequent identifier is a
 //   declaration site (e.g. `field pressure, moisture, cloud`).
+// - "field-def": only the first identifier is a field definition site;
+//   if the live field-name extractor already knows it, use the field's
+//   per-name color token instead of generic definition styling.
 // - "single-def": only the first identifier is the definition site;
 //   anything after (modifiers, values, label string) is regular.
 // - "namespace" (legacy name; v2 import lines): the leading
@@ -130,10 +133,10 @@ export { sourceRefTag };
 //   highlighter (italic info-color).
 const LINE_MODES = {
   // V2 fields are one-per-line with a type annotation (`field u: f32`).
-  // The "single-def" mode highlights the first identifier as a definition
-  // and lets the rest of the line tokenize normally (type annotation,
-  // optional `derived`).
-  field: "single-def",
+  // The "field-def" mode highlights the first identifier with the same
+  // per-field colour used for references and graph chips, then lets the
+  // rest of the line tokenize normally (type annotation, optional `derived`).
+  field: "field-def",
   param: "single-def",
   const: "single-def",
   stage: "single-def",
@@ -344,9 +347,19 @@ function makeFieldLabLanguage({ fieldTags, tokenNames, sourceTokenNames, immutab
       if (BOOLEANS.has(word)) return "bool";
       if (NULLS.has(word)) return "null";
 
-      // Def-site short-circuit. `stamp X "..."`, `preset X`, `stage X`,
-      // `param X`, `const X` style their leading id as a definition
-      // even when the id collides with an existing field name.
+      // Field declaration site. Once the editor has re-extracted the
+      // declared name, use the same per-field token as references so
+      // `field theta: f32` matches later `theta` reads/writes. While the
+      // user is still typing a brand-new name, fall back to generic
+      // definition styling until the next extraction pass catches up.
+      if (state.lineMode === "field-def" && !state.defConsumed) {
+        state.defConsumed = true;
+        return tokenNames.get(word) ?? "definitionName";
+      }
+
+      // Def-site short-circuit. `stamp X "..."`, `stage X`, `param X`,
+      // `const X` style their leading id as a definition even when the id
+      // collides with an existing field name.
       if (state.lineMode === "single-def" && !state.defConsumed) {
         state.defConsumed = true;
         return "definitionName";
