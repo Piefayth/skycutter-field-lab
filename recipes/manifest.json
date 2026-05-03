@@ -145,6 +145,30 @@
       "name": "Drossel-Schwabl forest fire (example)",
       "path": "recipes/drossel-schwabl.mjs",
       "summary": "Canonical self-organised-criticality CA. Three states per cell — empty / tree / burning. Trees grow from empty cells with probability p; lightning ignites trees with probability f; burning cells spread to tree neighbours and become empty next tick. At small f and p≫f the fire-size distribution is a power law; this is the textbook example of SOC."
+    },
+    {
+      "id": "sandpile",
+      "name": "BTW sandpile (example)",
+      "path": "recipes/sandpile.mjs",
+      "summary": "Bak-Tang-Wiesenfeld sandpile. Slowly drop grains; when a cell reaches the toppling threshold (6) it loses 6 grains and sends 1 to each neighbour, possibly cascading. The 12 pentagonal cells (5 neighbours) dissipate one grain per topple, so the icosphere self-organises around a critical density set by mass-balance with these pinned defects. SOC by deterministic toppling — complementary to the forest-fire recipe's stochastic-ignition mechanism."
+    },
+    {
+      "id": "greenberg-hastings",
+      "name": "Greenberg-Hastings excitable medium (example)",
+      "path": "recipes/greenberg-hastings.mjs",
+      "summary": "Minimal CA model of excitable media. Each cell holds an integer phase: 0 = resting, 1 = excited, 2..K-1 = refractory. Resting cells fire when any neighbour is excited; everything else marches toward rest. Drop a half-wave on the sphere and it closes into a rotating spiral pinned to a pentagonal cell. The discrete-state cousin of FitzHugh-Nagumo."
+    },
+    {
+      "id": "eden-growth",
+      "name": "Eden growth (example)",
+      "path": "recipes/eden-growth.mjs",
+      "summary": "Simplest stochastic aggregation. Each empty cell with an occupied neighbour flips to occupied with probability g per tick. From a single seed the cluster expands with a rough advancing front; the icosphere's 12 pentagonal cells subtly perturb the boundary but the bulk grows isotropically. The front roughens as ~t^β before saturating when the cluster wraps the sphere."
+    },
+    {
+      "id": "coupled-logistic-map",
+      "name": "Coupled-map lattice (example)",
+      "path": "recipes/coupled-logistic-map.mjs",
+      "summary": "Per-cell logistic map x' = r·x·(1−x) with diffusive coupling ε to the local mean. At ε=0 every cell is its own chaotic process; at intermediate ε you get Kaneko's spatiotemporal intermittency — frozen random patches that occasionally rupture; at large ε the sphere locks into a coherent oscillator. The only recipe in the catalog using deterministic chaos rather than explicit randomness."
     }
   ]
 }
