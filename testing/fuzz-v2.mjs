@@ -58,6 +58,10 @@ const MATH_FUNCS_1 = ["sin", "cos", "exp", "abs", "sqrt", "wrapAngle"];
 const MATH_FUNCS_2 = ["pow", "atan2", "min", "max"];
 const BIN_OPS = ["+", "-", "*", "/"];
 const REDUCE_OPS = ["sum", "mean", "max", "min"];
+// Comparison ops produce a bool from two scalars. v2 surface accepts
+// the C-flavour symbols directly; the parser also has `and`/`or`/`not`
+// keyword forms but the symbols match what shipped recipes use.
+const CMP_OPS = ["==", "!=", "<", "<=", ">", ">="];
 
 class FuzzCtx {
   constructor(seed) {
@@ -169,11 +173,62 @@ function genCellExpr(ctx, scope, depth = 0) {
   if (choice < 0.92 && scope.neighborBound && scope.scalarReads.length > 0) {
     return pick(r, scope.scalarReads) + `@${scope.neighborBound}`;
   }
-  // Neighbor reduction — only at top level of a *non-reduction* scope.
-  if (!scope.neighborBound && scope.scalarReads.length > 0 && depth <= 1) {
+  // Ternary — `cond ? a : b` produces a scalar from a bool predicate
+  // and two scalar branches. Stays at the deeper levels only so we
+  // don't drown the body in conditionals.
+  if (choice < 0.97 && depth <= 1) {
+    const cond = genBoolExpr(ctx, scope, depth + 1);
+    const a = genCellExpr(ctx, scope, depth + 1);
+    const b = genCellExpr(ctx, scope, depth + 1);
+    return `((${cond}) ? (${a}) : (${b}))`;
+  }
+  // Neighbor reduction — only at top level of a *non-reduction* scope,
+  // and never inside a predicate (when / where clauses use the
+  // simple expression grammar which doesn't accept reductions).
+  if (!scope.neighborBound && !scope.disallowReductions && scope.scalarReads.length > 0 && depth <= 1) {
     return genNeighborReduce(ctx, scope, depth + 1);
   }
   return round(r() * 2).toString();
+}
+
+// Generate a bool-typed expression. Used for `when` predicates,
+// `count cells where` clauses, and ternary conditions. Forms:
+//   - comparison:   scalar OP scalar  (==, !=, <, <=, >, >=)
+//   - logical AND:  bool and bool
+//   - logical OR:   bool or bool
+//   - logical NOT:  not bool
+// The shipped recipes use the keyword forms (`and`, `or`, `not`); the
+// generator follows suit so the parser exercises that path.
+function genBoolExpr(ctx, scope, depth = 0) {
+  const r = ctx.rng;
+  // Predicates use a stricter expression grammar than cell bodies —
+  // neighbor reductions, @prev / @upstream / @n, etc. don't parse
+  // in `when` or `where` contexts. Force a predicate-flavoured
+  // sub-scope so the leaf generator avoids those branches.
+  scope = { ...scope, disallowReductions: true };
+  if (depth >= 2 || r() < 0.55) {
+    return genCmpExpr(ctx, scope, depth);
+  }
+  const choice = r();
+  if (choice < 0.45) {
+    const lhs = genBoolExpr(ctx, scope, depth + 1);
+    const rhs = genBoolExpr(ctx, scope, depth + 1);
+    return `(${lhs} and ${rhs})`;
+  }
+  if (choice < 0.80) {
+    const lhs = genBoolExpr(ctx, scope, depth + 1);
+    const rhs = genBoolExpr(ctx, scope, depth + 1);
+    return `(${lhs} or ${rhs})`;
+  }
+  return `(not (${genBoolExpr(ctx, scope, depth + 1)}))`;
+}
+
+function genCmpExpr(ctx, scope, depth) {
+  const r = ctx.rng;
+  const op = pick(r, CMP_OPS);
+  const lhs = genCellExpr(ctx, scope, depth + 1);
+  const rhs = genCellExpr(ctx, scope, depth + 1);
+  return `(${lhs} ${op} ${rhs})`;
 }
 
 // Generate a vec2-valued expression for vec2 field assignments.
@@ -297,14 +352,13 @@ function genStage(ctx, name, { allowPrev = false } = {}) {
     }
   }
   // Sometimes wrap a set/add inside a `when` to exercise the
-  // conditional path. Predicate references a scalar in scope.
-  if (maybe(r, 0.25) && body.length > 0 && scalarReads.length > 0) {
+  // conditional path. Predicate is a full bool expression — exercises
+  // the comparison + logical (and/or/not) parser branches.
+  if (maybe(r, 0.30) && body.length > 0 && (scalarReads.length > 0 || vec2Reads.length > 0)) {
     const lastIdx = body.length - 1;
     const last = body[lastIdx];
     if (last.startsWith("set ") || last.startsWith("add ")) {
-      const predField = pick(r, scalarReads);
-      const threshold = round(r() * 2 - 1, 2);
-      body[lastIdx] = `when ${predField} > ${threshold} { ${last} }`;
+      body[lastIdx] = `when ${genBoolExpr(ctx, scope)} { ${last} }`;
     }
   }
   return { name, reads, writes, body };
@@ -421,15 +475,36 @@ export function generateRecipe(seed) {
   lines.push("}");
   lines.push("");
 
-  // Metrics
-  const numMetrics = intIn(r, 1, 2);
+  // Metrics. Mix the full reduction zoo:
+  //   - sum / mean / max / min   with a scalar body, optionally
+  //                              gated by `where PRED`
+  //   - count                    where PRED only (no body)
+  // Predicates use the bool expression generator → exercises the
+  // comparison/logical/ternary parser branches in metric context.
+  const metricScope = {
+    scalarReads: ctx.scalarFields().map(f => f.name),
+    vec2Reads: ctx.vec2Fields().map(f => f.name),
+    locals: [],
+    neighborBound: null,
+    allowPrev: false,
+    prevAllowedFields: [],
+    prevAllowedVec2: [],
+  };
+  const numMetrics = intIn(r, 1, 3);
   for (let i = 0; i < numMetrics; i++) {
+    const useCount = maybe(r, 0.3);
+    if (useCount) {
+      lines.push(`metric m${i} = count cells where ${genBoolExpr(ctx, metricScope)}`);
+      continue;
+    }
     const op = pick(r, REDUCE_OPS);
-    const f = pick(r, ctx.scalarFields());
-    if (op === "count") {
-      lines.push(`metric m${i} = count cells where ${f.name} > 0`);
+    const body = ctx.scalarFields().length > 0
+      ? pick(r, ctx.scalarFields()).name
+      : "1";
+    if (maybe(r, 0.3)) {
+      lines.push(`metric m${i} = ${op} cells where ${genBoolExpr(ctx, metricScope)} { ${body} }`);
     } else {
-      lines.push(`metric m${i} = ${op} cells { ${f.name} }`);
+      lines.push(`metric m${i} = ${op} cells { ${body} }`);
     }
   }
   lines.push("");
