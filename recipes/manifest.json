@@ -67,6 +67,12 @@
       "name": "Vicsek flock (example)",
       "path": "recipes/vicsek-flock.mjs",
       "summary": "Emergent flocking on a sphere. Each cell has a heading vec2; each tick it adopts the neighborhood-mean direction plus a random rotation. Below the critical noise the whole sphere polarizes into one color; above it, alignment is frustrated and topological defects drift around. Sweep NOISE η = 0.1 → 0.5 to watch a real second-order phase transition."
+    },
+    {
+      "id": "schrodinger",
+      "name": "Schrödinger packet (example)",
+      "path": "recipes/schrodinger.mjs",
+      "summary": "Quantum particle on a sphere — i·dψ/dt = Ĥψ in real and imaginary parts, symplectic leapfrog time stepping. Default scenario releases an eastward Gaussian wavepacket at the equator; watch it disperse, traverse the sphere, hit its own backside, and fill the surface with self-interference caustics. Paint potentials with the WELL or BARRIER stamps to bend the wave."
     }
   ]
 }
