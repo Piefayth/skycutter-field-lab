@@ -1,4 +1,9 @@
-import { cellActionsCstToAst, expressionCstToAst, stageCstToAst } from "./cst-to-ast-v2.mjs";
+import {
+  cellActionsCstToAst,
+  expressionCstToAst,
+  metricCstToAst,
+  stageCstToAst,
+} from "./cst-to-ast-v2.mjs";
 import { parseDslCst } from "./cst-v2.mjs";
 import { parseV2 } from "./parse-v2.mjs";
 
@@ -79,6 +84,23 @@ step {
   const expected = parseV2(source).stages[0];
   const cst = parseDslCst(source);
   const actual = stageCstToAst(cst, cst.blocks.find((block) => block.keyword === "stage"));
+  assertEq(actual, expected);
+});
+
+test("CST metric projection matches parse-v2 for body and predicate", () => {
+  const source = `
+recipe "Projection"
+substrate geodesic frequency 16
+field u: f32
+step { stage s { reads u; writes u; cell { set u = u } } }
+metric active = count cells where abs(u) > 0.1
+metric energy = sum cells { u * u + u@prev }
+`;
+  const expected = parseV2(source).metrics;
+  const cst = parseDslCst(source);
+  const actual = cst.statements
+    .filter((stmt) => stmt.keyword === "metric")
+    .map(metricCstToAst);
   assertEq(actual, expected);
 });
 

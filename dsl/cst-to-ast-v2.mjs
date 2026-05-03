@@ -122,6 +122,24 @@ export function stageCstToAst(cst, stageBlock) {
   };
 }
 
+export function metricCstToAst(stmt) {
+  if (!stmt || stmt.keyword !== "metric") {
+    throw new Error("v2 CST projection: expected metric statement");
+  }
+  const parts = [...stmt.cleanText.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)].map((m) => m[0]);
+  const id = parts[1] ?? null;
+  const op = parts.find((word, index) => index > 1 && ["sum", "max", "min", "mean", "count"].includes(word)) ?? null;
+  if (!id || !op) throw new Error("v2 CST projection: incomplete metric declaration");
+  const predicateSpan = (stmt.expressions ?? []).find((expr) => expr.kind === "metricPredicate");
+  const bodySpan = (stmt.expressions ?? []).find((expr) => expr.kind === "metricBody");
+  return {
+    id,
+    op,
+    predicate: predicateSpan ? expressionCstToAst(predicateSpan.node) : null,
+    body: bodySpan ? expressionCstToAst(bodySpan.node) : null,
+  };
+}
+
 function fieldListFromStatement(stmt) {
   const afterKeyword = stmt.cleanText.slice(stmt.cleanText.indexOf(stmt.keyword) + stmt.keyword.length);
   const items = [];
