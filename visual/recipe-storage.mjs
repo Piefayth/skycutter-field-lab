@@ -1,4 +1,4 @@
-import { compileDsl } from "../dsl/compiler.mjs";
+import { compileV2 as compileDsl } from "../dsl/compile-v2.mjs";
 
 const SAVED_RECIPE_STORAGE_KEY = "skycutter.fieldLab.savedRecipes.v1";
 const RECIPE_FILE_TYPE = "skycutter-field-lab.recipe";

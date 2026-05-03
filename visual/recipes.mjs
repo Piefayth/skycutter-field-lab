@@ -18,7 +18,7 @@ import { createPipelineMetadata } from "./pipeline-metadata.mjs";
 import { setControlHandlers } from "./controls.mjs";
 import { formModal, confirmModal } from "./modal.mjs";
 import { showToast } from "./toast.mjs";
-import { compileDsl } from "../dsl/compiler.mjs";
+import { compileV2 as compileDsl } from "../dsl/compile-v2.mjs";
 import { gray } from "../prims/colorers.mjs";
 import {
   downloadRecipeSnapshot,
@@ -875,8 +875,18 @@ function geodesicFrequencyOverride() {
 function applyGeodesicTileOverride(source) {
   const override = geodesicFrequencyOverride();
   if (override == null) return source;
-  const line = `grid geodesic tiles ${override}`;
-  return source.replace(/^grid\s+geodesic\s+.*$/m, line);
+  // v2 uses `substrate geodesic frequency N`. The legacy v1 form was
+  // `grid geodesic tiles N`. Handle both — the user might have saved
+  // recipe text from before the v2 cutover. Either pattern is replaced
+  // with the v2 substrate directive.
+  const line = `substrate geodesic frequency ${override}`;
+  if (/^substrate\s+geodesic\s+/m.test(source)) {
+    return source.replace(/^substrate\s+geodesic\s+.*$/m, line);
+  }
+  if (/^grid\s+geodesic\s+/m.test(source)) {
+    return source.replace(/^grid\s+geodesic\s+.*$/m, line);
+  }
+  return source;
 }
 
 function requireGeodesicRecipe(recipe) {
