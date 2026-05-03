@@ -61,6 +61,12 @@
       "name": "Shallow water (example)",
       "path": "recipes/shallow-water.mjs",
       "summary": "Depth-averaged fluid on a sphere. gradient(h) drives momentum, divergence(m) drives continuity, dye rides @upstream of the velocity. Drop a height bulge and watch the wave race around the planet, hit the antipode, refocus. Paint dye to see the otherwise-invisible currents."
+    },
+    {
+      "id": "vicsek-flock",
+      "name": "Vicsek flock (example)",
+      "path": "recipes/vicsek-flock.mjs",
+      "summary": "Emergent flocking on a sphere. Each cell has a heading vec2; each tick it adopts the neighborhood-mean direction plus a random rotation. Below the critical noise the whole sphere polarizes into one color; above it, alignment is frustrated and topological defects drift around. Sweep NOISE η = 0.1 → 0.5 to watch a real second-order phase transition."
     }
   ]
 }

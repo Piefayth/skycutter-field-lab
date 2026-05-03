@@ -1211,6 +1211,7 @@ function compileCall(ast, ctx) {
     case "sin":
     case "asin":
     case "cos":
+    case "atan2":
     case "exp":
     case "sqrt":
     case "pow":

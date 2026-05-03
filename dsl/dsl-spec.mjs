@@ -100,6 +100,15 @@ export const MATH_FUNCTIONS = [
     doc: "Cosine. Argument in radians.",
   },
   {
+    name: "atan2",
+    target: "Math.atan2",
+    arity: [2],
+    importNamespace: "core",
+    signature: "atan2(y, x)",
+    doc: "Two-argument arctangent — returns the angle of the vector (x, y) in [-π, π]. Note the y-first argument order (matches WGSL / C / JS). Use to convert vec2 components into a heading angle for phase-coloring or angle-based logic.",
+    example: "let heading = atan2(wind.y, wind.x)",
+  },
+  {
     name: "exp",
     target: "c.exp",
     arity: [1],

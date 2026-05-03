@@ -42,7 +42,7 @@ const F32_BUILTINS = new Set([
 // list (or in VEC2_RETURNING_BUILTINS / SHAPE_SPECIAL_BUILTINS) gets
 // classified as "unknown" and falls through.
 const F32_RETURNING_BUILTINS = new Set([
-  "abs", "min", "max", "hypot", "sin", "cos", "asin", "exp",
+  "abs", "min", "max", "hypot", "sin", "cos", "asin", "atan2", "exp",
   "sqrt", "pow", "smoothstep", "clamp", "cellNoise", "cellRand",
   "wrapAngle",
 ]);

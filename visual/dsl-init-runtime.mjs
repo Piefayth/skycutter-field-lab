@@ -278,6 +278,7 @@ function evalInitCall(name, args, cell) {
   if (name === "sin") return Math.sin(args[0]);
   if (name === "asin") return Math.asin(args[0]);
   if (name === "cos") return Math.cos(args[0]);
+  if (name === "atan2") return Math.atan2(args[0], args[1]);
   if (name === "exp") return Math.exp(args[0]);
   if (name === "sqrt") return Math.sqrt(args[0]);
   if (name === "pow") return Math.pow(args[0], args[1]);
