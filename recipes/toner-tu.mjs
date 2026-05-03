@@ -64,12 +64,22 @@ field flux: vec2 derived            // ρ·v for the continuity divergence
 field speed: f32 derived            // |v| for visualization + metrics
 
 param simRateHz slider 0..360 step 1     default 60   label "SIM RATE"
-param rate      slider 1..40  step 1     default 8    label "RATE"
+// rate is a scalar multiplier on dt — NOT real substepping — so big
+// rate values blow the explicit integrator's CFL bound. Stable
+// envelope at default CS2/DIFF is rate ≤ 1; if you crank CS2 down
+// near zero you can push rate to ~4. The slider goes higher for
+// experimentation but density runaway (visible as both clamp bounds
+// pinned) starts immediately past rate ~2.
+param rate      slider 1..40  step 1     default 1    label "RATE"
 param ALPHA     slider 0..3   step 0.05  default 1.2  label "α (DRIVE)"
 param BETA      slider 0..3   step 0.05  default 1.0  label "β (SATURATE)"
 // Sound speed²: density variations propagate at speed √(c² · ρ).
-// Higher cs2 means tighter pressure smoothing.
-param CS2       slider 0..2   step 0.02  default 0.30 label "c² (PRESSURE)"
+// Higher c² means stronger / faster pressure response — but explicit
+// pressure with no projection step is the integrator's tightest CFL
+// bound. 0.10 at rate=1 is the working sweet spot: visible density
+// bands, mass conserved. Crank past ~0.2 and density runs into the
+// rho_max=8 clamp within seconds.
+param CS2       slider 0..2   step 0.02  default 0.10 label "c² (PRESSURE)"
 param DIFF      slider 0..0.5 step 0.01  default 0.10 label "D (VISCOSITY)"
 param FRICTION  slider 0..1   step 0.01  default 0.20 label "ζ (FRICTION)"
 param NOISE     slider 0..0.5 step 0.005 default 0.05 label "η (NOISE)"
