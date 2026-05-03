@@ -79,6 +79,36 @@
       "name": "Cyclic CA (example)",
       "path": "recipes/cyclic-ca.mjs",
       "summary": "Each cell holds a state in [0, N). Every tick, if any neighbor is at state (self+1) mod N, the cell advances. Random initial state → self-organized rotating spirals across the whole sphere. The 12 pentagonal cells pin spiral cores, giving the dynamics a permanent topological signature of the substrate. First v2 demo of u32 field types."
+    },
+    {
+      "id": "gierer-meinhardt",
+      "name": "Gierer-Meinhardt (example)",
+      "path": "recipes/gierer-meinhardt.mjs",
+      "summary": "Activator-inhibitor R-D — short-range a²/h amplification, long-range h diffusion. The diffusion contrast crystallizes random noise into Turing spots, stripes, or leopard patterns. Sharper than Gray-Scott because the kinetics are multiplicative rather than competitive."
+    },
+    {
+      "id": "brusselator",
+      "name": "Brusselator (example)",
+      "path": "recipes/brusselator.mjs",
+      "summary": "Synthetic two-species R-D from Prigogine + Lefever. Steady state u=A, v=B/A; with D_v ≫ D_u the homogeneous fixed point goes Turing-unstable and noise crystallizes into stripes. Cleanest classroom demo of pattern formation."
+    },
+    {
+      "id": "lengyel-epstein",
+      "name": "Lengyel-Epstein CIMA (example)",
+      "path": "recipes/lengyel-epstein.mjs",
+      "summary": "Chlorite-iodide-malonic-acid R-D — first experimentally confirmed Turing patterns (Castets et al. 1990). Rational kinetics u·v/(1+u²); the σ stiffness lets the inhibitor's effective timescale outrun the activator's so the Turing condition holds even when raw diffusion coefficients are similar."
+    },
+    {
+      "id": "aliev-panfilov",
+      "name": "Aliev-Panfilov (cardiac, example)",
+      "path": "recipes/aliev-panfilov.mjs",
+      "summary": "Modified FitzHugh-Nagumo tuned to cardiac action potentials. State-dependent recovery rate ε(u,v) reproduces restitution and curvature dispersion, which together turn a single plane-wave break into a self-sustaining spiral rotor — the canonical mathematical model of cardiac fibrillation."
+    },
+    {
+      "id": "burgers",
+      "name": "Burgers' equation (example)",
+      "path": "recipes/burgers.mjs",
+      "summary": "Scalar self-advection — du/dt + u·du/dx = ν·∇²u — the simplest PDE that does shock formation. Smooth profiles steepen at their leading edge until viscosity stops the singularity. The NOISE scenario produces Burgers turbulence: a tangled landscape of merging shocks that slowly anneals to a few dominant fronts."
     }
   ]
 }
