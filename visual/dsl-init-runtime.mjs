@@ -24,11 +24,11 @@ function isVec2(v) {
   return v && typeof v === "object" && v.__vec2 === true;
 }
 
-export function buildDslPresetDecls(presets, dsl, getParam) {
+export function buildDslPresetDecls(presets, dsl, getParam, setParam = null) {
   return presets.map((preset) => ({
     id: preset.id,
     label: preset.label ?? preset.id,
-    run: (state) => runDslPreset(state, preset, dsl, getParam),
+    run: (state) => runDslPreset(state, preset, dsl, getParam, setParam),
   }));
 }
 
@@ -40,7 +40,17 @@ export function buildDslStampDecls(stamps, dsl, getParam) {
   }));
 }
 
-function runDslPreset(state, preset, dsl, getParam) {
+function runDslPreset(state, preset, dsl, getParam, setParam) {
+  // Apply param overrides BEFORE running init actions, so any action
+  // that reads a param value (e.g. `set state = numStates * cellRand`)
+  // sees the scenario's choice rather than the previous slider state.
+  // Refresh the snapshot after writing so initContext below picks up
+  // the new values too.
+  if (typeof setParam === "function" && preset.paramOverrides) {
+    for (const [name, value] of Object.entries(preset.paramOverrides)) {
+      setParam(name, value);
+    }
+  }
   const context = initContext(dsl, getParam);
   for (const action of preset.actions ?? []) runPresetAction(state, action, context);
 }

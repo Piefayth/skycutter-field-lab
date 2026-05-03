@@ -199,6 +199,10 @@ function renderBooleanRow(decl) {
   registry.paramEls.set(decl.name, {
     input,
     get value() { return Boolean(input.checked); },
+    set value(v) {
+      input.checked = Boolean(v);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    },
   });
   return label;
 }
@@ -226,6 +230,15 @@ function renderStamps(decls) {
 export function paramValue(name) {
   const handle = registry.paramEls.get(name);
   return handle ? handle.value : undefined;
+}
+
+/** Programmatically set a parameter value — used by scenarios that
+ *  declare `param X = value` inside their body to set up the regime
+ *  on load. No-op if the name doesn't resolve to a live control. */
+export function setParamValue(name, value) {
+  const handle = registry.paramEls.get(name);
+  if (!handle) return;
+  handle.value = value;
 }
 
 /**
@@ -260,6 +273,15 @@ export function makeSlider(input, out, step) {
     input,
     get value() {
       return Number(input.value);
+    },
+    // Programmatic setter — used by scenario param overrides. Dispatching
+    // the `input` event lets every other listener (display sync, runner
+    // uniform refresh, etc.) react identically to a user drag.
+    set value(v) {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return;
+      input.value = String(n);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
     },
   };
 }

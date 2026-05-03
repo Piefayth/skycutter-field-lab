@@ -462,7 +462,7 @@ function annotateStatement(stmt) {
   }
 
   if (stmt.keyword === "param") {
-    annotateParamStatement(stmt, line, addZone);
+    annotateParamStatement(stmt, line, addZone, base, addExpr);
     return;
   }
 
@@ -518,15 +518,36 @@ function annotateNamedArgExpressions(stmt, line, base, addExpr) {
   }
 }
 
-function annotateParamStatement(stmt, line, addZone) {
+function annotateParamStatement(stmt, line, addZone, base, addExpr) {
   const nameMatch = /^\s*param\s+([A-Za-z_][A-Za-z0-9_]*)?/.exec(line);
+  const nameStart = nameMatch?.[1]
+    ? line.indexOf(nameMatch[1], line.indexOf("param") + "param".length)
+    : null;
   const nameTo = nameMatch?.[1]
-    ? line.indexOf(nameMatch[1], line.indexOf("param") + "param".length) + nameMatch[1].length
+    ? nameStart + nameMatch[1].length
     : line.length;
+  // `param NAME = VALUE` is the scenario-body assignment form; the
+  // top-level slider declaration uses `param NAME slider ...` instead.
+  // We dispatch on whether `=` precedes any `slider`/`toggle` keyword.
+  const eq = line.indexOf("=", nameTo);
   const widgetMatch = /\b(slider|toggle)\b/.exec(line.slice(nameTo));
-  const widgetFrom = nameTo;
-  const widgetTo = widgetMatch ? nameTo + widgetMatch.index + widgetMatch[1].length : line.length;
-  addZone(widgetFrom, widgetTo, "paramWidget", "paramWidget");
+  const widgetTo = widgetMatch ? nameTo + widgetMatch.index + widgetMatch[1].length : nameTo;
+  if (eq >= 0 && (!widgetMatch || eq < nameTo + widgetMatch.index)) {
+    // Assignment form: capture the target name and the right-hand
+    // expression so cst-to-ast can pull out the override value.
+    if (nameMatch?.[1] && nameStart !== null) {
+      stmt.parts.target = {
+        name: nameMatch[1],
+        from: base + nameStart,
+        to: base + nameStart + nameMatch[1].length,
+      };
+    }
+    addZone(nameTo, eq, "fieldName", "paramAssignTarget");
+    addExpr(eq + 1, line.length, "assignmentExpr");
+    return;
+  }
+  // Declaration form (existing slider / toggle layout).
+  addZone(nameTo, widgetTo, "paramWidget", "paramWidget");
   if (widgetMatch) {
     addZone(widgetTo, line.length, "paramModifier", "paramModifier");
   }

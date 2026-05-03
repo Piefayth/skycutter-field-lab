@@ -48,7 +48,7 @@ export function recipeCstToAst(cst, options = {}) {
     sources: [],
     settings: [],
     parameters: params,
-    presets: scenarios.map((s) => ({ id: s.id, label: s.label, actions: s.actions })),
+    presets: scenarios.map((s) => ({ id: s.id, label: s.label, actions: s.actions, paramOverrides: s.paramOverrides ?? {} })),
     stamps,
     stages: cst.blocks
       .filter((block) => block.keyword === "stage")
@@ -178,7 +178,13 @@ function validateSectionBlock(block, childKeywords, statementKeywords) {
 }
 
 function validateInitBlock(block) {
-  const allowed = new Set(["set", "spot", "ellipse", "region", "for"]);
+  // `param NAME = VALUE` is allowed inside scenario bodies (sets the
+  // slider value when the scenario loads, so different scenarios can
+  // ship different regimes). Stamp bodies don't accept it — stamps
+  // are paint actions, not regime switches.
+  const allowed = block.keyword === "scenario"
+    ? new Set(["set", "spot", "ellipse", "region", "for", "param"])
+    : new Set(["set", "spot", "ellipse", "region", "for"]);
   for (const stmt of sorted(block.statements)) {
     if (!allowed.has(stmt.keyword)) throw new Error(`v2 parse: ${block.keyword} ${block.id}: unknown action "${stmt.keyword}"`);
   }
@@ -424,11 +430,42 @@ function constCstToAst(stmt) {
 }
 
 function scenarioCstToAst(cst, block) {
+  const paramOverrides = {};
+  for (const stmt of sorted(block.statements ?? [])) {
+    if (stmt.keyword !== "param") continue;
+    const target = stmt.parts?.target?.name;
+    if (!target) throw new Error(`v2 parse: scenario ${block.id}: \`param NAME = VALUE\` missing target name`);
+    const exprCst = firstExpression(stmt);
+    if (!exprCst) throw new Error(`v2 parse: scenario ${block.id}: \`param ${target}\` missing value`);
+    const expr = expressionCstToAst(exprCst);
+    const value = constantNumber(expr);
+    if (value === null) throw new Error(`v2 parse: scenario ${block.id}: \`param ${target}\` value must be a constant number, got expression`);
+    paramOverrides[target] = value;
+  }
   return {
     id: block.id,
     label: blockLabel(cst, block) ?? block.id,
     actions: initActionsCstToAst(cst, block, false),
+    paramOverrides,
   };
+}
+
+// Walk a (possibly-tiny) AST expression and return the constant number
+// it represents. Used to enforce that scenario param overrides are
+// literal values — `param A = 2.5` works, `param A = someField + 1`
+// does not, because the slider write needs a concrete value at preset-
+// apply time.
+function constantNumber(ast) {
+  if (!ast || typeof ast !== "object") return null;
+  if (ast.type === "Number") return Number(ast.value);
+  if (ast.type === "Unary" && ast.op === "-") {
+    const inner = constantNumber(ast.expr);
+    return inner === null ? null : -inner;
+  }
+  if (ast.type === "Unary" && ast.op === "+") {
+    return constantNumber(ast.expr);
+  }
+  return null;
 }
 
 function stampCstToAst(cst, block) {

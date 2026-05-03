@@ -147,6 +147,61 @@ step { stage s { reads u; writes u; cell { set u = u } } }
 });
 
 // -----------------------------------------------------------------------------
+// Scenario param overrides — `param NAME = VALUE` inside a scenario body
+// captures into `paramOverrides` on the lowered preset.
+// -----------------------------------------------------------------------------
+
+test("scenario param overrides land on the preset AST", () => {
+  const out = parseStrict(`
+recipe "S"
+substrate geodesic frequency 16
+field u: f32
+param A slider 0..4 step 0.1 default 2.0 label "A"
+param B slider 0..8 step 0.1 default 3.0 label "B"
+
+scenarios {
+  scenario hopf "Hopf regime" {
+    param A = 2.0
+    param B = 5.5
+    set u = 0
+  }
+  scenario plain "No overrides" {
+    set u = 0
+  }
+}
+
+step { stage s { reads u; writes u; cell { set u = u } } }
+`);
+  assert(out.presets.length === 2);
+  const hopf = out.presets.find((p) => p.id === "hopf");
+  const plain = out.presets.find((p) => p.id === "plain");
+  assertEq(hopf.paramOverrides.A, 2.0);
+  assertEq(hopf.paramOverrides.B, 5.5);
+  assert(Object.keys(plain.paramOverrides).length === 0, "scenario without overrides has empty paramOverrides");
+  // The `param` lines don't show up in actions — only `set u = 0` does.
+  assert(hopf.actions.length === 1, `hopf has 1 action, got ${hopf.actions.length}`);
+});
+
+test("scenario param override accepts negative literals", () => {
+  const out = parseStrict(`
+recipe "S"
+substrate geodesic frequency 16
+field u: f32
+param threshold slider -1..1 step 0.05 default 0 label "T"
+
+scenarios {
+  scenario neg "negative" {
+    param threshold = -0.25
+    set u = 0
+  }
+}
+
+step { stage s { reads u; writes u; cell { set u = u } } }
+`);
+  assertEq(out.presets[0].paramOverrides.threshold, -0.25);
+});
+
+// -----------------------------------------------------------------------------
 // Stamp with brush.pos shorthand
 // -----------------------------------------------------------------------------
 

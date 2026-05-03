@@ -183,6 +183,9 @@ stamps {
 
 scenarios {
   scenario random "Random heading per cell (default)" {
+    // Default noise level — inside the polarisation regime, so the
+    // sphere walks toward global alignment over ~30 wallclock seconds.
+    param noise = 0.15
     for each cell {
       // cellRand returns [-1, 1]; scale to [-π, π] for full angle range.
       let theta = cellRand(7) * PI
@@ -191,15 +194,17 @@ scenarios {
   }
 
   scenario zonal "Eastward initial flow" {
-    // All cells start aligned to the east. Should remain perfectly
-    // aligned if NOISE is zero, slowly randomize as NOISE rises.
+    // Starts already polarised — drop noise so it stays that way long
+    // enough to read; cranking the slider afterward shows the noise →
+    // disorder transition without the long warm-up.
+    param noise = 0.05
     set heading = vec2(1, 0)
   }
 
   scenario stripes "Striped initial alignment" {
-    // Alternating bands of east/west by latitude. The boundaries
-    // between stripes are domain walls that the alignment dynamics
-    // either heal (low noise) or thicken into chaos (high noise).
+    // Striped pre-pattern wants a touch more noise than the default
+    // so the domain walls visibly anneal rather than locking forever.
+    param noise = 0.20
     for each cell {
       let theta = sin(lat * 4) * PI * 0.5
       set heading = vec2(cos(theta), sin(theta))

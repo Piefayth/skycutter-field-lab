@@ -15,7 +15,7 @@ import {
 import { createGeodesicGrid } from "../kernel/geodesic-grid.mjs";
 import { buildDslPresetDecls, buildDslStampDecls } from "./dsl-init-runtime.mjs";
 import { createPipelineMetadata } from "./pipeline-metadata.mjs";
-import { setControlHandlers } from "./controls.mjs";
+import { setControlHandlers, setParamValue } from "./controls.mjs";
 import { formModal, confirmModal } from "./modal.mjs";
 import { showToast } from "./toast.mjs";
 import { compileV2 as compileDsl } from "../dsl/compile-v2.mjs";
@@ -187,7 +187,7 @@ export function initRecipes({
     const recipe = materializeRecipe(baseModule);
     recipe.pipelineDsl = snapshot.pipelineDsl;
     recipe.pipeline = compileDsl(snapshot.pipelineDsl);
-    applyDslRecipeMetadata(recipe, recipe.pipeline.dsl, getParamLive);
+    applyDslRecipeMetadata(recipe, recipe.pipeline.dsl, getParamLive, setParamValue);
     recipe.name = snapshot.name ?? recipe.name;
     recipe.summary = snapshot.summary ?? recipe.summary;
     return recipe;
@@ -314,7 +314,7 @@ export function initRecipes({
     const pipeline = compileDsl(source);
     activeRecipe.pipelineDsl = source;
     activeRecipe.pipeline = pipeline;
-    applyDslRecipeMetadata(activeRecipe, pipeline.dsl, getParamLive);
+    applyDslRecipeMetadata(activeRecipe, pipeline.dsl, getParamLive, setParamValue);
     applyRecipe(activeRecipe, activeRecipeId);
     refreshView();
     pipelineEditor.setStatus(`applied DSL for "${activeRecipe.name ?? activeRecipeId}"`);
@@ -353,7 +353,7 @@ export function initRecipes({
     if (!recipe?.pipeline) throw new Error("recipe missing pipeline");
     if (recipe.pipelineDsl) {
       recipe.pipeline = compileDsl(applyGeodesicTileOverride(recipe.pipelineDsl));
-      applyDslRecipeMetadata(recipe, recipe.pipeline.dsl, getParamLive);
+      applyDslRecipeMetadata(recipe, recipe.pipeline.dsl, getParamLive, setParamValue);
     }
     const prepared = prepareRecipeState(recipe, state);
     activeFieldDecls = prepared.fieldDecls;
@@ -822,7 +822,7 @@ export function prepareRecipeState(recipe, state) {
   return { fieldDecls };
 }
 
-function applyDslRecipeMetadata(recipe, dsl, getParam) {
+function applyDslRecipeMetadata(recipe, dsl, getParam, setParam) {
   if (!recipe || !dsl) return;
   recipe.name = dsl.recipe?.name ?? recipe.name;
   recipe.summary = dsl.recipe?.summary ?? "";
@@ -830,7 +830,7 @@ function applyDslRecipeMetadata(recipe, dsl, getParam) {
   recipe.planet = { ...(dsl.planet ?? {}) };
   recipe.constants = (dsl.constants ?? []).map((decl) => ({ ...decl }));
   recipe.fields = mergeFieldDecls(dsl.fields ?? [], declaredPipelineFieldDecls(dsl));
-  recipe.presets = buildDslPresetDecls(dsl.presets ?? [], dsl, getParam);
+  recipe.presets = buildDslPresetDecls(dsl.presets ?? [], dsl, getParam, setParam);
   recipe.stamps = buildDslStampDecls(dsl.stamps ?? [], dsl, getParam);
   recipe.settings = (dsl.settings ?? []).map((decl) => ({ ...decl }));
   recipe.parameters = (dsl.parameters ?? []).map((decl) => ({ ...decl }));

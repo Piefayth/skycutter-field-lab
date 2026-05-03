@@ -40,6 +40,7 @@ export function validateV2(schema) {
   validateExplicitPreviousReads(schema);
   validateImportsOnSchema(schema);
   validateInitExpressions(schema);
+  validateScenarioParamOverrides(schema);
   validateUpstreamCoordArgs(schema);
   validateRenderDecls(schema);
   // Type checking runs last: it relies on identifier resolution
@@ -523,6 +524,34 @@ function validateInitExpressions(schema) {
       stamp.actions ?? [],
       `stamp "${stamp.id}"`,
     );
+  }
+}
+
+// `param NAME = VALUE` lines inside a scenario set the declared param
+// to the literal value when the scenario loads. Each name must resolve
+// to a real declared parameter, the value must be inside the slider
+// range, and we don't allow overriding settings (those are run-shape
+// not regime knobs).
+function validateScenarioParamOverrides(schema) {
+  const paramByName = new Map();
+  for (const p of schema.parameters ?? []) paramByName.set(p.name, p);
+  const settingNames = new Set((schema.settings ?? []).map((s) => s.name));
+  for (const scenario of schema.presets ?? []) {
+    const overrides = scenario.paramOverrides ?? {};
+    for (const [name, value] of Object.entries(overrides)) {
+      if (settingNames.has(name)) {
+        throw new Error(`scenario "${scenario.id}": cannot override setting "${name}" — settings are run-shape, not regime knobs`);
+      }
+      const param = paramByName.get(name);
+      if (!param) {
+        throw new Error(`scenario "${scenario.id}": \`param ${name} = ...\` references unknown parameter "${name}"`);
+      }
+      if (typeof param.min === "number" && typeof param.max === "number") {
+        if (value < param.min || value > param.max) {
+          throw new Error(`scenario "${scenario.id}": \`param ${name} = ${value}\` out of slider range [${param.min}, ${param.max}]`);
+        }
+      }
+    }
   }
 }
 
