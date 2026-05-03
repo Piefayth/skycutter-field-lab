@@ -69,6 +69,29 @@ function passthrough(name) {
   return (args) => `${name}(${args.join(", ")})`;
 }
 
+const RNG24_MASK = 0x00ffffff;
+const RNG24_DENOM = 0x00ffffff;
+
+function rngState24(value) {
+  const rounded = Math.round(Number.isFinite(value) ? value : 0);
+  return rounded & RNG24_MASK;
+}
+
+function rngHash24(value) {
+  let x = (rngState24(value) + 0x9e3779b9) >>> 0;
+  x ^= x >>> 16;
+  x = Math.imul(x, 2246822519) >>> 0;
+  x ^= x >>> 13;
+  x = Math.imul(x, 3266489917) >>> 0;
+  x ^= x >>> 16;
+  return x & RNG24_MASK;
+}
+
+function rngNext24(value) {
+  const x = rngState24(value);
+  return (Math.imul(1664525, x) + 1013904223) & RNG24_MASK;
+}
+
 export const MATH_FUNCTIONS = [
   {
     name: "max",
@@ -237,8 +260,8 @@ export const MATH_FUNCTIONS = [
     },
     importNamespace: "core",
     signature: "cellNoise(seed) | cellNoise(seed, scale)",
-    doc: "Spatially-coherent 3D noise sampled at the cell's unit-sphere position. Geometrically correct on a sphere — no pole distortion. `scale` controls spatial frequency (default 1; higher = finer texture). Returns [-1, 1]. In preset top-level (no cell context), falls back to a deterministic per-seed scalar — useful for randomizing spot positions. Use this when you want SMOOTHLY-VARYING noise (basins, terrain). For statistically independent per-cell values use `cellRand` instead.",
-    example: "let basin = cellNoise(31, 2.5)\nadd moisture = cellNoise(frame * 0.13) * amp * 0.25",
+    doc: "Stateless spatially-coherent 3D noise sampled at the cell's unit-sphere position. Geometrically correct on a sphere — no pole distortion. `scale` controls spatial frequency (default 1; higher = finer texture). Returns [-1, 1]. Same arguments always produce the same value; include `frame` in the seed deliberately when you want time variation. Use this when you want smoothly-varying noise (basins, terrain). For statistically independent per-cell values use `cellRand` instead.",
+    example: "let basin = cellNoise(31, 2.5)\nadd moisture = cellNoise(frame + 17, 1.4) * amp * 0.25",
   },
   {
     name: "cellRand",
@@ -249,8 +272,32 @@ export const MATH_FUNCTIONS = [
     js: (args, cell, helpers) => helpers.hashNoise(cell?.i ?? 0, args[0] ?? 0),
     importNamespace: "core",
     signature: "cellRand(seed)",
-    doc: "IID per-cell hash: each cell produces a statistically independent value from (cell index, seed). Returns [-1, 1]. Use for stochastic processes — heterogeneous parameters, Monte Carlo sampling, omega distributions in oscillator networks. Different from `cellNoise(seed)`, which is spatially correlated (neighbors tend to have similar values).",
-    example: "set omega = cellRand(7) * omegaSpread",
+    doc: "Stateless IID-ish per-cell hash: each cell produces an independent-looking value from (cell index, seed). Returns [-1, 1]. Same arguments always produce the same value and no hidden RNG state is advanced; include `frame` in the seed deliberately when you want per-tick variation. Different from `cellNoise(seed)`, which is spatially correlated (neighbors tend to have similar values). Persistent stochastic state should be modeled explicitly, not hidden behind this helper.",
+    example: "set omega = cellRand(7) * omegaSpread\nlet kick = cellRand(frame + 19) * noise",
+  },
+  {
+    name: "rand01",
+    target: "c.rand01",
+    arity: [1],
+    argTypes: SCALAR1,    returnType: "f32",
+    wgsl: (args) => `rngRand01(${args[0]})`,
+    js: (args) => rngHash24(args[0] ?? 0) / RNG24_DENOM,
+    importNamespace: "core",
+    signature: "rand01(state)",
+    doc: "Stateful-RNG draw helper. Given a per-cell RNG state value, returns a deterministic sample in [0, 1]. It does not mutate the state; pair it with `set rng = rngNext(rng)` where `rng` is usually a `field rng: u32`. The state is intentionally 24-bit so it round-trips exactly through the DSL's scalar expression space.",
+    example: "let r = rand01(rng)\nset alive = r < birthRate ? 1 : alive\nset rng = rngNext(rng)",
+  },
+  {
+    name: "rngNext",
+    target: "c.rngNext",
+    arity: [1],
+    argTypes: SCALAR1,    returnType: "f32",
+    wgsl: (args) => `rngNext24(${args[0]})`,
+    js: (args) => rngNext24(args[0] ?? 0),
+    importNamespace: "core",
+    signature: "rngNext(state)",
+    doc: "Advances a 24-bit per-cell RNG state and returns the next state as an exactly representable scalar. Store it back into a `u32` field with `set rng = rngNext(rng)`. Random draws stay explicit: use `rand01(rng)` for the sample and `rngNext(rng)` for the state transition.",
+    example: "field rng: u32\nstage tick {\n  reads rng\n  writes rng\n  cell { set rng = rngNext(rng) }\n}",
   },
   {
     name: "wrapAngle",
@@ -277,7 +324,7 @@ export const MATH_FUNCTIONS = [
     js: (args, cell, helpers) => helpers.makeVec2(args[0], args[1]),
     importNamespace: "core",
     signature: "vec2(x, y)",
-    doc: "Constructs a vec2 value from two scalars. Pair with a `field name: vec2` declaration for vector-valued fields (wind components, slope direction, etc). Component access via `.x` / `.y`. WGSL-native arithmetic: vec2 + vec2, vec2 * scalar, etc.",
+    doc: "Constructs a vec2 value from two scalars. Pair with a `field name: vec2` declaration for vector-valued fields (wind components, slope direction, etc). Components live in each cell's local tangent basis; raw neighbor reads such as `wind@n` return the neighbor's local components, not an implicitly transported vector. Component access via `.x` / `.y`. WGSL-native arithmetic: vec2 + vec2, vec2 * scalar, etc.",
     example: "field wind: vec2\nstage compute_wind {\n  reads pressure\n  writes wind\n  cell {\n    set wind = vec2(-grad_e, -grad_n) * strength\n  }\n}",
   },
   {
@@ -347,8 +394,8 @@ export const STENCIL_HELPERS = [
     // neighbor via `field@coord`. Replaces v1's field-centered
     // `neighbor MOD BIND in FIELD { EXPR }` form.
     signature: "<op> n in neighbors { EXPR with field@n }",
-    doc: "Per-neighbor reduction. For each neighbor cell of the current cell, evaluate EXPR (which reads any field at that neighbor via `field@n`), then combine via op ∈ {sum, max, min, mean}. Reductions are neighbors-only — the center cell is not included. Use inside `cell { }` blocks. Examples: discrete Laplacian `mean n in neighbors { u@n } - u`; Kuramoto coupling `sum n in neighbors { sin(theta@n - theta - alpha) }`; multi-field gradient `sum n in neighbors { u@n + v@n - u - v }`.",
-    example: "let lap      = mean n in neighbors { u@n } - u\nlet coupling = sum n in neighbors { sin(theta@n - theta - alpha) }\nlet onFire   = max n in neighbors { burning@n } > 0.5",
+    doc: "Per-neighbor reduction over immediate topological neighbors. For each neighbor cell of the current cell, evaluate EXPR (which reads any field at that neighbor via `field@n`), then combine via op ∈ {sum, max, min, mean}. Reductions are neighbors-only — the center cell is not included. Canonical scalar diffusion uses the graph-Laplacian spelling `mean n in neighbors { u@n - u }`; `divergence(gradient(u))` is a separate tangent-frame approximation, not a synonym. Examples: Kuramoto coupling `sum n in neighbors { sin(theta@n - theta - alpha) }`; multi-field gradient `sum n in neighbors { u@n + v@n - u - v }`.",
+    example: "let lap      = mean n in neighbors { u@n - u }\nlet coupling = sum n in neighbors { sin(theta@n - theta - alpha) }\nlet onFire   = max n in neighbors { burning@n } > 0.5",
   },
 ];
 
@@ -386,7 +433,7 @@ export const CLOCK_HELPERS = [
     // temporal coordinate query, not a function call. The compiler
     // emits f_<field>_prev[cell] in WGSL.
     signature: "field@prev",
-    doc: "Reads FIELD's value as of the previous tick. History depth is inferred — using `u@prev` anywhere triggers triple-buffer rotation for u. History fields can be written by exactly one stage per step; the writer's value becomes the next tick's `current` after end-of-tick rotation. Stamps deliberately update the current buffer only — the asymmetry between current and prev is the launch velocity for stamps targeting wave-style fields. Use for second-order time integration: the wave equation reads `u_new = 2*u - u@prev + c²·dt²·∇²u`.",
+    doc: "Reads FIELD's value as of the previous tick. History depth is inferred — using `u@prev` anywhere triggers triple-buffer rotation for u. History fields can be written by exactly one stage per step, and later stages cannot read that field after its writer. The writer deposits into `next`; `next` becomes current only after end-of-tick rotation. Stamps deliberately update the current buffer only — the asymmetry between current and prev is the launch velocity for wave-style fields. Use for second-order time integration: `u_new = 2*u - u@prev + c²·dt²·lap`.",
     example: "field u: f32\nstep {\n  stage propagate {\n    reads u\n    writes u\n    cell {\n      let lap = sum n in neighbors { u@n - u }\n      set u = 2 * u - u@prev + c * c * dt * dt * lap\n    }\n  }\n}",
   },
 ];
@@ -537,8 +584,8 @@ export const STAGE_BLOCKS = [
     // unset keeps `cell` out of the `import …` autocomplete and stops
     // the symbol catalog from synthesizing a bogus `import cell` line.
     signature: "cell { ... per-cell math ... }",
-    doc: "Per-cell continuous math. Each cell runs the body in parallel; reads field values from the start-of-stage snapshot, writes via `add` (accumulate) or `set` (overwrite). Use for reaction terms, growth, decay, neighbor reductions, coordinate queries — every per-cell computation in v2 lives here. v2 stages contain exactly one `cell { }` block; sequencing within the cell is via `let` locals.",
-    example: "cell {\n  let lap = mean n in neighbors { u@n } - u\n  let damp = damping * (u - u@prev)\n  set u = 2 * u - u@prev + speed*speed*lap - damp\n}",
+    doc: "Per-cell continuous math. Each cell runs the body in parallel; bare field reads come from the start-of-stage snapshot, while `add` / `set` update the output accumulator for the stage's target field. Use `let` locals for sequencing. Reaction terms, growth, decay, neighbor reductions, coordinate queries, diffusion, and advection all live here in v2. Each stage contains exactly one `cell { }` block.",
+    example: "cell {\n  let lap = mean n in neighbors { u@n - u }\n  let damp = damping * (u - u@prev)\n  set u = 2 * u - u@prev + speed*speed*lap - damp\n}",
   },
 ];
 
@@ -597,13 +644,13 @@ export const ACTION_VERBS = [
   {
     name: "add",
     signature: "add FIELD = EXPR",
-    doc: "Accumulates EXPR into FIELD for the current cell. Reads the field's pre-stage value, writes pre + EXPR. Most reaction-term writes are `add`.",
+    doc: "Accumulates EXPR into FIELD's output accumulator for the current cell. Bare FIELD reads inside EXPR still read the stage-input snapshot, not a prior `set` in the same block. Most reaction-term writes are `add`.",
     example: "add cloud = net * dt",
   },
   {
     name: "set",
     signature: "set FIELD = EXPR",
-    doc: "Overwrites FIELD with EXPR for the current cell. Use for state transitions (events) or saturation (`set cloud = clamp(...)`).",
+    doc: "Overwrites FIELD's output accumulator with EXPR for the current cell. Bare field reads inside EXPR read the stage-input snapshot. Use `let` locals when one formula needs to feed another.",
     example: "set burning = 1",
   },
 ];
@@ -639,8 +686,8 @@ export const DECL_DIRECTIVES = [
   {
     name: "field",
     signature: "field NAME: TYPE [derived]",
-    doc: "Declares per-cell state. TYPE is `f32` (scalar) or `vec2` (2D vector — storage is `array<vec2<f32>>`, member access via `.x`/`.y`). `vec3`/`u32` are reserved but not yet implemented. Optional `derived` annotation marks the field as computed-by-stage — derived fields must be written by ≥1 stage and cannot be written by scenarios or stamps. History is inferred: any `field@prev` read anywhere allocates triple-buffer rotation for that field.",
-    example: "field u: f32\nfield wind: vec2\nfield abs_u: f32 derived",
+    doc: "Declares per-cell state. TYPE is `f32`, `vec2`, `u32`, or `bool`; `vec3` is reserved but not runtime-backed yet. `u32` and `bool` use integer storage and surface as scalar 0/1-style values in expressions; writes round/cast back to `u32`. Optional `derived` annotation marks the field as computed-by-stage — derived fields must be written by ≥1 stage and cannot be written by scenarios or stamps. History is inferred: any `field@prev` read anywhere allocates triple-buffer rotation for that field.",
+    example: "field u: f32\nfield wind: vec2\nfield state: u32\nfield abs_u: f32 derived",
   },
   {
     name: "const",
@@ -663,7 +710,7 @@ export const DECL_DIRECTIVES = [
   {
     name: "metric",
     signature: "metric NAME = <op> cells [where PRED] { EXPR }",
-    doc: "Scalar reduction over post-step state. op ∈ {sum, max, min, mean, count}. count takes only a `where` clause (no body — the body is implicitly 1). Other reductions take a body expression. The body uses the full cell-expression grammar (math fns, neighbor reductions, coordinate queries). Computed on the GPU each tick (per-cell pass + workgroup tree-reduce); async readback populates the metrics panel via `dsl:<id>` sources.",
+    doc: "Scalar reduction over post-step state. op ∈ {sum, max, min, mean, count}. count takes only a `where` clause (no body — the body is implicitly 1). Other reductions take a single expression; no `let` inside metric bodies, so promote intermediates to `derived` fields. Metric bodies can use math fns, neighbor reductions, and coordinate queries. Computed on the GPU each tick (per-cell pass + workgroup tree-reduce); async readback populates the metrics panel via `dsl:<id>` sources.",
     example: "metric peak   = max cells { abs(u) }\nmetric active = count cells where abs(u) > 0.1\nmetric energy = sum cells { 0.5*v*v + 0.5*c*c * sum n in neighbors { (u@n - u)*(u@n - u) } }",
   },
   {
@@ -682,12 +729,12 @@ export const BLOCK_KEYWORDS = [
   {
     name: "step",
     signature: "step { stage X { ... } stage Y { ... } ... }",
-    doc: "Tick boundary. Runs every simulation tick; stages inside execute in declaration order. End-of-step is when history fields rotate and metrics dispatch their reduce passes. Multi-rate steps (`step at Nhz { ... }`) are reserved for future v2 work.",
+    doc: "Tick boundary. Runs every simulation tick. Stages inside execute in declaration order; ordinary field writes become visible to later stages, while history-field writes become visible only after end-of-tick rotation. Metrics dispatch after the step. Multi-rate steps (`step at Nhz { ... }`) are reserved for future v2 work.",
   },
   {
     name: "stage",
     signature: 'stage NAME [\"Label\"] { reads ... writes ... cell { ... } }',
-    doc: "A pipeline stage inside `step { }`. v2 stages contain exactly one `cell { }` block (plus `reads` / `writes` clauses) — every kernel operation (diffusion, advection, gradient/divergence, reductions) is expressible as a per-cell expression in v2.",
+    doc: "A pipeline stage inside `step { }`. v2 stages contain exactly one `cell { }` block (plus `reads` / `writes` clauses). Each pass reads the current buffers at dispatch; ordinary writes swap into visibility for later stages, but history-field writes wait for tick-end rotation.",
     example: 'stage propagate "Wave step" {\n  reads u\n  writes u\n  cell {\n    let lap = sum n in neighbors { u@n - u }\n    set u = 2*u - u@prev + speed*speed*lap\n  }\n}',
   },
   {

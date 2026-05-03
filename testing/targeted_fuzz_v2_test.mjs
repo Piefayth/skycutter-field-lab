@@ -11,6 +11,7 @@ test("targeted fuzzer exposes named high-risk recipe families", () => {
   assert.ok(families.length >= 5, "expected several targeted families");
   assert.ok(families.some((f) => f.name === "metric-history-upstream"));
   assert.ok(families.some((f) => f.name === "integer-bool-fields"));
+  assert.ok(families.some((f) => f.name === "stateful-rng"));
 });
 
 test("targeted fuzzer generation is deterministic per family + seed", () => {
@@ -20,6 +21,11 @@ test("targeted fuzzer generation is deterministic per family + seed", () => {
   assert.equal(a.dsl, b.dsl);
   assert.match(a.dsl, /field wind: vec2/);
   assert.match(a.dsl, /ellipse wind/);
+
+  const rng = generateTargetedRecipe(17, "stateful-rng");
+  assert.match(rng.dsl, /field rng: u32/);
+  assert.match(rng.dsl, /rand01\(rng\)/);
+  assert.match(rng.dsl, /rngNext\(rng\)/);
 });
 
 test("targeted fuzzer small WGSL batch compiles cleanly", async () => {

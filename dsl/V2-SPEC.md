@@ -13,12 +13,15 @@ field`. Every construct in the DSL is either a query into that tensor or an
 update of one slice of it.**
 
 Reads happen at coordinates: bare `u` means `(now, this_cell, u)`; `u@prev`
-means `(now − 1, this_cell, u)`; inside a neighbor reduction, `u@n` means
+means `(now - 1, this_cell, u)`; inside a neighbor reduction, `u@n` means
 `(now, neighbor_cell, u)`. The compiler dispatches based on the kind of
 coordinate.
 
-Writes happen at `(now+1, this_cell, this_field) ← expression`. Stages declare
-which fields they read and write. Tick boundaries are explicit (`step { }`).
+Writes happen to the stage's output slice for that field. For ordinary fields,
+the output becomes the field's current value immediately after the stage pass,
+so later stages in source order can read it. For history fields, writes go to
+the field's `next` slot and become current only at the end-of-tick history
+rotation. Tick boundaries are explicit (`step { }`).
 
 Compared to v1:
 - `prev(u)` is no longer a magic function call — it's `u@prev` (a coordinate
@@ -30,7 +33,7 @@ Compared to v1:
   collapse into the universal `cell { ... }` block. Each is now expressible as
   one or two lines of cell expression.
 - Stage shape: exactly one `cell { }` block per stage. Locals do sequencing.
-- `prev(u)` history declarations gone — history depth is inferred from
+- Manual `history N` field declarations are gone — history depth is inferred from
   `@prev` usage.
 - New: `derived` fields (computed-by-stage, not paintable) and `metric`
   scalar reductions.
@@ -125,13 +128,34 @@ field abs_u: f32 derived    # computed per-cell by stages, not paintable
   vec2s with WGSL-compatible broadcast semantics; `vec2(x, y)`,
   `length(v)`, `gradient(scalarField)`, and `divergence(vec2Field)`
   are first-class builtins.
-- `vec3`, `u32` — reserved grammar; not implemented yet.
+- `u32` — one unsigned integer per cell. Inside expressions it reads as
+  `f32`; writes round and cast back to `u32`. This keeps arithmetic in
+  scalar expression space while supporting cellular automata and state
+  machines.
+- `bool` — `u32`-backed boolean storage (`false` = 0, `true` = 1). Like
+  `u32`, it reads as scalar `0` / `1` in expressions. Boolean RHS values
+  can be assigned directly to `u32` / `bool` fields; predicates should use
+  comparisons such as `alive > 0`.
+- `vec3` — reserved grammar; not implemented yet.
 
 Type checking happens in `dsl/typecheck-v2.mjs`. Assignment-shape
 mismatches (`set u = wind` where `u: f32` and `wind: vec2`),
 `gradient`-on-vec2, `divergence`-on-scalar, vec2 in scalar reductions,
 and non-bool `when` conditions all error at recipe load with a clear
 message.
+
+### Vector-field coordinate policy
+
+`vec2` fields are components in each cell's local tangent basis. A bare
+`wind` read returns the current cell's local components. A neighbor read such
+as `wind@n` returns the neighbor cell's own local components; it is **not**
+implicitly parallel-transported into the current cell's basis.
+
+That is a deliberate v2 contract: raw coordinate queries are literal reads.
+Future intrinsic vector calculus should be added with explicit transport
+syntax, not by silently changing the meaning of `field@n`. The existing
+`gradient(scalarField)` and `divergence(vec2Field)` helpers are separate
+geometry-aware operators and may perform their own basis work internally.
 
 ### `derived` annotation
 
@@ -164,8 +188,22 @@ stage propagate {
 
 A history field (any field with `@prev` usage anywhere) must:
 - be written by exactly one stage per `step { }` — single-writer rule
+- not be read by a later stage after its writer in the same `step`
 - not be written by `diffuse`/`clamp`/`advect`/etc. — but those primitives
   don't exist in v2, so this rule is automatic
+
+Runtime model:
+- History fields use three buffers: `{prev, current, next}`.
+- At stage dispatch, bare field reads see `current`; `field@prev` reads
+  `prev`; the writer writes `next`.
+- History fields never swap after an individual pass.
+- At the end of the tick, history rotates: `current -> prev`, `next ->
+  current`, old `prev -> next`.
+- Scenario application copies the freshly initialized current value into
+  `prev`; stamps write current only and deliberately leave `prev` unchanged.
+  For leapfrog wave recipes, that current/prev asymmetry is an explicit
+  velocity impulse. Recipes that want literal velocity should model it as a
+  separate field, e.g. `(u, v)`.
 
 History depth is currently 1 (only `@prev`, not `@prev(2)`). Reserved for
 future deepening.
@@ -472,6 +510,27 @@ order within a step.
 Reserved for future: `step at 30hz { ... }` for tick-rate decoupling, multiple
 steps for multi-rate simulations.
 
+### Tick and write visibility
+
+A `step { }` is one simulation tick.
+
+- Stages execute in source order.
+- Each stage pass reads the current buffers at dispatch time.
+- For ordinary fields, a write becomes visible to later stages as soon as that
+  pass swaps. Multiple stages may write the same ordinary field; the last
+  writer in source order wins.
+- For history fields, writes are not visible mid-tick. The sole writer deposits
+  into `next`; the value becomes visible only after the end-of-tick history
+  rotation.
+- If a stage writes multiple ordinary fields, the compiler may emit multiple
+  passes and delay their swaps until the end of that stage so every pass in
+  the stage sees the same stage-input snapshot.
+
+Inside one `cell { }` block, bare field reads are reads from the stage-input
+snapshot, not from earlier `set` statements in the same block. `let` locals
+are the sequencing tool. `add f = expr` updates the output accumulator for
+`f`; its `f` read still means the stage-input `f`.
+
 ### Stage rules (validator-enforced)
 
 - Exactly one `cell { }` block per stage. (No multiple `cell` blocks; no `each`
@@ -516,20 +575,77 @@ min  n in neighbors { distance(self, n) }
 ```
 
 `n` is a cell coordinate; expression body can read any field at `n` via
-`field@n`. Inner expression has full cell-expression grammar (locals, math
-functions, conditionals).
+`field@n`. The body is a single expression: math functions, field reads, and
+conditionals are allowed, but `let` locals are not.
 
 A reduction body MAY contain another expression but MAY NOT contain another
 reduction (no nested reductions on the geodesic substrate — no
 neighbor-of-neighbor).
 
+`neighbors` means immediate topological adjacency in the geodesic mesh. Most
+cells have six neighbors; pentagonal cells have five. This is not a metric
+disk and not a same-radius stencil everywhere.
+
+Canonical scalar diffusion / Laplacian spelling for authored recipes:
+
+```
+let lap = mean n in neighbors { u@n - u }
+```
+
+Use that graph-Laplacian form unless a recipe intentionally wants the
+separate tangent-frame operator `divergence(gradient(u))`. The two are not
+numerically identical on a geodesic mesh, especially near pentagons. Do not
+add a `laplacian(u)` helper until the numerical contract it names is settled.
+
+Future `ring` / `disk` reductions must distinguish topological BFS rings from
+metric radial kernels. They are different operations and should not share one
+name.
+
 ### Math functions and globals (always available, no `use` clauses)
 
 - Math: `clamp`, `min`, `max`, `abs`, `sin`, `cos`, `asin`, `exp`, `sqrt`,
   `pow`, `hypot`, `wrapAngle`, `smoothstep`
-- Noise: `cellNoise(seed=, scale=)`
+- Noise / RNG: `cellNoise(seed, scale?)`, `cellRand(seed)`,
+  `rand01(state)`, `rngNext(state)`
 - Globals: `dt`, `frame`, `PI`, `TAU`, `N` (cell count)
 - Substrate-specific (geodesic): `lon`, `lat`, `x`, `y`, `z`, `i`
+
+### RNG and reproducibility
+
+The current random-looking builtins are stateless deterministic hashes:
+
+- `cellRand(seed)` hashes `(cell index, seed)` and returns an IID-ish value in
+  `[-1, 1]`.
+- `cellNoise(seed, scale?)` samples coherent spatial noise from the cell's
+  sphere position and seed.
+
+They do not advance hidden RNG state, do not depend on stage/pass ordering,
+and produce the same value for the same arguments. To vary over time, include
+`frame` in the seed expression deliberately, e.g. `cellRand(frame + 17)`.
+
+This is enough for repeatable heterogeneity and simple per-frame perturbation.
+For stochastic Markov processes that require persistent per-cell random state,
+declare that state explicitly:
+
+```
+field rng: u32
+
+stage stochastic_step {
+  reads state, rng
+  writes state, rng
+  cell {
+    let r = rand01(rng)
+    set state = r < birthRate ? 1 : state
+    set rng = rngNext(rng)
+  }
+}
+```
+
+`rand01(state)` returns a deterministic sample in `[0, 1]` from the current
+state. It does not mutate. `rngNext(state)` returns the next state; storing it
+is an ordinary field write. The state is intentionally 24-bit so it can round
+trip exactly through the DSL's scalar expression space while still using `u32`
+storage.
 
 ### Imports (optional)
 
@@ -580,21 +696,16 @@ metric ID = (sum|max|min|mean|count) cells [where PREDICATE] { EXPRESSION }
 ```
 
 EXPRESSION is a single cell-expression (not a multi-line block). It uses the
-full cell-expression grammar: math functions, locals (via `let`?), neighbor
-reductions, coordinate queries.
-
-Wait — locals in metric expressions are tricky since metric is a single
-expression. Resolution: **no `let` inside metric expressions in v2 first
-cut.** If you need locals, write a derived field that holds the intermediate
-and reduce over it. Defers the question of "what scope do metric-local lets
-have?"
+cell-expression grammar for math functions, neighbor reductions, and coordinate
+queries, but does not allow `let`. If you need locals, write a derived field
+that holds the intermediate and reduce over it.
 
 `count` is special: it has a `where` clause but no expression body (the body
 is implicitly `1`):
 ```
 metric active = count cells where abs_u > 0.1
 # Equivalent semantically to: sum cells where abs_u > 0.1 { 1 }, but
-# `count` is the canonical spelling. The runtime uses u32 accumulation.
+# `count` is the canonical spelling.
 ```
 
 ### Reduction semantics
@@ -610,8 +721,9 @@ metric active = count cells where abs_u > 0.1
 - Implicit bool→f32 cast NOT allowed. `mean cells { abs_u > 0.1 }` is a
   validator error. Use `count cells where abs_u > 0.1` for the fraction-y use
   case (and divide by `N` if you want a fraction).
-- Metric expression must produce `f32` scalar (or u32 for count). Vector or
-  enum results are rejected; wrap in `length()`/`f32()`.
+- Metric expression must produce `f32` scalar. Vector or boolean results are
+  rejected; wrap vectors in `length()` and use `count cells where ...` for
+  booleans.
 - Pure: no `set`, `add`, `emit`, or stamp action calls. Validator rejects.
 
 ### Metric scheduling
@@ -653,7 +765,7 @@ with nothing else.
 Event-like observations are expressed as metrics directly:
 
 ```
-metric predator_spawn = count cells where u > threshold && cellNoise() < 0.001
+metric predator_spawn = count cells where u > threshold && cellRand(frame + 31) > 0.998
 ```
 
 If the event needs per-cell visibility (rendering, downstream stages, paint),
@@ -666,7 +778,7 @@ stage mark_spawning {
   reads u
   writes spawning
   cell {
-    set spawning = u > threshold && cellNoise() < 0.001 ? 1 : 0
+    set spawning = u > threshold && cellRand(frame + 31) > 0.998 ? 1 : 0
   }
 }
 
@@ -674,8 +786,9 @@ metric spawning_count = sum cells { spawning }
 ```
 
 A future explicit event system — separate from the cell action grammar —
-could add real event-stream semantics (replay, ordering, fan-out). It is not
-in v2 first cut.
+could add real event-stream semantics (replay, ordering, fan-out). Cascade
+events are intentionally deferred until their fixed-point / max-iteration /
+depth-budget semantics are specified up front. They are not in v2 first cut.
 
 ## Validator rules summary
 
@@ -707,12 +820,13 @@ explicit-previous-reads), and `dsl/typecheck-v2.mjs` (assignment-shape
 - Derived fields cannot be written by scenarios. *(v2)*
 - Derived fields cannot be written by stamps. *(v2)*
 - A field used with `@prev` anywhere must have exactly one writer stage
-  per step. *(v1, from history-fields branch)*
+  per step, and no later stage may read that history field after its writer.
+  *(v1 structural validator)*
 - Metric reduction op must be one of {sum, max, min, mean, count}. *(v2)*
 - Metric expressions are pure (no `set`/`add`/`emit`). *(v2)*
 - `MetricReduce` only at top of `metric` declarations; never nested. *(v2)*
-- `vec2` field types implemented (klausmeier `slope`, future wind
-  recipes); `vec3` / `u32` reserved but not parsed. *(parser)*
+- `f32`, `vec2`, `u32`, and `bool` field types implemented; `vec3`
+  reserved but not runtime-backed. *(parser + runtime)*
 - Assignment-shape type checking — `set f32_field = vec2_expr` and
   symmetric mismatches rejected with a clear DSL-level error.
   *(typecheck-v2)*
@@ -741,6 +855,27 @@ Still TODO — partially-enforced or not yet:
   exclusive branches, which we want.)*
 - Substrate-specific helpers gated by substrate type. *(only `geodesic`
   exists; non-issue until a second substrate lands.)*
+
+## DSL change policy
+
+Every new surface construct or primitive pays the full integration cost in
+the same feature batch:
+
+- Update this spec and `dsl/dsl-spec.mjs` docs/catalog entries.
+- Update CST parsing/projection, strict AST shape, validation, and typecheck
+  as applicable.
+- Update WGSL emit and JS/init/runtime evaluation for every context where the
+  construct is valid; reject it clearly everywhere else.
+- Update editor highlighting/autocomplete so the authoring surface stays in
+  sync with the language.
+- Add positive tests, negative validator tests, and fuzzer coverage.
+- If the construct emits WGSL, add a WGSL harness assertion for the lowered
+  shape.
+
+This is feature cost, not optional cleanup. After roughly every ten commits,
+check the recent mix of `feat:` / `fix:` / `correctness:` / `test:` / `docs:`
+work. If feature work is outrunning semantics and harness work, the next batch
+is correctness-first.
 
 ## Compiler architecture
 
@@ -797,14 +932,17 @@ shape validators (now surface-syntax-agnostic).
 ## Deferred features
 
 Reserved in grammar, not implemented:
-- `vec3`, `u32` field types (vec2 is implemented)
+- `vec3` field type
 - `@prev(N)` for N>1
 - `@anti`, `@boundary` queries
+- explicit vector transport between tangent bases
+- topological `ring` / `disk` reductions
+- metric radial kernels
 - `step at Nhz` multi-rate
 - Multiple substrates (square, torus, voxel)
 - Eager metric evaluation (`metric x rate Nhz`)
 - `let` inside metric expressions
-- `on <event>` unified event handlers (replacing scenario / stamp)
+- explicit cascade / event system
 
 ## Open questions
 

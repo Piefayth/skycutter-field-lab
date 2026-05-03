@@ -501,7 +501,7 @@ function describeAstSource(ast) {
 // the JS-side init evaluator, not on the GPU. The init evaluator
 // implements only the cell-local subset of the cell-stage grammar:
 // scalar / vec2 reads of a cell's own field values, math functions,
-// vec2 / length / cellNoise / cellRand. It does NOT implement
+// vec2 / length / cellNoise / cellRand / rand01 / rngNext. It does NOT implement
 // neighbor reductions, coordinate queries (`@prev` / `@n` /
 // `@upstream`), or the tangent-frame stencil builtins
 // (`gradient` / `divergence`) — those need GPU-side neighbor topology.

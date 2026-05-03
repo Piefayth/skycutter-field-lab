@@ -25,6 +25,7 @@ export const FEATURE_NAMES = [
   "vec2Construct",
   "memberDotXY",
   "lengthCall",
+  "statefulRng",
   "multipleStages",
   "logicalAnd",
   "logicalOr",
@@ -158,6 +159,7 @@ function visitExpr(node, vec) {
     if (name === "divergence") vec.divergence++;
     if (name === "vec2") vec.vec2Construct++;
     if (name === "length") vec.lengthCall++;
+    if (name === "rand01" || name === "rngNext") vec.statefulRng++;
   }
 
   if (node.type === "Member" && (node.prop === "x" || node.prop === "y")) {

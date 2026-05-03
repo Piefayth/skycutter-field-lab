@@ -480,6 +480,39 @@ step {
     "boolean params assigned to bool/u32 storage should become f32 0/1 values");
 });
 
+test("stateful RNG helpers draw and advance explicit u32 state", () => {
+  const recipe = compileV2(`
+recipe "Stateful RNG"
+substrate geodesic frequency 16
+field alive: bool
+field rng: u32
+param birth slider 0..1 default 0.1 label "BIRTH"
+
+step {
+  stage s "Draw" {
+    reads alive, rng
+    writes alive, rng
+    cell {
+      let r = rand01(rng)
+      set alive = r < birth ? 1 : alive
+      set rng = rngNext(rng)
+    }
+  }
+}
+`);
+  const passes = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
+  const alivePass = passes.find((pass) => pass.field === "alive");
+  const rngPass = passes.find((pass) => pass.field === "rng");
+  assert(alivePass, "stage should emit an alive pass");
+  assert(rngPass, "stage should emit an rng pass");
+  assert(alivePass.source.includes("fn rngRand01"), "RNG draw helper should be in the WGSL prelude");
+  assert(alivePass.source.includes("rngRand01(v_rng)"), "rand01(rng) should lower through rngRand01");
+  assert(rngPass.source.includes("fn rngNext24"), "RNG advance helper should be in the WGSL prelude");
+  assert(rngPass.source.includes("rngNext24(v_rng)"), "rngNext(rng) should lower through rngNext24");
+  assert(rngPass.source.includes("var<storage, read_write> outputField: array<u32>"),
+    "rng state should write back through u32 storage");
+});
+
 test("MATH_FUNCTIONS registry drives all consumers (smoke)", async () => {
   // Each MATH_FUNCTIONS entry should self-validate: the WGSL emitter,
   // the JS init runtime, and the type checker all dispatch through

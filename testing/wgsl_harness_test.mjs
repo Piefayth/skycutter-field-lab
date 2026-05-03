@@ -193,4 +193,59 @@ scenarios { scenario blank "Blank" { set u = 0 } }
       h.dispose();
     }
   });
+
+  // -- Test 5: explicit stateful RNG ----------------------------------------
+  await t.test("stateful RNG advances u32 state and emits bounded draws", async () => {
+    const recipe = `
+recipe "RNG"
+substrate geodesic frequency 8
+field draw: f32
+field rng: u32
+step {
+  stage sample {
+    reads rng
+    writes draw, rng
+    cell {
+      set draw = rand01(rng)
+      set rng = rngNext(rng)
+    }
+  }
+}
+metric m = mean cells { draw }
+views {
+  palette MONO {
+    stop 0 color [0, 0, 0]
+    stop 1 color [255, 255, 255]
+  }
+  view draw "Draw" {
+    color ramp draw range [0, 1] palette MONO
+  }
+}
+scenarios {
+  scenario blank "Blank" {
+    set draw = 0
+    set rng = 1
+  }
+}
+`;
+    const h = await makeHarness({ recipeDsl: recipe, frequency: FREQUENCY });
+    try {
+      const initial = new Uint32Array(h.cellCount);
+      for (let i = 0; i < initial.length; i++) initial[i] = i + 1;
+      h.uploadField("rng", initial);
+
+      await h.tick();
+
+      const draw = await h.readField("draw");
+      const next = await h.readField("rng");
+      for (let i = 0; i < Math.min(16, h.cellCount); i++) {
+        assert.ok(draw[i] >= 0 && draw[i] <= 1, `cell ${i}: draw out of range: ${draw[i]}`);
+        const expected = (Math.imul(1664525, initial[i] & 0x00ffffff) + 1013904223) & 0x00ffffff;
+        assert.equal(next[i], expected, `cell ${i}: rng advanced incorrectly`);
+      }
+      assert.notEqual(draw[0], draw[1], "adjacent RNG states should not draw the same sample");
+    } finally {
+      h.dispose();
+    }
+  });
 });

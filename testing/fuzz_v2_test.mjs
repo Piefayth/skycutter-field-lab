@@ -48,20 +48,23 @@ test("fuzzer features: extracted from v2 AST, not source regexes", () => {
 substrate geodesic frequency 16
 field u: f32
 field state: u32
+field rng: u32
 field alive: bool
 field wind: vec2
 field d: f32 derived
 
 step {
   stage s {
-    reads u, wind
-    writes u, d
+    reads u, wind, rng
+    writes u, d, rng
     cell {
       let g = gradient(u)
+      let r = rand01(rng)
       when u > 0 and not false {
         set d = divergence(wind)
       }
-      set u = u@upstream(wind.x, wind.y, dt) + (u@prev > 0 ? 1 : 0)
+      set u = u@upstream(wind.x, wind.y, dt) + (u@prev > 0 ? r : 0)
+      set rng = rngNext(rng)
     }
   }
 }
@@ -100,7 +103,7 @@ scenarios {
     "vec2Field", "u32Field", "boolField", "derivedField", "gradient", "divergence", "prevRead",
     "upstreamRead", "ternary", "when", "countWhere", "memberDotXY",
     "lengthCall", "logicalAnd", "logicalNot", "exprView", "stamp",
-    "ellipseAction", "regionAction", "scenarioEachCell",
+    "ellipseAction", "regionAction", "scenarioEachCell", "statefulRng",
   ]) {
     assert.ok(vec[name] > 0, `expected ${name} to be present`);
   }

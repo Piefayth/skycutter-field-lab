@@ -81,6 +81,12 @@
       "summary": "Each cell holds a state in [0, N). Every tick, if any neighbor is at state (self+1) mod N, the cell advances. Random initial state → self-organized rotating spirals across the whole sphere. The 12 pentagonal cells pin spiral cores, giving the dynamics a permanent topological signature of the substrate. First v2 demo of u32 field types."
     },
     {
+      "id": "ising-model",
+      "name": "Ising model (example)",
+      "path": "recipes/ising-model.mjs",
+      "summary": "Stochastic ferromagnet on a sphere. Each cell stores a spin and explicit RNG state; rand01(rng) proposes Metropolis flips and rngNext(rng) advances the state. Low temperature coarsens into domains, high temperature boils."
+    },
+    {
       "id": "gierer-meinhardt",
       "name": "Gierer-Meinhardt (example)",
       "path": "recipes/gierer-meinhardt.mjs",

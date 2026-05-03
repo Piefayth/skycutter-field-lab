@@ -39,6 +39,11 @@ const TARGET_FAMILIES = [
     generate: recipeIntegerBoolFields,
   },
   {
+    name: "stateful-rng",
+    doc: "explicit u32 RNG state through rand01/rngNext in stage cells",
+    generate: recipeStatefulRng,
+  },
+  {
     name: "multi-stage-ordering",
     doc: "multi-stage last-write/read-after-write patterns without history fields",
     generate: recipeMultiStageOrdering,
@@ -424,6 +429,77 @@ scenarios {
       set state = abs(cellRand(${2 + Math.floor(rng() * 9)}) * 5)
       set alive = state > 2
       set heat = state
+    }
+  }
+}`;
+}
+
+function recipeStatefulRng(seed) {
+  const rng = makeRng(seed);
+  const birth = fixed(0.05 + rng() * 0.25);
+  const death = fixed(0.05 + rng() * 0.25);
+  return `recipe "Target stateful RNG ${seed}"
+summary "Targeted fuzz: explicit u32 RNG state with rand01/rngNext."
+
+substrate geodesic frequency 16
+
+field alive: bool
+field rng: u32
+field changed: u32 derived
+field density: f32 derived
+
+param birth slider 0..1 step 0.01 default ${birth} label "BIRTH"
+param death slider 0..1 step 0.01 default ${death} label "DEATH"
+
+step {
+  stage stochastic {
+    reads alive, rng
+    writes alive, changed, rng
+    cell {
+      let r = rand01(rng)
+      let neighborsAlive = mean n in neighbors { alive@n }
+      let shouldBirth = alive < 0.5 and r < birth * neighborsAlive
+      let shouldDie = alive > 0.5 and r < death * (1 - neighborsAlive)
+      set alive = shouldBirth ? true : (shouldDie ? false : alive > 0.5)
+      set changed = (shouldBirth or shouldDie) ? 1 : 0
+      set rng = rngNext(rng)
+    }
+  }
+
+  stage derive {
+    reads alive
+    writes density
+    cell {
+      set density = mean n in neighbors { alive@n }
+    }
+  }
+}
+
+metric active = count cells where alive > 0
+metric changedCount = sum cells { changed }
+metric densityMean = mean cells { density }
+
+views {
+  palette LIFE {
+    stop 0 color [10, 12, 18]
+    stop 1 color [130, 220, 100]
+  }
+  view alive "Alive" { color ramp alive range [0, 1] palette LIFE }
+  view density "Density" { color ramp density range [0, 1] palette LIFE }
+}
+
+stamps {
+  stamp seed "Seed" {
+    spot alive at brush.pos, radius=brush.r, amount=1
+  }
+}
+
+scenarios {
+  scenario init "Init" {
+    for each cell {
+      let p = cellRand(${7 + Math.floor(rng() * 20)}) * 0.5 + 0.5
+      set alive = p > 0.55
+      set rng = abs(cellRand(${31 + Math.floor(rng() * 20)}) * 16777215)
     }
   }
 }`;

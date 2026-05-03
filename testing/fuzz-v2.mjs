@@ -105,6 +105,7 @@ class FuzzCtx {
     this.consts = [];     // [{ name, value }]
     this.palettes = [];
     this.derivedField = null;
+    this.rngField = null;
   }
 
   scalarFields() { return this.fields.filter(f => f.type === "f32"); }
@@ -351,12 +352,18 @@ function genStage(ctx, name, { allowPrev = false } = {}) {
     if (writes.length < Math.min(2, allFields.length)) writes.push(vec2Candidate.name);
     else writes[0] = vec2Candidate.name;
   }
+  const useStatefulRng = Boolean(ctx.rngField) && maybe(r, 0.45);
+  if (useStatefulRng && !writes.includes(ctx.rngField.name)) writes.push(ctx.rngField.name);
+  if (name === "stg0" && ctx.derivedField && !writes.includes(ctx.derivedField.name)) {
+    writes.push(ctx.derivedField.name);
+  }
   // Reads: writes + maybe one extra (mixed types are fine)
   const reads = [...writes];
   if (allFields.length > writes.length && maybe(r, 0.5)) {
     const extra = allFields.find(f => !reads.includes(f.name));
     if (extra) reads.push(extra.name);
   }
+  if (useStatefulRng && !reads.includes(ctx.rngField.name)) reads.push(ctx.rngField.name);
   const fieldType = (name) => allFields.find(f => f.name === name).type;
   const scalarReads = reads.filter(n => fieldType(n) === "f32");
   const vec2Reads   = reads.filter(n => fieldType(n) === "vec2");
@@ -384,6 +391,10 @@ function genStage(ctx, name, { allowPrev = false } = {}) {
     prevAllowedVec2:   [...prevAllowedVec2Set],
   };
   const numLets = intIn(r, 0, 2);
+  if (useStatefulRng) {
+    body.push(`let draw = rand01(${ctx.rngField.name})`);
+    scope.locals.push("draw");
+  }
   for (let i = 0; i < numLets; i++) {
     const lname = `t${i}`;
     body.push(`let ${lname} = ${genCellExpr(ctx, scope)}`);
@@ -391,6 +402,10 @@ function genStage(ctx, name, { allowPrev = false } = {}) {
   }
   for (const w of writes) {
     const wType = fieldType(w);
+    if (useStatefulRng && w === ctx.rngField.name) {
+      body.push(`set ${w} = rngNext(${w})`);
+      continue;
+    }
     const verb = maybe(r, 0.5) && reads.includes(w) ? "add" : "set";
     if (wType === "vec2") {
       const expr = scope.scalarReads.length > 0 && maybe(r, 0.35)
@@ -437,6 +452,10 @@ function genInitBody(ctx) {
       const vx = round(r() * 2 - 1, 2);
       const vy = round(r() * 2 - 1, 2);
       lines.push(`set ${f.name} = vec2(${vx}, ${vy})`);
+    } else if (f.type === "u32") {
+      lines.push(`set ${f.name} = ${intIn(r, 1, 16777215)}`);
+    } else if (f.type === "bool") {
+      lines.push(`set ${f.name} = ${maybe(r, 0.5) ? "true" : "false"}`);
     } else if (choice < 0.5) {
       lines.push(`set ${f.name} = ${round(r() * 2, 3)}`);
     } else if (choice < 0.85) {
@@ -497,6 +516,11 @@ export function generateRecipe(seed) {
   }
   for (const field of ctx.fields.slice(1)) {
     lines.push(`field ${field.name}: ${field.type}${field.derived ? " derived" : ""}`);
+  }
+  if (maybe(r, 0.35)) {
+    ctx.rngField = { name: "rng", type: "u32", derived: false };
+    ctx.fields.push(ctx.rngField);
+    lines.push(`field rng: u32`);
   }
   lines.push("");
 

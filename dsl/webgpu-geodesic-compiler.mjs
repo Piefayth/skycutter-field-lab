@@ -447,6 +447,29 @@ fn hashNoise(i: f32, seed: f32) -> f32 {
   return (f32(x) / 4294967295.0) * 2.0 - 1.0;
 }
 
+fn rngState24(state: f32) -> u32 {
+  return u32(round(state)) & 0x00ffffffu;
+}
+
+fn rngHash24(state: f32) -> u32 {
+  var x = rngState24(state) + 0x9e3779b9u;
+  x = x ^ (x >> 16u);
+  x = x * 2246822519u;
+  x = x ^ (x >> 13u);
+  x = x * 3266489917u;
+  x = x ^ (x >> 16u);
+  return x & 0x00ffffffu;
+}
+
+fn rngRand01(state: f32) -> f32 {
+  return f32(rngHash24(state)) / 16777215.0;
+}
+
+fn rngNext24(state: f32) -> f32 {
+  let x = rngState24(state);
+  return f32(((1664525u * x) + 1013904223u) & 0x00ffffffu);
+}
+
 fn hashLattice(c: vec3<i32>, seed: f32) -> f32 {
   var x = (bitcast<u32>(c.x) * 73856093u) ^ (bitcast<u32>(c.y) * 19349663u) ^ (bitcast<u32>(c.z) * 83492791u);
   x = x ^ ((bitcast<u32>(i32(floor(seed))) + 1013904223u) * 1664525u);
@@ -881,7 +904,7 @@ const RESERVED_IDENTIFIERS = new Set([
   "true", "false", "dt", "frame", "PI", "TAU", "N", "x", "y", "u", "v", "lon", "lat", "px", "py", "pz", "i",
   "params", "consts", "planet",
   "neighbor", "prev",
-  "cellNoise", "cellRand", "wrapAngle", "max", "min", "abs", "sin", "asin", "cos", "exp", "sqrt", "pow", "smoothstep", "clamp", "hypot",
+  ...MATH_FUNCTIONS.map((fn) => fn.name),
 ]);
 
 function compileActions(actions, ctx) {
