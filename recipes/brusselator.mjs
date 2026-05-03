@@ -56,24 +56,27 @@ palette V_RAMP {
 view u "U" { color ramp u range [0, 5] palette U_RAMP }
 view v "V" { color ramp v range [0, 6] palette V_RAMP }
 
-// CFL: forward-Euler stability for the homogeneous reaction needs
-// dt_eff·|λ| < 2 where |λ| ≈ 2 near the (u*, v*) fixed point. With
-// dt = 1/60, rate ≤ 60 keeps it stable; rate=15 leaves headroom for
-// the user to crank A/B without the integrator exploding.
+// CFL: at the (u*, v*) = (A, B/A) fixed point, the Jacobian's
+// eigenvalues are complex λ = -(1+A²-B)/2 ± i·√(A² - ((1+A²-B)/2)²).
+// Forward-Euler stability for complex λ is much tighter than the
+// "dt·|λ|<2" rule of thumb suggests — what really matters is
+// dt·|Im(λ)|² < 2·|Re(λ)|, i.e. the imaginary (oscillatory) part
+// can dominate. Defaults A=2, B=3 give λ ≈ -1 ± 1.73i, so the
+// per-tick amplification at dt=0.25 (rate=15) is |1+λ·dt|² = 0.75
+// — comfortably stable.
 //
-// Hopf vs Turing: the well-mixed system is Hopf-unstable when
-// B > 1+A². At A=2, that's B > 5 — defaults sit at B=4.5 just below
-// the line, so the homogeneous state damps to (u*, v*) = (A, B/A) =
-// (2, 2.25) and the only growing modes are spatial Turing ones. If
-// you crank B past 5+A² you'll see global oscillations interfere
-// with the spatial pattern (the textbook Hopf-Turing competition).
+// Push B closer to 1+A² = 5 and the real part shrinks (weaker
+// damping); past A²+1 the homogeneous state goes Hopf-unstable and
+// you'll see global oscillations dominate over Turing patterns. The
+// previous default B=4.5 was Hopf-stable on paper but FE-unstable
+// numerically (|1+λ·dt|² ≈ 1.13 grew exponentially).
 //
 // Turing-unstable defaults: D_v / D_u = 15. Bumping Dv past ~1.5 or
 // lowering Du below ~0.02 picks shorter wavelengths (denser spots).
 param simRateHz slider 0..360 step 1     default 60   label "SIM RATE"
 param rate      slider 1..60  step 1     default 15   label "RATE"
 param A         slider 0.5..4 step 0.05  default 2.0  label "A (FEED)"
-param B         slider 0..8   step 0.05  default 4.5  label "B (RATIO)"
+param B         slider 0..8   step 0.05  default 3.0  label "B (RATIO)"
 param Du        slider 0..0.2 step 0.005 default 0.04 label "Du"
 param Dv        slider 0..2   step 0.01  default 0.60 label "Dv"
 
@@ -87,22 +90,22 @@ stamp pulseV "Pulse V" {
 
 scenario stripes "Random near-steady seed" {
   // Defaults sit in the Turing-unstable regime; tiny perturbations
-  // around (u*, v*) = (A, B/A) = (2, 2.25) grow into stripes/spots
+  // around (u*, v*) = (A, B/A) = (2, 1.5) grow into stripes/spots
   // after a few hundred ticks.
   for each cell {
     set u = 2.0 + cellNoise(11, 1.0) * 0.15
-    set v = 2.25 + cellNoise(13, 1.0) * 0.15
+    set v = 1.5 + cellNoise(13, 1.0) * 0.10
   }
 }
 
 scenario steady "Homogeneous steady state" {
   set u = 2.0
-  set v = 2.25
+  set v = 1.5
 }
 
 scenario singleSpot "Single perturbation" {
   set u = 2.0
-  set v = 2.25
+  set v = 1.5
   spot u at lon=0, lat=0, radius=0.12, amount=0.6
 }
 

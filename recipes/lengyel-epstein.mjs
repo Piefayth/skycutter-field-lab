@@ -59,57 +59,67 @@ palette V_RAMP {
   stop 1 color [180, 100, 200]
 }
 
-view u "U (iodide)"   { color ramp u range [0, 8]  palette U_RAMP }
-view v "V (chlorite)" { color ramp v range [0, 16] palette V_RAMP }
+view u "U (iodide)"   { color ramp u range [0, 5]  palette U_RAMP }
+view v "V (chlorite)" { color ramp v range [0, 10] palette V_RAMP }
 
-// CFL: the σ stiffness multiplies the inhibitor's whole right-hand
-// side, so the v-equation has eigenvalues O(σ·b). Forward-Euler
-// stability needs dt_eff·σ·b < 2; with dt = 1/60 and defaults
-// σ=10, b=0.4, rate=15 → dt_eff·σ·b = 15/60·10·0.4 = 1.0 — comfortable.
+// CFL note — Lengyel-Epstein is genuinely a stiff model. The σ
+// stiffness creates a fast/slow split: the homogeneous fixed point
+// is Hopf-unstable when σ is *small* (the Turing condition needs
+// σ above a threshold), but Forward Euler with dt·σ above the
+// stability bound is also unstable. Those two cliffs come at you
+// from opposite directions.
 //
-// Cranking σ past ~20 with rate=15 will start to push the integrator;
-// drop rate proportionally if you want to explore the stiff end of
-// the parameter space (σ=50, rate=4 still works).
+// At a=10, b=0.3, σ=30 the fixed point is (u*, v*) = (2, 5) and
+// the Jacobian eigenvalues are λ ≈ -1.1 ± 4.1i — Hopf-stable but
+// dt·|λ| ≈ 4 at rate=60, requiring much smaller dt than feels
+// natural. Defaults rate=3 give dt_eff = 0.05 and a per-tick
+// amplification of 0.94 — stable but slow. Patterns take 30-60
+// wall-seconds to crystallize at default rate.
+//
+// Crank σ above ~50 and you'll need rate=2 or below; crank σ below
+// ~20 with this a/b and the homogeneous state goes unstable and
+// flashes globally regardless of how you tune rate. The model only
+// looks "right" in a narrow corridor.
 param simRateHz slider 0..360 step 1    default 60   label "SIM RATE"
-param rate      slider 1..60  step 1    default 15   label "RATE"
-param a         slider 0..30  step 0.5  default 12   label "a"
-param b         slider 0..2   step 0.01 default 0.4  label "b"
-param sigma     slider 1..50  step 0.5  default 10   label "σ (STIFF)"
+param rate      slider 1..30  step 1    default 3    label "RATE"
+param a         slider 4..20  step 0.5  default 10   label "a"
+param b         slider 0..1   step 0.01 default 0.3  label "b"
+param sigma     slider 5..80  step 1    default 30   label "σ (STIFF)"
 param Du        slider 0..0.3 step 0.005 default 0.05 label "Du"
-param Dv        slider 0..3   step 0.01  default 1.00 label "Dv"
+param Dv        slider 0..4   step 0.05  default 3.0  label "Dv"
 
 stamp pulse "Pulse U" {
   spot u at brush.pos, radius=brush.r, amount=2
 }
 
 scenario spots "Random near-steady seed" {
-  // Steady state at a=12: u* = 2.4, v* = 6.76. Seed a small noise band
-  // around it and watch hexagonal spots crystallize over a few hundred
-  // ticks.
+  // Steady state at a=10: u* = a/5 = 2, v* = 1 + u*² = 5. Seed
+  // small noise around the fixed point; spatial Turing modes grow
+  // into hexagonal spots over 30-60 wall-seconds at default rate.
   for each cell {
-    set u = 2.4 + cellNoise(11, 1.0) * 0.4
-    set v = 6.76 + cellNoise(13, 1.0) * 0.4
+    set u = 2.0 + cellNoise(11, 1.0) * 0.3
+    set v = 5.0 + cellNoise(13, 1.0) * 0.3
   }
 }
 
 scenario steady "Homogeneous steady state" {
-  set u = 2.4
-  set v = 6.76
+  set u = 2.0
+  set v = 5.0
 }
 
 scenario stripes "Latitudinal pattern seed" {
   // Pre-pattern sin(lat) in U; depending on (a, b) the system either
   // heals into stripes or fragments into a spot lattice.
   for each cell {
-    set u = 2.4 + sin(lat * 5) * 0.8
-    set v = 6.76
+    set u = 2.0 + sin(lat * 5) * 0.6
+    set v = 5.0
   }
 }
 
 scenario singleSpot "One nucleation" {
-  set u = 2.4
-  set v = 6.76
-  spot u at lon=0, lat=0, radius=0.12, amount=2.5
+  set u = 2.0
+  set v = 5.0
+  spot u at lon=0, lat=0, radius=0.12, amount=2
 }
 
 step {
@@ -147,7 +157,7 @@ step {
 
 metric meanU  = mean cells { u }
 metric meanV  = mean cells { v }
-metric active = count cells where u > 4
+metric active = count cells where u > 3
 `;
 
 export const pipeline = compileV2(pipelineDsl);
