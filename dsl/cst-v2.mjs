@@ -183,12 +183,16 @@ function makeRoot(source) {
 function scanBlocks(source, sanitized, root) {
   const blocks = [];
   const errors = [];
-  const stack = [root];
+  const stack = [{ kind: "root", block: root }];
   for (let i = 0; i < sanitized.length; i++) {
     const ch = sanitized[i];
     if (ch === "{") {
       const header = readBlockHeader(sanitized, i);
-      const parent = stack[stack.length - 1] ?? root;
+      if (!BLOCK_KEYWORDS.has(header.keyword)) {
+        stack.push({ kind: "brace" });
+        continue;
+      }
+      const parent = innermostBlockFrame(stack)?.block ?? root;
       const block = {
         type: "Block",
         keyword: header.keyword,
@@ -208,7 +212,7 @@ function scanBlocks(source, sanitized, root) {
       };
       parent.children.push(block);
       blocks.push(block);
-      stack.push(block);
+      stack.push({ kind: "block", block });
       continue;
     }
     if (ch === "}") {
@@ -221,7 +225,9 @@ function scanBlocks(source, sanitized, root) {
         });
         continue;
       }
-      const block = stack.pop();
+      const frame = stack.pop();
+      if (frame.kind !== "block") continue;
+      const block = frame.block;
       block.closeBrace = i;
       block.bodyTo = i;
       block.to = i + 1;
@@ -229,7 +235,9 @@ function scanBlocks(source, sanitized, root) {
     }
   }
   while (stack.length > 1) {
-    const block = stack.pop();
+    const frame = stack.pop();
+    if (frame.kind !== "block") continue;
+    const block = frame.block;
     errors.push({
       type: "UnclosedBlock",
       from: block.openBrace,
@@ -241,18 +249,28 @@ function scanBlocks(source, sanitized, root) {
   return { blocks, errors };
 }
 
+function innermostBlockFrame(stack) {
+  for (let i = stack.length - 1; i >= 0; i--) {
+    if (stack[i].kind === "block" || stack[i].kind === "root") return stack[i];
+  }
+  return null;
+}
+
 function readBlockHeader(sanitized, openBrace) {
   const lineStart = sanitized.lastIndexOf("\n", openBrace - 1) + 1;
-  const header = sanitized.slice(lineStart, openBrace);
+  const previousOpen = sanitized.lastIndexOf("{", openBrace - 1);
+  const previousClose = sanitized.lastIndexOf("}", openBrace - 1);
+  const headerStart = Math.max(lineStart, previousOpen + 1, previousClose + 1);
+  const header = sanitized.slice(headerStart, openBrace);
   const matches = [...header.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)];
   let keyword = "?";
   let id = null;
-  let from = lineStart;
+  let from = headerStart;
   for (let i = matches.length - 1; i >= 0; i--) {
     const word = matches[i][0];
     if (BLOCK_KEYWORDS.has(word)) {
       keyword = word;
-      from = lineStart + matches[i].index;
+      from = headerStart + matches[i].index;
       const next = matches[i + 1]?.[0] ?? null;
       id = next && !BLOCK_KEYWORDS.has(next) ? next : null;
       break;
@@ -304,7 +322,12 @@ function statementSegmentsForLine(sanitized, line) {
   const raw = sanitized.slice(line.from, line.to);
   const points = [0];
   for (let i = 0; i < raw.length; i++) {
-    if (raw[i] === "{" || raw[i] === ";") points.push(i + 1);
+    if (raw[i] === "{") {
+      const header = readBlockHeader(sanitized, line.from + i);
+      if (BLOCK_KEYWORDS.has(header.keyword)) points.push(i + 1);
+    } else if (raw[i] === ";") {
+      points.push(i + 1);
+    }
   }
   const out = [];
   for (const point of points) {
@@ -312,8 +335,26 @@ function statementSegmentsForLine(sanitized, line) {
     while (from < raw.length && /\s/.test(raw[from])) from++;
     if (from >= raw.length || raw[from] === "}") continue;
     let to = raw.length;
+    let depth = 0;
     for (let i = from; i < raw.length; i++) {
-      if (raw[i] === "}" || raw[i] === ";") { to = i; break; }
+      const globalPos = line.from + i;
+      if (raw[i] === "{") {
+        const header = readBlockHeader(sanitized, globalPos);
+        if (depth === 0 && BLOCK_KEYWORDS.has(header.keyword)) {
+          to = i;
+          break;
+        }
+        depth++;
+      } else if (raw[i] === "}") {
+        if (depth === 0) {
+          to = i;
+          break;
+        }
+        depth--;
+      } else if (raw[i] === ";" && depth === 0) {
+        to = i;
+        break;
+      }
     }
     while (to > from && /\s/.test(raw[to - 1])) to--;
     if (to > from) out.push({ from: line.from + from, to: line.from + to });

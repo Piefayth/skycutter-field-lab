@@ -56,6 +56,7 @@ views {
 test("CST records blocks, statements, symbols, and names", () => {
   const cst = parseDslCst(SOURCE);
   assert(cst.blocks.some((block) => block.keyword === "stage" && block.id === "move"));
+  assert(!cst.blocks.some((block) => block.keyword === "?"));
   assert(cst.statements.some((stmt) => stmt.keyword === "reads" && stmt.role === "stageIo"));
   assertEq(cst.names.fields, ["u"]);
   assertEq(cst.names.parameters, ["speed"]);
