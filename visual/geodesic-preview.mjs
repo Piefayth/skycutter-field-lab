@@ -130,25 +130,47 @@ function rasterizeOne(char, { mode }) {
 }
 
 function createGlyphLayer(scene, grid) {
-  // Cache per character: { textures: {fill, outline}, fillMesh,
-  // outlineMesh, geometries, materials }. Two meshes per character —
-  // outline drawn first (renderOrder 5), fill on top (renderOrder 6).
-  // Same per-instance matrix on both, different per-instance color.
+  // Cache per character: { textures, outline, fill }. Each of
+  // outline/fill is a regular Mesh with a BufferGeometry holding
+  // cellCount × 4 quad vertices (positions + uvs + colors) and
+  // cellCount × 6 indices. Per-vertex colors tint the texture via
+  // MeshBasicMaterial({ map, vertexColors: true }) — works because
+  // the geometry has a real `color` attribute, unlike the previous
+  // PlaneGeometry+InstancedMesh approach where Three.js silently
+  // bypassed both vertex- and instance-color paths.
   const cache = new Map();
 
-  function buildInstancedMesh(texture, label, renderOrder) {
-    const geometry = new THREE.PlaneGeometry(1, 1);
-    // No `vertexColors: true` here — that flag enables a per-vertex
-    // `color` attribute path which PlaneGeometry doesn't provide, and
-    // when both vertexColors and the missing attribute are in play
-    // Three.js silently bypasses the per-instance color path too,
-    // leaving the texture rendering at uniform white.
-    //
-    // `mesh.instanceColor` (set below as an InstancedBufferAttribute)
-    // is a separate mechanism — Three.js's renderer detects it and
-    // injects the right shader chunk automatically.
+  function buildMesh(texture, label, renderOrder) {
+    const N = grid.cellCount;
+    const positions = new Float32Array(N * 4 * 3);
+    const colors = new Float32Array(N * 4 * 3);
+    const uvs = new Float32Array(N * 4 * 2);
+    const indices = new Uint32Array(N * 6);
+    // UVs and indices are static. Each quad's 4 verts use
+    // (0,0),(1,0),(1,1),(0,1); the 6 indices form two triangles.
+    for (let i = 0; i < N; i++) {
+      const v = i * 4;
+      uvs[v * 2 + 0] = 0; uvs[v * 2 + 1] = 0;
+      uvs[v * 2 + 2] = 1; uvs[v * 2 + 3] = 0;
+      uvs[v * 2 + 4] = 1; uvs[v * 2 + 5] = 1;
+      uvs[v * 2 + 6] = 0; uvs[v * 2 + 7] = 1;
+      const idx = i * 6;
+      indices[idx + 0] = v + 0; indices[idx + 1] = v + 1; indices[idx + 2] = v + 2;
+      indices[idx + 3] = v + 0; indices[idx + 4] = v + 2; indices[idx + 5] = v + 3;
+    }
+    const geometry = new THREE.BufferGeometry();
+    const positionAttr = new THREE.BufferAttribute(positions, 3);
+    const colorAttr = new THREE.BufferAttribute(colors, 3);
+    positionAttr.setUsage(THREE.DynamicDrawUsage);
+    colorAttr.setUsage(THREE.DynamicDrawUsage);
+    geometry.setAttribute("position", positionAttr);
+    geometry.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
+    geometry.setAttribute("color", colorAttr);
+    geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+    geometry.setDrawRange(0, 0);
     const material = new THREE.MeshBasicMaterial({
       map: texture,
+      vertexColors: true,
       transparent: true,
       alphaTest: 0.05,
       side: THREE.DoubleSide,
@@ -158,31 +180,20 @@ function createGlyphLayer(scene, grid) {
       polygonOffsetFactor: -2,
       polygonOffsetUnits: -2,
     });
-    const mesh = new THREE.InstancedMesh(geometry, material, grid.cellCount);
-    // Force Three.js to lazy-create instanceColor via its own setColorAt
-    // path. Pre-assigning a manually-built InstancedBufferAttribute
-    // can leave the renderer's per-frame upload path uninitialized
-    // — the symptom is "every glyph renders at uniform white because
-    // the per-instance color attribute never makes it to the GPU".
-    // setColorAt(0, anything) bootstraps the attribute correctly.
-    const seed = new THREE.Color(0, 0, 0);
-    mesh.setColorAt(0, seed);
-    mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
-    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    mesh.count = 0;
+    const mesh = new THREE.Mesh(geometry, material);
     mesh.frustumCulled = false;
     mesh.visible = false;
     mesh.renderOrder = renderOrder;
     mesh.name = `geodesic-glyph-${label}`;
     scene.add(mesh);
-    return { mesh, geometry, material };
+    return { mesh, geometry, material, positions, colors };
   }
 
   function ensureMeshFor(char) {
     if (cache.has(char)) return cache.get(char);
     const textures = rasterizeGlyphPair(char);
-    const outline = buildInstancedMesh(textures.outline, `${char}-outline`, 5);
-    const fill = buildInstancedMesh(textures.fill, `${char}-fill`, 6);
+    const outline = buildMesh(textures.outline, `${char}-outline`, 5);
+    const fill = buildMesh(textures.fill, `${char}-fill`, 6);
     const slot = { char, textures, outline, fill };
     cache.set(char, slot);
     return slot;
@@ -218,16 +229,14 @@ function createGlyphLayer(scene, grid) {
 // distance ≈ 2π / (5.5 × N) sphere-radians. Use that as the
 // base unit; `length=1` produces glyphs ~ one neighbor-spacing big.
 // Default length=0.5 → half a cell.
-// Per-instance scratch. Reused across cells/calls to avoid allocating
-// fresh Matrix4s and Colors in the hot loop.
-const _glyphMatrix = new THREE.Matrix4();
-const _fillColor = new THREE.Color();
-const _outlineColor = new THREE.Color();
-
 function populateGlyphMesh(slot, { grid, tileGeometry, fields = {}, viewSpec }) {
   const glyph = viewSpec.glyph;
   const fillMesh = slot.fill.mesh;
   const outlineMesh = slot.outline.mesh;
+  const fillPositions = slot.fill.positions;
+  const fillColors = slot.fill.colors;
+  const outlinePositions = slot.outline.positions;
+  const outlineColors = slot.outline.colors;
 
   const tileColors = tileGeometry.getAttribute("color")?.array;
   const tileStarts = tileGeometry.userData.tileStarts;
@@ -276,36 +285,34 @@ function populateGlyphMesh(slot, { grid, tileGeometry, fields = {}, viewSpec }) 
       scale *= Math.abs(s);
     }
 
-    // Build the per-instance transform. The PlaneGeometry is unit
-    // sized in the local x/y plane; we want to map local x → "rotated
-    // east", local y → "rotated north", local z → outward normal,
-    // then translate to the cell position lifted to sphereR.
+    // Per-cell quad vertex layout (in the tangent plane, before
+    // rotation): unit square centered at origin, corner 0 at
+    // (-0.5, -0.5), wound CCW. UVs are static (set at construction);
+    // positions are written here per-frame.
+    //   c0 = (-0.5, -0.5)   c1 = (0.5, -0.5)
+    //   c3 = (-0.5,  0.5)   c2 = (0.5,  0.5)
     //
-    // Combined rotation+basis: the columns of the 3x3 rotation block
-    // are the world-space basis vectors of local-x, local-y, local-z
-    // respectively. We compute those directly:
-    //   localX_world = (cosA*east + sinA*north) * scale
-    //   localY_world = (-sinA*east + cosA*north) * scale
-    //   localZ_world = center  (outward normal — quad faces outward)
-    const lx_x = (cosA * ex + sinA * nx) * scale;
-    const lx_y = (cosA * ey + sinA * ny) * scale;
-    const lx_z = (cosA * ez + sinA * nz) * scale;
-    const ly_x = (-sinA * ex + cosA * nx) * scale;
-    const ly_y = (-sinA * ey + cosA * ny) * scale;
-    const ly_z = (-sinA * ez + cosA * nz) * scale;
-    const lz_x = cx;
-    const lz_y = cy;
-    const lz_z = cz;
-    const px = cx * sphereR;
-    const py = cy * sphereR;
-    const pz = cz * sphereR;
-    const m = _glyphMatrix.elements;
-    m[0] = lx_x; m[4] = ly_x; m[8]  = lz_x; m[12] = px;
-    m[1] = lx_y; m[5] = ly_y; m[9]  = lz_y; m[13] = py;
-    m[2] = lx_z; m[6] = ly_z; m[10] = lz_z; m[14] = pz;
-    m[3] = 0;    m[7] = 0;    m[11] = 0;    m[15] = 1;
-    fillMesh.setMatrixAt(activeCount, _glyphMatrix);
-    outlineMesh.setMatrixAt(activeCount, _glyphMatrix);
+    // Per corner: scale, in-plane rotate, lift to 3D via tangent
+    // basis, translate to cell position × sphereR.
+    const half = 0.5 * scale;
+    const cxr = cx * sphereR, cyr = cy * sphereR, czr = cz * sphereR;
+    const vBase = activeCount * 4 * 3;
+    for (let corner = 0; corner < 4; corner++) {
+      const cornerX = (corner === 1 || corner === 2) ? half : -half;
+      const cornerY = (corner === 2 || corner === 3) ? half : -half;
+      const rx = cornerX * cosA - cornerY * sinA;
+      const ry = cornerX * sinA + cornerY * cosA;
+      const wx = cxr + rx * ex + ry * nx;
+      const wy = cyr + rx * ey + ry * ny;
+      const wz = czr + rx * ez + ry * nz;
+      const off = vBase + corner * 3;
+      fillPositions[off + 0] = wx;
+      fillPositions[off + 1] = wy;
+      fillPositions[off + 2] = wz;
+      outlinePositions[off + 0] = wx;
+      outlinePositions[off + 1] = wy;
+      outlinePositions[off + 2] = wz;
+    }
 
     // Color scheme: outline + fill, picked so glyphs read clearly
     // against any tile color while picking up a chromatic
@@ -316,9 +323,6 @@ function populateGlyphMesh(slot, { grid, tileGeometry, fields = {}, viewSpec }) 
     //   Dark tile (luma <= 0.55):
     //     fill    = tile × 0.5 + 0.5  (light version of tile hue)
     //     outline = black             (separation under the bright fill)
-    //
-    // Net effect: a tinted glyph that matches the tile's hue family,
-    // wrapped in a high-contrast halo so it's always legible.
     let rT = 0, gT = 0, bT = 0;
     if (tileColors && tileStarts) {
       const v = tileStarts[cell] * 3;
@@ -333,18 +337,23 @@ function populateGlyphMesh(slot, { grid, tileGeometry, fields = {}, viewSpec }) 
       fr = rT * 0.5 + 0.5; fg = gT * 0.5 + 0.5; fb = bT * 0.5 + 0.5;
       oc = 0.03;
     }
-    _fillColor.setRGB(fr, fg, fb);
-    _outlineColor.setRGB(oc, oc, oc);
-    fillMesh.setColorAt(activeCount, _fillColor);
-    outlineMesh.setColorAt(activeCount, _outlineColor);
-
+    // Write the same color to all 4 verts of this cell's quad.
+    for (let corner = 0; corner < 4; corner++) {
+      const off = vBase + corner * 3;
+      fillColors[off + 0] = fr;
+      fillColors[off + 1] = fg;
+      fillColors[off + 2] = fb;
+      outlineColors[off + 0] = oc;
+      outlineColors[off + 1] = oc;
+      outlineColors[off + 2] = oc;
+    }
     activeCount++;
   }
-  for (const m of [fillMesh, outlineMesh]) {
-    m.instanceMatrix.needsUpdate = true;
-    if (m.instanceColor) m.instanceColor.needsUpdate = true;
-    m.count = activeCount;
-    m.visible = activeCount > 0;
+  for (const sub of [slot.fill, slot.outline]) {
+    sub.geometry.attributes.position.needsUpdate = true;
+    sub.geometry.attributes.color.needsUpdate = true;
+    sub.geometry.setDrawRange(0, activeCount * 6);
+    sub.mesh.visible = activeCount > 0;
   }
 }
 
