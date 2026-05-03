@@ -1,10 +1,11 @@
 // =============================================================================
 // WebGPU geodesic DSL compiler slice.
 //
-// This targets storage-buffer compute on the geodesic runtime. The first
-// supported surface is `cell {}` stage bodies because those are pure
-// one-invocation-per-cell programs and map cleanly away from rectangular
-// textures. Stencil primitives (wind, advect, reductions) stay hand-written.
+// V2 has exactly one stage shape: `cell { … }`. Every kernel operation
+// (diffusion, advection, gradient/divergence, reductions, history reads)
+// is expressed as a per-cell expression body — the parser rejects v1's
+// `wind`/`advect`/`diffuse`/`clamp`/`normalize` statement forms and the
+// `each`/`event` stage shapes with redirect messages.
 // =============================================================================
 
 export function compileWebGpuGeodesicPipeline(dsl = {}) {
@@ -13,59 +14,14 @@ export function compileWebGpuGeodesicPipeline(dsl = {}) {
     name: stage.name,
     passes: compileWebGpuGeodesicStage(stage, dsl),
   }));
-  const eventCounters = stages.flatMap((stage) => stage.passes)
-    .filter((pass) => pass.eventCounter)
-    .map((pass) => pass.eventCounter);
-  return { stages, eventCounters };
+  return { stages };
 }
 
 export function compileWebGpuGeodesicStage(stage, dsl = {}) {
-  const statements = stage.body?.statements ?? [];
-  if (statements.length === 1 && statements[0].type === "cell") {
-    return compileWebGpuGeodesicCellStage(stage, dsl);
-  }
-  if (statements.length === 1 && statements[0].type === "each") {
-    return compileWebGpuGeodesicEachStage(stage, dsl);
-  }
-  if (statements.length === 1 && statements[0].type === "event") {
-    return compileWebGpuGeodesicEventStage(stage, dsl);
-  }
-  const passes = [];
-  for (const statement of statements) {
-    if (statement.type === "diffuse") {
-      passes.push({ kind: "diffuse", field: statement.field, amount: statement.amount });
-    } else if (statement.type === "clamp") {
-      passes.push({ kind: "clamp", field: statement.field, lo: statement.lo, hi: statement.hi });
-    } else if (statement.type === "wind") {
-      passes.push({
-        kind: "wind",
-        pressure: statement.pressure,
-        windU: statement.windU,
-        windV: statement.windV,
-        lift: statement.lift,
-        strength: statement.strength,
-      });
-    } else if (statement.type === "advect") {
-      passes.push({
-        kind: "advect",
-        field: statement.field,
-        windU: statement.windU,
-        windV: statement.windV,
-        wind: statement.wind,    // v2 vec2 form
-        dt: statement.dt,
-      });
-    } else if (statement.type === "normalize") {
-      passes.push({
-        kind: "normalize",
-        field: statement.field,
-        damping: statement.damping,
-        condition: statement.condition,
-      });
-    } else {
-      throw new Error(`${stage.id}: WebGPU geodesic primitive ${statement.type} is not supported yet`);
-    }
-  }
-  return passes;
+  // Thin wrapper over compileWebGpuGeodesicCellStage. Kept as a separate
+  // export so callers can stay agnostic of the stage shape — historically
+  // this dispatched between cell / each / event; v2 only has `cell`.
+  return compileWebGpuGeodesicCellStage(stage, dsl);
 }
 
 export function compileWebGpuGeodesicCellStage(stage, dsl = {}) {
@@ -89,63 +45,11 @@ export function compileWebGpuGeodesicCellStage(stage, dsl = {}) {
   }));
 }
 
-export function compileWebGpuGeodesicEachStage(stage, dsl = {}) {
-  const statements = stage?.body?.statements ?? [];
-  if (statements.length !== 1 || statements[0].type !== "each") {
-    throw new Error(`${stage?.id ?? "stage"}: WebGPU geodesic each compiler requires a single each block`);
-  }
-
-  const reads = stage.reads ?? [];
-  const outputs = stage.outputs ?? [...(stage.writes ?? []), ...(stage.declares ?? [])];
-  const layout = uniformLayout(dsl);
-  return outputs.map((field) => ({
-    ...compileActionPass({
-      stage,
-      field,
-      reads,
-      actions: statements[0].actions ?? [],
-      layout,
-      key: `${stage.id}:each:${field}`,
-    }),
-  }));
-}
-
-export function compileWebGpuGeodesicEventStage(stage, dsl = {}) {
-  const statements = stage?.body?.statements ?? [];
-  if (statements.length !== 1 || statements[0].type !== "event") {
-    throw new Error(`${stage?.id ?? "stage"}: WebGPU geodesic event compiler requires a single event block`);
-  }
-
-  const reads = stage.reads ?? [];
-  const outputs = stage.outputs ?? [...(stage.writes ?? []), ...(stage.declares ?? [])];
-  const layout = uniformLayout(dsl);
-  const eventActions = [{
-    type: "when",
-    condition: statements[0].condition,
-    actions: statements[0].actions ?? [],
-  }];
-  return outputs.map((field, index) => ({
-    ...compileActionPass({
-      stage,
-      field,
-      reads,
-      actions: eventActions,
-      layout,
-      key: `${stage.id}:event:${field}`,
-      eventCounter: index === 0 ? {
-        key: stage.id,
-        label: stage.name ?? stage.id,
-        condition: statements[0].condition,
-      } : null,
-    }),
-  }));
-}
-
-function compileActionPass({ stage, field, reads, actions, layout, key, eventCounter = null }) {
+function compileActionPass({ stage, field, reads, actions, layout, key }) {
   const passReads = readsForTarget(actions, field, reads);
   const targetActions = filterActionsForTarget(actions, field);
   const needsNeighbors = actionsUseNeighborReduce(targetActions);
-  // `prev(field)` reads the named field's value as of the tick boundary.
+  // `field@prev` reads the named field's value as of the tick boundary.
   // The runtime keeps a separate `f_<name>_prev` buffer per history-
   // declared field; the compiler emits an additional binding for each
   // such field used by this pass. The set of prev-read field names is
@@ -162,7 +66,6 @@ function compileActionPass({ stage, field, reads, actions, layout, key, eventCou
     prevReads,
     layout,
     needsNeighbors,
-    eventCounter,
     source: compileCellShader({
       stage,
       field,
@@ -171,7 +74,6 @@ function compileActionPass({ stage, field, reads, actions, layout, key, eventCou
       actions: targetActions,
       layout,
       needsNeighbors,
-      eventCounter,
     }),
   };
 }
@@ -416,7 +318,7 @@ function wgslElemType(fieldType) {
   return "f32";
 }
 
-function compileCellShader({ stage, field, reads, prevReads = [], actions, layout, needsNeighbors = false, eventCounter = null }) {
+function compileCellShader({ stage, field, reads, prevReads = [], actions, layout, needsNeighbors = false }) {
   const fieldTypes = layout.fieldTypes ?? {};
   const typeOf = (name) => fieldTypes[name] ?? "f32";
   const readBindings = reads.map((name, index) =>
@@ -424,7 +326,7 @@ function compileCellShader({ stage, field, reads, prevReads = [], actions, layou
   );
   // Prev-read bindings sit between the regular reads and the output
   // binding so existing binding indices for params / positions /
-  // neighbors / event-counter only need to shift by `prevReads.length`.
+  // neighbors only need to shift by `prevReads.length`.
   const prevReadBindings = prevReads.map(
     (name, index) => `@group(0) @binding(${reads.length + index}) var<storage, read> f_${name}_prev: array<${wgslElemType(typeOf(name))}>;`,
   );
@@ -433,7 +335,6 @@ function compileCellShader({ stage, field, reads, prevReads = [], actions, layou
   const positionsBinding = outputBinding + 2;
   const neighborsBinding = outputBinding + 3;
   const neighborCountsBinding = outputBinding + 4;
-  const eventCounterBinding = outputBinding + 3 + (needsNeighbors ? 2 : 0);
   // Per-cell read locals carry an explicit type annotation so vec2
   // fields don't get implicitly inferred as f32 (which would silently
   // collapse to the .x component on use).
@@ -444,18 +345,11 @@ function compileCellShader({ stage, field, reads, prevReads = [], actions, layou
 @group(0) @binding(${neighborsBinding}) var<storage, read> neighbors: array<i32>;
 @group(0) @binding(${neighborCountsBinding}) var<storage, read> neighborCounts: array<u32>;
 ` : "";
-  const eventCounterBindingSource = eventCounter ? `
-struct EventCounter {
-  value: atomic<u32>,
-};
-@group(0) @binding(${eventCounterBinding}) var<storage, read_write> eventCounter: EventCounter;
-` : "";
   // Initial value for the per-cell `outValue` accumulator. For vec2
   // fields not in reads, default to vec2<f32>(0.0, 0.0); for f32, 0.0.
   const fieldType = typeOf(field);
   const zeroLiteral = fieldType === "vec2" ? "vec2<f32>(0.0, 0.0)" : "0.0";
   const initial = reads.includes(field) ? readVar(field) : zeroLiteral;
-  const neighborTouch = "";
   // Compile the cell body. compileActions records gradient/divergence
   // calls in ctx so we can emit the per-field helper functions
   // afterwards in the prelude.
@@ -472,16 +366,6 @@ struct EventCounter {
   // gradient / divergence. eastBasis + position are shared helpers
   // each operator depends on; emit once if either set is non-empty.
   const stencilHelperSource = emitStencilHelpers(ctx, typeOf);
-  const eventCount = eventCounter ? `  if (${compileExpr(eventCounter.condition, {
-    reads: new Set(reads),
-    target: field,
-    locals: new Set(),
-    layout,
-    usedGradients: new Set(),
-    usedDivergences: new Set(),
-  })}) {
-    atomicAdd(&eventCounter.value, 1u);
-  }` : "";
 
   return `
 struct Params {
@@ -500,7 +384,6 @@ ${prevReadBindings.join("\n")}
 @group(0) @binding(${paramsBinding}) var<uniform> params: Params;
 @group(0) @binding(${positionsBinding}) var<storage, read> positions: array<f32>;
 ${neighborBindings}
-${eventCounterBindingSource}
 
 const PI: f32 = 3.141592653589793;
 const TAU: f32 = 6.283185307179586;
@@ -575,10 +458,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let pz = sz;
   let i = f32(cell);
   let N = params.cellCount;
-${neighborTouch}
 ${readValues.join("\n")}
   var outValue = ${initial};
-${eventCount}
 ${indent(body, 2)}
   outputField[cell] = outValue;
 }

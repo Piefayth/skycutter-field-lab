@@ -553,11 +553,10 @@ function parseStage(ctx) {
   if (ctx.source[ctx.i] === "\"") name = readString(ctx);
   const body = readBracedBlock(ctx);
   // Stage body has: reads CLAUSE, writes CLAUSE, cell { ... }
-  // Plus optional legacy primitives: advect / wind / diffuse / clamp /
-  // normalize (lowered to v1 primitive statement nodes the existing
-  // WGSL emitter handles). These are an escape hatch — long term,
-  // diffuse / clamp fold into cell expressions and advect / wind become
-  // coordinate queries (`u@(self - wind*dt)` and gradient stencils).
+  // The v1 stage primitives (advect / wind / diffuse / clamp /
+  // normalize) are rejected at parse time with redirect messages
+  // pointing at the cell-stage equivalents (gradient, divergence,
+  // field@upstream, neighbor reductions).
   const inner = makeCtx(body);
   const reads = [];
   const writes = [];
@@ -661,56 +660,6 @@ function redirectFor(kw) {
     return `Normalize requires a global reduction; v2 has no equivalent yet. Compute the global mean as a metric and divide cell values by it from JS, or implement a reduction-and-broadcast stage when the kernel infra exists.`;
   }
   return "";
-}
-
-// Parse a v2 stage primitive: `advect FIELD by U, V dt EXPR` or
-// `wind PRESSURE -> U, V[, LIFT] strength EXPR`. These two encapsulate
-// GPU kernels that don't fold naturally into per-cell expressions
-// (semi-Lagrangian sampling, gradient stencils on tangent frames).
-// They're not legacy bridges — they're first-class v2 primitives until
-// continuous-position CoordRead and vector field types replace them.
-function parseStagePrimitive(ctx, stageId) {
-  const kw = peekKeyword(ctx);
-  if (kw === "wind") {
-    consumeKeyword(ctx, "wind");
-    const pressure = readIdent(ctx, "wind pressure field");
-    consumeChar(ctx, "-"); consumeChar(ctx, ">");
-    const windU = readIdent(ctx, "wind windU field");
-    consumeChar(ctx, ",");
-    const windV = readIdent(ctx, "wind windV field");
-    skipInlineWs(ctx);
-    let lift = null;
-    if (ctx.source[ctx.i] === ",") {
-      ctx.i++;
-      lift = readIdent(ctx, "wind lift field");
-    }
-    consumeKeyword(ctx, "strength");
-    const strength = parseExpressionUntilLine(ctx);
-    return { type: "wind", pressure, windU, windV, lift, strength };
-  }
-  if (kw === "advect") {
-    // Two surface forms:
-    //   advect FIELD by WINDVEC dt EXPR        — vec2 wind field (v2 idiom)
-    //   advect FIELD by U, V dt EXPR           — two scalar fields
-    // The disambiguator is the comma after the first wind field name.
-    consumeKeyword(ctx, "advect");
-    const field = readIdent(ctx, "advect field");
-    consumeKeyword(ctx, "by");
-    const firstWind = readIdent(ctx, "advect wind field");
-    skipInlineWs(ctx);
-    if (ctx.source[ctx.i] === ",") {
-      ctx.i++;
-      const windV = readIdent(ctx, "advect windV");
-      consumeKeyword(ctx, "dt");
-      const dt = parseExpressionUntilLine(ctx);
-      return { type: "advect", field, windU: firstWind, windV, dt };
-    }
-    // Single vec2 wind field.
-    consumeKeyword(ctx, "dt");
-    const dt = parseExpressionUntilLine(ctx);
-    return { type: "advect", field, wind: firstWind, dt };
-  }
-  throw new Error(`v2 parse: stage ${stageId}: unknown stage primitive "${kw}"`);
 }
 
 // Parse a comma-separated list of field references, optionally each tagged
