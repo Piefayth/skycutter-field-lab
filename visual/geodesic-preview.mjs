@@ -177,31 +177,49 @@ function populateArrows({ grid, geometry, fields = {}, viewSpec, arrowsBuffer, a
     arrowsBuffer[writeIdx++] = tipy;
     arrowsBuffer[writeIdx++] = tipz;
 
-    // Pick contrasting color from the tile's luminance. tileColors is
-    // 0..1 per channel; tileStarts[cell] gives the first vertex of
-    // that cell's fan. Rec.601 luma weights — gives ~white on cold
-    // blue (matches lab convention) and ~black on warm yellow.
-    // (Variable names suffixed `T` to avoid shadowing the outer
+    // Per-arrow color: comet-trail gradient. Base vertices are a
+    // dimmed mix between the tile's color and a dark anchor, so they
+    // root visually in the cell. Tip vertex is a saturated highlight
+    // — bright on dark tiles, dark on light tiles, picked from the
+    // tile's luminance via Rec.601 weights.
+    //
+    // The base→tip gradient reads as a directional streak rather
+    // than a flat marker, which makes flow patterns much more
+    // legible than uniform monochrome arrows.
+    //
+    // Variable names suffixed `T` to avoid shadowing the outer
     // `r` that's already in scope as the sphere-radius offset —
     // shadowing puts the outer `r` in TDZ for this whole block,
-    // and earlier expressions like `cx * r` would crash.)
+    // and earlier expressions like `cx * r` would crash.
     let rT = 0, gT = 0, bT = 0;
     if (tileColors && tileStarts) {
       const v = tileStarts[cell] * 3;
       rT = tileColors[v]; gT = tileColors[v + 1]; bT = tileColors[v + 2];
     }
     const luma = 0.299 * rT + 0.587 * gT + 0.114 * bT;
-    const c = luma > 0.55 ? 0 : 1;
+    // Tip color: pure white on dark tiles, deep black on light ones.
+    // Hard pole gives the eye a clear endpoint to read.
+    const tipC = luma > 0.55 ? 0.04 : 0.96;
+    // Base color: 35% blend toward the tip color, 65% the tile color
+    // darkened to half intensity. The tile-tinted base means the
+    // arrow's root has a slight family-resemblance to the cell, so
+    // the arrow doesn't look glued on; the contrast at the tip
+    // delivers the direction read.
+    const baseR = rT * 0.35 + tipC * 0.30;
+    const baseG = gT * 0.35 + tipC * 0.30;
+    const baseB = bT * 0.35 + tipC * 0.30;
     const colorIdx = arrowCount * 9;
-    arrowsColorsBuffer[colorIdx + 0] = c;
-    arrowsColorsBuffer[colorIdx + 1] = c;
-    arrowsColorsBuffer[colorIdx + 2] = c;
-    arrowsColorsBuffer[colorIdx + 3] = c;
-    arrowsColorsBuffer[colorIdx + 4] = c;
-    arrowsColorsBuffer[colorIdx + 5] = c;
-    arrowsColorsBuffer[colorIdx + 6] = c;
-    arrowsColorsBuffer[colorIdx + 7] = c;
-    arrowsColorsBuffer[colorIdx + 8] = c;
+    // Verts 0,1 = base-left, base-right (tinted gradient root)
+    arrowsColorsBuffer[colorIdx + 0] = baseR;
+    arrowsColorsBuffer[colorIdx + 1] = baseG;
+    arrowsColorsBuffer[colorIdx + 2] = baseB;
+    arrowsColorsBuffer[colorIdx + 3] = baseR;
+    arrowsColorsBuffer[colorIdx + 4] = baseG;
+    arrowsColorsBuffer[colorIdx + 5] = baseB;
+    // Vert 2 = tip (pure contrast)
+    arrowsColorsBuffer[colorIdx + 6] = tipC;
+    arrowsColorsBuffer[colorIdx + 7] = tipC;
+    arrowsColorsBuffer[colorIdx + 8] = tipC;
     arrowCount++;
   }
   arrowsGeometry.attributes.position.needsUpdate = true;
