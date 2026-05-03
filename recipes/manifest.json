@@ -99,6 +99,12 @@
       "summary": "Single-channel Lenia on the sphere. A metric bell kernel computes a neighborhood potential by great-circle distance; a Gaussian growth curve nudges each cell up or down. Tune kernel center/width and growth center/width to find soft colonies, holes, and drifting organism-like patches."
     },
     {
+      "id": "wilson-cowan-field",
+      "name": "Wilson-Cowan neural field (example)",
+      "path": "recipes/wilson-cowan-field.mjs",
+      "summary": "Excitation-inhibition neural field on a sphere. A narrow metric bell kernel gathers local excitation; a wider annular bell kernel gathers inhibition. The sigmoid firing response turns random seed activity into pulses, labyrinths, and breathing cortical-wave patterns."
+    },
+    {
       "id": "gierer-meinhardt",
       "name": "Gierer-Meinhardt (example)",
       "path": "recipes/gierer-meinhardt.mjs",
