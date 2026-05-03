@@ -290,7 +290,7 @@ Inside `cell { ... }`:
 - `set field = expr` — set field's next value (one set per field)
 - `add field = expr` — sugar for `set field = field + expr`
 - `when condition { actions }` — predicated actions
-- `emit event_id` — increment event counter (for telemetry/metrics)
+- (no `emit` action; see "Events" below for why)
 
 Inside `for each cell { ... }` (in scenarios only): same actions plus
 geo-helpers.
@@ -379,24 +379,41 @@ metric active = count cells where abs_u > 0.1
   `metric` declaration. Nested inside another reduction or inside a stage
   cell body → validator error.
 
-## Events
+## Events (intentionally absent)
 
-Events fold into `cell` via `when`:
+v2 deliberately has **no** `emit` action. The unifying spacetime-query model
+says stages mutate per-cell state, metrics read scalar reductions. A
+side-effect that increments a global counter from inside a per-cell body
+punches a hole through that model — it brings its own reset timing,
+ordering, naming, accumulation, UI, and replay semantics that compose
+with nothing else.
+
+Event-like observations are expressed as metrics directly:
 
 ```
-stage spawn_predator {
+metric predator_spawn = count cells where u > threshold && cellNoise() < 0.001
+```
+
+If the event needs per-cell visibility (rendering, downstream stages, paint),
+make it a derived field and let other stages and metrics consume it:
+
+```
+field spawning: f32 derived
+
+stage mark_spawning {
   reads u
-  writes spawned_count   # or whatever
+  writes spawning
   cell {
-    when u > predator_threshold && cellNoise() < 0.001 {
-      emit predator_spawn
-    }
+    set spawning = u > threshold && cellNoise() < 0.001 ? 1 : 0
   }
 }
+
+metric spawning_count = sum cells { spawning }
 ```
 
-`emit ID` increments a global counter readable by the metrics layer. Counters
-reset at the start of each step.
+A future explicit event system — separate from the cell action grammar —
+could add real event-stream semantics (replay, ordering, fan-out). It is not
+in v2 first cut.
 
 ## Validator rules summary
 
@@ -482,18 +499,30 @@ Reserved in grammar, not implemented in v2 first cut:
 
 ## Open questions
 
-- Multi-binding `NeighborReduce` in WGSL emitter — **DONE** (commit
-  `379928f`). Cell-centered multi-field reductions like
-  `sum n in neighbors { u@n + v@n - u - v }` now lower correctly.
-- Reduction kernel infrastructure: workgroup partial reduce + finalize.
-  Estimated 2–3 days. **Pending evidence** — no shipped recipe currently
-  uses a v2 `metric x = ...` declaration; the JS-side `export const
-  metrics = [...]` per-recipe path still drives the metrics panel via
-  CPU readback. Worth implementing when a recipe wants a metric the JS
-  layer can't compute efficiently (e.g. `mean cells where pred { expr
-  with neighbor reductions inside }` over 30k cells).
+- Multi-binding `NeighborReduce` in WGSL emitter — **DONE**.
+  Cell-centered multi-field reductions like `sum n in neighbors { u@n +
+  v@n - u - v }` lower correctly.
+- Reduction kernel infrastructure — **DONE**. v2 metrics now compile to
+  per-cell pass + workgroup-tree reduce + async readback. Per-tick the
+  GPU reduces every declared metric and `state.dslMetrics[id]` is
+  populated; the JS metrics panel resolves `dsl:<id>` sources against
+  it. `mean` decomposes into [sum, count] primitives and the readback
+  layer divides. Wave equation now uses the path
+  (`metric peak = max cells { abs(u) }` etc).
+- Imports — **REAL**. `import sin, cos, neighbor` constrains the recipe
+  to those names; using `cos(x)` without importing `cos` errors at
+  compile time. v2 imports are flat (no `from <namespace>` distinction);
+  the compiler looks each name up in `dsl-spec.mjs` to route to v1's
+  namespaced validator. No imports declared = all builtins in scope
+  (current converted recipes work unchanged).
 - Derived field UI: paint panel needs to auto-hide derived fields; views
   panel should show them. Editor concern, not DSL — wires through the
   recipe's `views[]` / paint stamp list. **Pending evidence** — only
   Kuramoto's `cosTheta` is currently derived, so the UI gap isn't yet
   user-visible.
+- Coordinate-query architecture (`u@prev`, `u@n`, future `u@(pos)`,
+  `u@anti`) currently lowers to v1 AST shape (`Call(prev, [u])` for
+  `u@prev`; synthetic local for `u@n`). Future kinds (`u@(continuous)`
+  for advection, `u@anti` for antipodal) will need a real `CoordRead`
+  AST node and dispatched compiler — a real refactor, not a sugar
+  extension.

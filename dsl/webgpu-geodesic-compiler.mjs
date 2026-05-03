@@ -175,6 +175,223 @@ function compileActionPass({ stage, field, reads, actions, layout, key, eventCou
   };
 }
 
+// =============================================================================
+// V2 metric kernels.
+//
+// A metric is a top-level scalar reduction over the post-step state:
+//
+//   metric peak = max cells { abs(u) }
+//   metric active = count cells where abs(u) > 0.1
+//   metric energy = sum cells { 0.5*v*v + 0.5*c*c * sum n in neighbors { (u@n - u)*(u@n - u) } }
+//
+// Compilation produces TWO WGSL kernels per metric primitive:
+//
+//   1. per-cell pass: evaluates the metric expression at every cell and
+//      writes the result to a scratch buffer. Predicate-gated cells
+//      contribute the op's identity element (0 for sum/count, ±FLT_MAX
+//      for max/min) so they don't bias the reduction.
+//
+//   2. reduce pass: workgroup-tree reduction over the scratch buffer.
+//      Run repeatedly with halving input length until one scalar remains.
+//      Same shader handles all input sizes — the input length comes from
+//      a uniform.
+//
+// `mean` is sugar over (sum, count): the compiler emits both primitives
+// and the JS readback layer divides. This keeps the GPU kernels uniform
+// (one per op) and lets `mean cells where pred { expr }` work naturally
+// with any predicate.
+//
+// The per-cell pass piggybacks on the existing cell-stage shader template
+// — the metric body becomes a synthetic `cell { set _metric = ... }`
+// statement targeting a scratch field. That gives metrics access to
+// neighbor reductions, prev() reads, params, position helpers, math
+// functions — every feature a stage cell body has.
+// =============================================================================
+
+const METRIC_SCRATCH_PSEUDO_FIELD = "_metric_scratch";
+
+// Map a metric op to the underlying primitive op(s) the runtime computes.
+// Most are 1:1; `mean` decomposes into [sum, count] and the JS layer
+// divides on readback.
+export function expandMetricPrimitives(op) {
+  if (op === "mean") return ["sum", "count"];
+  return [op];
+}
+
+// Identity element for the workgroup tree-reduce. Cells filtered out by
+// `where` predicates get this value, so they can't bias the result.
+function metricIdentity(primOp) {
+  switch (primOp) {
+    case "sum":
+    case "count":
+      return "0.0";
+    case "max":
+      return "-1.0e38";
+    case "min":
+      return "1.0e38";
+    default:
+      throw new Error(`metric: unknown primitive op ${primOp}`);
+  }
+}
+
+export function compileWebGpuMetric(metric, dsl = {}) {
+  const primitives = expandMetricPrimitives(metric.op).map((primOp) =>
+    compileMetricPrimitive(metric, primOp, dsl),
+  );
+  return {
+    id: metric.id,
+    op: metric.op,
+    primitives,
+  };
+}
+
+function compileMetricPrimitive(metric, primOp, dsl) {
+  // Build a synthetic stage shaped like a cell body that writes a
+  // single scratch field. The body expression is:
+  //
+  //   primOp = sum/max/min:  pred ? <metric.body> : <identity>
+  //   primOp = count:         pred ? 1.0 : 0.0
+  //
+  // `pred` defaults to true if the metric has no `where` clause.
+  const identity = metricIdentity(primOp);
+  const trueLit = { type: "Identifier", name: "true" };
+  const predicate = metric.predicate ?? trueLit;
+  const innerBody = primOp === "count"
+    ? { type: "Number", value: "1.0" }
+    : metric.body;
+  if (primOp !== "count" && !innerBody) {
+    throw new Error(`metric ${metric.id}: ${primOp} requires a body expression`);
+  }
+  // Conditional value: `pred ? inner : identity`. We compile the
+  // identity as a number literal (string is fine — compileExpr accepts
+  // it as a Number node).
+  const valueExpr = {
+    type: "Conditional",
+    test: predicate,
+    consequent: innerBody,
+    alternate: { type: "Number", value: identity },
+  };
+  // Synthesize a stage that the existing cell-shader compiler can
+  // consume. The "field" is a pseudo-name reserved for metric scratch;
+  // the WGSL shader's outputField binding is the metric's scratch buffer.
+  const reads = [...collectExprFieldReads(valueExpr, new Set(
+    (dsl.fields ?? []).map((f) => f.name).filter(Boolean),
+  ))];
+  const synthStage = {
+    id: `_metric_${metric.id}_${primOp}`,
+    name: `metric ${metric.id} (${primOp})`,
+    reads,
+    writes: [METRIC_SCRATCH_PSEUDO_FIELD],
+    declares: [],
+    body: {
+      statements: [{
+        type: "cell",
+        actions: [{
+          type: "set",
+          field: METRIC_SCRATCH_PSEUDO_FIELD,
+          expr: valueExpr,
+        }],
+      }],
+    },
+  };
+  // Reuse compileWebGpuGeodesicCellStage so neighbor reductions, prev
+  // reads, and all the position helpers come for free. The pseudo-field
+  // is just a name — at dispatch time the runtime binds the metric
+  // scratch buffer in the outputField slot.
+  const passes = compileWebGpuGeodesicCellStage(synthStage, dsl);
+  if (passes.length !== 1) {
+    throw new Error(`metric ${metric.id}: synthesized stage produced ${passes.length} passes (expected 1)`);
+  }
+  const pass = passes[0];
+  return {
+    primOp,
+    perCellSource: pass.source,
+    reads: pass.reads,
+    prevReads: pass.prevReads,
+    needsNeighbors: pass.needsNeighbors,
+    layout: pass.layout,
+    identity,
+  };
+}
+
+// Walk an expression to find every bare-identifier or @-coord reference
+// to a declared field. Used to wire up the synthetic stage's `reads`
+// list. Locals introduced by `let` aren't tracked here (the cell-shader
+// compiler does that itself); we just need the surface field deps.
+function collectExprFieldReads(ast, declaredFields, out = new Set()) {
+  if (!ast || typeof ast !== "object") return out;
+  if (ast.type === "Identifier" && declaredFields.has(ast.name)) {
+    out.add(ast.name);
+  }
+  if (ast.type === "Call" && ast.callee?.name === "prev"
+      && ast.args?.[0]?.type === "Identifier"
+      && declaredFields.has(ast.args[0].name)) {
+    out.add(ast.args[0].name);
+  }
+  if (ast.type === "NeighborReduce") {
+    for (const b of ast.bindings ?? []) {
+      if (b.field && declaredFields.has(b.field)) out.add(b.field);
+    }
+    collectExprFieldReads(ast.body, declaredFields, out);
+    return out;
+  }
+  for (const key of Object.keys(ast)) {
+    const v = ast[key];
+    if (Array.isArray(v)) v.forEach((c) => collectExprFieldReads(c, declaredFields, out));
+    else if (v && typeof v === "object") collectExprFieldReads(v, declaredFields, out);
+  }
+  return out;
+}
+
+// WGSL for the workgroup tree-reduce. `length` comes from a uniform so
+// the same shader handles every pass (cellCount → ceil(N/128) → … → 1).
+export function metricReduceShader(primOp) {
+  const identity = metricIdentity(primOp);
+  let combine;
+  switch (primOp) {
+    case "sum":   combine = "a + b"; break;
+    case "count": combine = "a + b"; break;
+    case "max":   combine = "max(a, b)"; break;
+    case "min":   combine = "min(a, b)"; break;
+    default: throw new Error(`metric: unknown primitive op ${primOp}`);
+  }
+  return `
+struct ReduceParams {
+  length: u32,
+  pad0: u32,
+  pad1: u32,
+  pad2: u32,
+};
+
+@group(0) @binding(0) var<storage, read> input: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: ReduceParams;
+
+var<workgroup> shared_data: array<f32, 128>;
+
+fn combine(a: f32, b: f32) -> f32 {
+  return ${combine};
+}
+
+@compute @workgroup_size(128)
+fn main(@builtin(local_invocation_id) lid: vec3<u32>,
+        @builtin(workgroup_id) wid: vec3<u32>) {
+  let idx = wid.x * 128u + lid.x;
+  shared_data[lid.x] = select(${identity}, input[idx], idx < params.length);
+  workgroupBarrier();
+  for (var stride: u32 = 64u; stride > 0u; stride = stride >> 1u) {
+    if (lid.x < stride) {
+      shared_data[lid.x] = combine(shared_data[lid.x], shared_data[lid.x + stride]);
+    }
+    workgroupBarrier();
+  }
+  if (lid.x == 0u) {
+    output[wid.x] = shared_data[0];
+  }
+}
+`.trim();
+}
+
 export function buildWebGpuGeodesicUniforms(layout, { dt = 0, frame = 0, cellCount = 0, params = {}, consts = {}, planet = {} } = {}) {
   const values = [dt, frame, cellCount, 0];
   for (const decl of layout.parameters) values.push(Number(params[decl.name] ?? decl.default ?? 0));

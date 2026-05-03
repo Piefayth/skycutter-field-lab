@@ -37,6 +37,7 @@ export function parseV2(source) {
   const stamps = [];
   const stages = [];
   const metrics = [];
+  const importedNames = [];      // flat list of names declared via `import ...`
 
   while (!atEnd(ctx)) {
     skipTrivia(ctx);
@@ -58,7 +59,7 @@ export function parseV2(source) {
       case "stamp":              stamps.push(parseStamp(ctx)); break;
       case "step":               stages.push(...parseStep(ctx)); break;
       case "metric":             metrics.push(parseMetric(ctx)); break;
-      case "import":             skipLine(ctx); break; // optional, validation-only; no-op for now
+      case "import":             importedNames.push(...parseImport(ctx)); break;
       default:
         throw new Error(`v2 parse: unknown top-level keyword "${kw}"`);
     }
@@ -77,7 +78,12 @@ export function parseV2(source) {
     planet: {},
     constants,
     resolution: {},
-    imports: [],          // v2 is import-free; v1 validator skips checks when empty
+    // v2 imports are a flat list of allowed builtin names. compile-v2
+    // converts this to v1's namespaced shape (or synthesizes a maximal
+    // list if the recipe declared no imports). null = no `import` line
+    // present, all builtins in scope; non-null = only listed names are.
+    importedNames: importedNames.length > 0 ? dedupe(importedNames) : null,
+    imports: [],          // populated by compile-v2 from importedNames + auto-keywords
     fields,
     sources: [],          // v2 doesn't have `source` decls (yet)
     settings: [],         // v2 folds settings into params
@@ -87,6 +93,32 @@ export function parseV2(source) {
     stages,
     metrics,
   };
+}
+
+// Parse a single `import name1, name2, name3` line. Names are flat —
+// v2 doesn't carry the namespace gating that v1's `use sim cell` did;
+// the compiler resolves each name's v1 namespace from dsl-spec
+// metadata. Used for validation only: a recipe with explicit imports
+// can only reference builtin identifiers it lists.
+function parseImport(ctx) {
+  consumeKeyword(ctx, "import");
+  const names = [];
+  while (true) {
+    skipInlineWs(ctx);
+    if (atEnd(ctx) || ctx.source[ctx.i] === "\n") break;
+    const tail = ctx.source.slice(ctx.i);
+    const m = IDENT_RE.exec(tail);
+    if (!m) break;
+    ctx.i += m[0].length;
+    names.push(m[0]);
+    skipInlineWs(ctx);
+    if (!tryConsumeChar(ctx, ",")) break;
+  }
+  if (names.length === 0) {
+    throw new Error("v2 parse: `import` line lists no names");
+  }
+  skipLine(ctx);
+  return names;
 }
 
 // =============================================================================
@@ -297,19 +329,27 @@ function parseField(ctx) {
 }
 
 function parseParam(ctx) {
-  // param NAME slider LO..HI default V label "..."
-  // param NAME toggle default true|false label "..."
+  // param NAME slider LO..HI [step S] default V [label "..."]
+  // param NAME toggle default true|false [label "..."]
+  //
+  // The shape we emit matches v1's parseControlDirective output so the
+  // existing control / metadata layer doesn't need a v2-specific
+  // adapter:
+  //   { kind: "param", type: "number"|"boolean", control: "slider",
+  //     min, max, step, default, label }
+  // controls.mjs gates checkbox vs slider rendering on `type === "boolean"`.
   consumeKeyword(ctx, "param");
   const name = readIdent(ctx, "param name");
-  const kind = readIdent(ctx, "param kind (slider|toggle)");
-  const decl = { name, kind, label: name };
-  if (kind === "slider") {
+  const widget = readIdent(ctx, "param kind (slider|toggle)");
+  const decl = { name, kind: "param", label: name };
+  if (widget === "slider") {
+    decl.type = "number";
+    decl.control = "slider";
     skipInlineWs(ctx);
     decl.min = readNumber(ctx);
     consumeChar(ctx, ".");
     consumeChar(ctx, ".");
     decl.max = readNumber(ctx);
-    // optional `step S`
     skipInlineWs(ctx);
     if (/^step\b/.test(ctx.source.slice(ctx.i))) {
       consumeKeyword(ctx, "step");
@@ -317,16 +357,18 @@ function parseParam(ctx) {
     }
     consumeKeyword(ctx, "default");
     decl.default = readNumber(ctx);
-  } else if (kind === "toggle") {
+  } else if (widget === "toggle") {
+    decl.type = "boolean";
     consumeKeyword(ctx, "default");
     skipInlineWs(ctx);
     const word = readIdent(ctx, "toggle default (true|false)");
-    if (word !== "true" && word !== "false") throw new Error(`v2 parse: toggle default must be true|false, got ${word}`);
+    if (word !== "true" && word !== "false") {
+      throw new Error(`v2 parse: toggle default must be true|false, got ${word}`);
+    }
     decl.default = word === "true";
   } else {
-    throw new Error(`v2 parse: unknown param kind "${kind}" (allowed: slider, toggle)`);
+    throw new Error(`v2 parse: unknown param widget "${widget}" (allowed: slider, toggle)`);
   }
-  // optional `label "..."`
   skipInlineWs(ctx);
   if (/^label\b/.test(ctx.source.slice(ctx.i))) {
     consumeKeyword(ctx, "label");
@@ -707,10 +749,25 @@ function parseCellActions(text, label, forScenario = false) {
       const body = readBracedBlock(ctx);
       actions.push({ type: "when", condition, actions: parseCellActions(body, `${label} when`, forScenario) });
     } else if (kw === "emit") {
-      consumeKeyword(ctx, "emit");
-      const id = readIdent(ctx, "emit id");
-      skipLine(ctx);
-      actions.push({ type: "emit", id });
+      // emit is intentionally not a v2 cell action. The unifying spacetime-
+      // query model says: stages mutate per-cell state, metrics read scalar
+      // reductions. A side-effect from inside a cell body — emit a global
+      // counter — punches a hole through that model: it adds reset timing,
+      // ordering, naming, and accumulation semantics that don't compose
+      // with anything else. The same need is covered by:
+      //
+      //     metric thing = count cells where <condition>
+      //
+      // For a per-cell event-like flag, derive a field:
+      //
+      //     field spawning: f32 derived
+      //     stage mark { reads u; writes spawning;
+      //                  cell { set spawning = u > threshold ? 1 : 0 } }
+      //     metric spawning_count = sum cells { spawning }
+      throw new Error(
+        `v2 parse: ${label}: \`emit\` is not a v2 cell action — use \`metric x = count cells where ...\` ` +
+        `for the same observation, or derive a per-cell flag field and reduce it`,
+      );
     } else {
       throw new Error(`v2 parse: ${label}: unknown action "${kw}"`);
     }

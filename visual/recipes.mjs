@@ -478,6 +478,13 @@ export function initRecipes({
             dirty = false;
           }
           gpuRunner.runTick(dt);
+          // Pull the latest GPU-reduced metric values into state.dslMetrics
+          // so the metrics panel (which evaluates `dsl:<id>` sources)
+          // sees them. Values are async-readback; entries are null
+          // until the first readback completes, which evaluateMetricSource
+          // renders as NaN → "—" in the UI.
+          const dslMetrics = gpuRunner.readDslMetrics?.();
+          if (dslMetrics) state.dslMetrics = dslMetrics;
         } catch (error) {
           failed = true;
           console.warn("geodesic WebGPU tick failed", error);
@@ -817,6 +824,29 @@ function applyDslRecipeMetadata(recipe, dsl, getParam) {
       .filter((decl) => Object.hasOwn(decl, "default"))
       .map((decl) => [decl.name, decl.default]),
   );
+  // V2 DSL metrics: each `metric x = <reduction> cells [where pred] {
+  // expr }` gets a JS metrics-panel entry pointed at `dsl:<id>`. The
+  // metric runtime populates state.dslMetrics[id] each tick and
+  // metric-specs.mjs's evaluateMetricSource resolves `dsl:<id>` against
+  // it. Recipe authors can also override the panel's metric list via
+  // `export const metrics = [...]` in the .mjs sibling — synthesized
+  // entries don't replace authored ones, they just augment them.
+  const dslMetrics = dsl.metrics ?? [];
+  if (dslMetrics.length > 0) {
+    const synthesized = dslMetrics.map((m) => ({
+      id: m.id,
+      label: m.id.toUpperCase(),
+      source: `dsl:${m.id}`,
+      mini: true,
+      precision: 3,
+    }));
+    const existing = Array.isArray(recipe.metrics) ? recipe.metrics : [];
+    const existingIds = new Set(existing.map((d) => d?.id));
+    recipe.metrics = [
+      ...existing,
+      ...synthesized.filter((d) => !existingIds.has(d.id)),
+    ];
+  }
 }
 
 function declaredPipelineFieldDecls(dsl) {

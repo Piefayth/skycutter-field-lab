@@ -95,13 +95,17 @@ step { stage s { reads u; writes u; cell { set u = u } } }
   const params = out.parameters;
   assert(params.length === 3, `expected 3 params, got ${params.length}`);
   assertEq(params[0].name, "speed");
-  assertEq(params[0].kind, "slider");
+  assertEq(params[0].kind, "param");      // matches v1 control-decl shape
+  assertEq(params[0].type, "number");
+  assertEq(params[0].control, "slider");
   assertEq(params[0].min, 0);
   assertEq(params[0].max, 0.29);
   assertEq(params[0].default, 0.25);
   assertEq(params[0].label, "WAVE SPEED");
   assertEq(params[1].step, 0.001);
-  assertEq(params[2].kind, "toggle");
+  // Toggle = boolean control. controls.mjs renders this as a checkbox
+  // by gating on type === "boolean".
+  assertEq(params[2].type, "boolean");
   assertEq(params[2].default, true);
 });
 

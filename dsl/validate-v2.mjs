@@ -1,5 +1,17 @@
 // Field Lab DSL v2 validator.
 //
+import { MATH_FUNCTIONS, STENCIL_HELPERS, CLOCK_HELPERS } from "./dsl-spec.mjs";
+
+// Set of function names callable from inside a metric expression. Math
+// fns + stencil helpers + clock helpers (prev). Builtin identifier
+// references (lon, dt, etc.) are checked separately against
+// METRIC_BUILTIN_IDENTIFIERS.
+const metricCallees = new Set([
+  ...MATH_FUNCTIONS.map((m) => m.name),
+  ...STENCIL_HELPERS.map((s) => s.name),
+  ...CLOCK_HELPERS.map((h) => h.name),
+]);
+
 // Layered on top of the v1 validator (which compile-v2 already runs):
 // the v1 layer covers field uniqueness, reads/writes wiring, history-field
 // rules, and stamp/scenario action shapes. This module adds the rules that
@@ -139,14 +151,22 @@ function validateMetrics(schema) {
       throw new Error(`metric "${metric.id}": unknown reduction "${metric.op}"`);
     }
 
-    // count: no body required (the body is implicitly 1). Others require body.
+    // count has NO body. The body is implicitly the constant 1; the
+    // `where` clause is the predicate. Other reductions REQUIRE a body.
+    if (metric.op === "count" && metric.body) {
+      throw new Error(
+        `metric "${metric.id}": count cells does not take a body — the cell contributes 1 ` +
+        `if the \`where\` clause matches. Drop the \`{ ... }\`, or use \`sum cells where ${"{"} ... ${"}"}\` ` +
+        `if you want to count weighted by an expression`,
+      );
+    }
     if (metric.op !== "count" && !metric.body) {
       throw new Error(`metric "${metric.id}": ${metric.op} requires a body \`{ ... }\``);
     }
 
-    // Body must be pure: no set/add/emit/spot/etc. The body is parsed as an
-    // expression already, so the only way an action could appear is via a
-    // grammar bug — but check defensively.
+    // Body must be pure: no set/add/spot/etc. (`emit` can't appear; the
+    // parser already rejects it inside cell actions and metric bodies
+    // are parsed as expressions, not action lists.)
     if (metric.body) ensureNoSideEffects(metric.body, `metric "${metric.id}"`);
     if (metric.predicate) ensureNoSideEffects(metric.predicate, `metric "${metric.id}" where`);
 
@@ -155,7 +175,117 @@ function validateMetrics(schema) {
     // reductions inside the metric expression are allowed.
     if (metric.body) ensureNoNestedMetricReduce(metric.body, `metric "${metric.id}"`);
     if (metric.predicate) ensureNoNestedMetricReduce(metric.predicate, `metric "${metric.id}" where`);
+
+    // Identifier resolution: every bare name in the body / predicate must
+    // resolve to a declared field, param, const, planet constant, or a
+    // known builtin. Unknown names produce a clear error here instead of
+    // failing later at WGSL compile time with a cryptic shader error.
+    validateMetricIdentifiers(metric, schema);
   }
+}
+
+const METRIC_BUILTIN_IDENTIFIERS = new Set([
+  "true", "false", "null", "undefined",
+  "dt", "frame", "PI", "TAU", "N",
+  "lon", "lat", "x", "y", "z", "u", "v", "px", "py", "pz", "i",
+]);
+
+function validateMetricIdentifiers(metric, schema) {
+  const fieldNames = new Set((schema.fields ?? []).map((d) => d.name).filter(Boolean));
+  const paramNames = new Set((schema.parameters ?? []).map((d) => d.name).filter(Boolean));
+  const constNames = new Set((schema.constants ?? []).map((d) => d.name).filter(Boolean));
+  const planetNames = new Set(Object.keys(schema.planet ?? {}));
+  const importedNames = schema.importedNames; // null = no constraint
+  const label = `metric "${metric.id}"`;
+  function visitExpr(ast, locals) {
+    if (!ast || typeof ast !== "object") return;
+    switch (ast.type) {
+      case "Number":
+        return;
+      case "Identifier": {
+        const name = ast.name;
+        if (locals.has(name)) return;
+        if (fieldNames.has(name)) return;
+        if (paramNames.has(name)) return;
+        if (constNames.has(name)) return;
+        if (planetNames.has(name)) return;
+        if (METRIC_BUILTIN_IDENTIFIERS.has(name)) {
+          // If imports are explicit, builtin clock / geo identifiers
+          // still need to be imported. Otherwise allow.
+          if (importedNames && (name === "dt" || name === "frame")) {
+            if (!importedNames.includes(name)) {
+              throw new Error(`${label}: clock.${name} is not imported`);
+            }
+          }
+          return;
+        }
+        throw new Error(`${label}: unknown identifier "${name}" — not a field, param, const, planet, or builtin`);
+      }
+      case "Member":
+        visitExpr(ast.object, locals);
+        return;
+      case "Unary":
+        visitExpr(ast.expr, locals);
+        return;
+      case "Binary":
+        visitExpr(ast.left, locals);
+        visitExpr(ast.right, locals);
+        return;
+      case "Conditional":
+        visitExpr(ast.test, locals);
+        visitExpr(ast.consequent, locals);
+        visitExpr(ast.alternate, locals);
+        return;
+      case "Call": {
+        // The callee is a math function name, not a regular identifier.
+        // Resolve it against the function table — metricCallees covers
+        // math fns + helpers + clock helpers (prev). Unknown function
+        // names are an error here, before WGSL compilation gets a
+        // mystery identifier.
+        if (ast.callee?.type === "Identifier") {
+          const fnName = ast.callee.name;
+          if (!metricCallees.has(fnName)) {
+            throw new Error(`${label}: unknown function "${fnName}"`);
+          }
+          if (importedNames && !importedNames.includes(fnName)) {
+            // prev / dt / frame are clock; math fns are core. With
+            // explicit imports the callee must be listed.
+            throw new Error(`${label}: function "${fnName}" used but not imported`);
+          }
+          for (const arg of ast.args ?? []) visitExpr(arg, locals);
+          return;
+        }
+        // Member-callee or other shape — defer to v1 (rare; recipes
+        // don't currently emit it).
+        visitExpr(ast.callee, locals);
+        for (const arg of ast.args ?? []) visitExpr(arg, locals);
+        return;
+      }
+      case "NeighborReduce": {
+        // The reduction body sees `bindings[i].name` as a local —
+        // synthetic binding names like `_n_u` from cell-centered
+        // lowering. Add them so the body's references resolve.
+        const bodyLocals = new Set(locals);
+        for (const b of ast.bindings ?? []) {
+          if (b.name) bodyLocals.add(b.name);
+          // Also verify the bound field exists.
+          if (b.field && !fieldNames.has(b.field)) {
+            throw new Error(`${label}: neighbor reduction binds unknown field "${b.field}"`);
+          }
+        }
+        visitExpr(ast.body, bodyLocals);
+        return;
+      }
+      default:
+        for (const k of Object.keys(ast)) {
+          const v = ast[k];
+          if (Array.isArray(v)) v.forEach((c) => visitExpr(c, locals));
+          else if (v && typeof v === "object") visitExpr(v, locals);
+        }
+    }
+  }
+  if (metric.body) visitExpr(metric.body, new Set());
+  if (metric.predicate) visitExpr(metric.predicate, new Set());
 }
 
 function ensureNoSideEffects(ast, label) {

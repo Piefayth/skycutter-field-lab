@@ -31,20 +31,84 @@ import {
   PIPELINE_PRIMITIVES,
   STAGE_BLOCKS,
   STENCIL_HELPERS,
+  STAMP_EXTRAS,
 } from "./dsl-spec.mjs";
 
-const V2_SYNTHETIC_IMPORTS = [
-  { from: "init",  names: INIT_VERBS.map((v) => v.name) },
+// Auto-imported v1 namespaces / names that v2 syntax doesn't expose
+// directly but that the v1 validator still checks against. cell { } is
+// the only stage block in v2 syntax, and the init verbs (fill / spot /
+// ellipse / region / eachCell) are the only scenario actions — so we
+// always inject them. v2 recipes never need to import these.
+const V2_AUTO_SIM = ["cell"];
+const V2_AUTO_INIT = INIT_VERBS.map((v) => v.name);
+
+// The maximal builtin list, used when a recipe declares no `import`
+// lines. Mirrors the union of every v1 namespace's allowed names.
+const V2_MAXIMAL_IMPORTS = [
+  { from: "init",  names: V2_AUTO_INIT },
   { from: "sim",   names: [...PIPELINE_PRIMITIVES.map((p) => p.name), ...STAGE_BLOCKS.map((b) => b.name)] },
   { from: "clock", names: [...CLOCK_BUILTINS.map((b) => b.name), ...CLOCK_HELPERS.map((b) => b.name)] },
   { from: "geo",   names: [...GEO_BUILTINS.map((b) => b.name), ...GEO_CONSTANTS.map((b) => b.name)] },
   { from: "core",  names: [...MATH_FUNCTIONS.map((m) => m.name), ...STENCIL_HELPERS.map((s) => s.name)] },
 ];
 
+// Lookup table: builtin name → v1 namespace. Lets us route v2's flat
+// import list (e.g. `import sin, cos, neighbor, prev`) into the v1
+// validator's namespaced shape.
+const NAMESPACE_BY_NAME = (() => {
+  const map = new Map();
+  for (const m of MATH_FUNCTIONS) map.set(m.name, "core");
+  for (const s of STENCIL_HELPERS) map.set(s.name, "core");
+  for (const b of CLOCK_BUILTINS) map.set(b.name, "clock");
+  for (const b of CLOCK_HELPERS) map.set(b.name, "clock");
+  for (const b of GEO_BUILTINS) map.set(b.name, "geo");
+  for (const c of GEO_CONSTANTS) map.set(c.name, "geo");
+  for (const e of STAMP_EXTRAS) map.set(e.name, "geo"); // brush radius `r`
+  for (const p of PIPELINE_PRIMITIVES) map.set(p.name, "sim");
+  for (const b of STAGE_BLOCKS) map.set(b.name, "sim");
+  for (const v of INIT_VERBS) map.set(v.name, "init");
+  return map;
+})();
+
+// Build v1-shape imports from a flat list of v2 import names. Every
+// listed name is looked up in NAMESPACE_BY_NAME — unknown names are an
+// error (the recipe imported something that isn't a real builtin). The
+// v2 auto-imports (cell, fill, spot, etc.) are appended unconditionally
+// since they're not user-facing in v2 syntax but the v1 validator still
+// gates on them.
+function buildV1ImportsFromV2(importedNames) {
+  if (!importedNames || importedNames.length === 0) {
+    return V2_MAXIMAL_IMPORTS;
+  }
+  const byNs = new Map();
+  function add(ns, name) {
+    if (!byNs.has(ns)) byNs.set(ns, new Set());
+    byNs.get(ns).add(name);
+  }
+  for (const name of importedNames) {
+    const ns = NAMESPACE_BY_NAME.get(name);
+    if (!ns) {
+      throw new Error(
+        `v2 import "${name}" is not a recognized builtin — drop it or check the spelling`,
+      );
+    }
+    add(ns, name);
+  }
+  // Auto-add the v1 stage-block / init-verb names so v1's validator
+  // doesn't complain about their use. Recipe authors don't import
+  // these in v2; they're always available.
+  for (const name of V2_AUTO_SIM) add("sim", name);
+  for (const name of V2_AUTO_INIT) add("init", name);
+  return [...byNs.entries()].map(([from, names]) => ({ from, names: [...names] }));
+}
+
 export function compileV2(source) {
   const schema = parseV2(source);
-  // Inject synthetic imports so v1's `requireImport` calls always pass.
-  schema.imports = V2_SYNTHETIC_IMPORTS;
+  // Translate v2's flat `importedNames` (or null = no imports declared)
+  // into v1's namespaced shape that the v1 validator gates on. When the
+  // recipe declared explicit imports, only those names are allowed; the
+  // v1 validator's requireImport() will reject anything else.
+  schema.imports = buildV1ImportsFromV2(schema.importedNames);
 
   const presets = schema.presets;
   const stamps = schema.stamps;

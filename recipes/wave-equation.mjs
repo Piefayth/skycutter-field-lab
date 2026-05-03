@@ -74,10 +74,13 @@ export const views = [
 
 export const overlays = [];
 
+// Per-recipe FPS readout stays JS-side (it's not field state). The
+// peak/active metrics moved into the DSL itself — see the
+// `metric peak = ...` and `metric active = ...` lines in pipelineDsl
+// below. The recipe metrics panel auto-merges DSL-declared metrics
+// (via dsl:<id> sources) with these explicit JS-side entries.
 export const metrics = [
-  { id: "energy",   label: "ENERGY",   source: "max:u",          spark: true, precision: 3 },
-  { id: "active",   label: "ACTIVE",   source: "coverage:u:0.1", mini: true,  precision: 3 },
-  { id: "fps",      label: "FPS",      source: "fps",            mini: true },
+  { id: "fps", label: "FPS", source: "fps", mini: true },
 ];
 
 export const regime = {
@@ -172,6 +175,12 @@ step {
     }
   }
 }
+
+// V2 metric reductions — computed on the GPU each tick (per-cell pass +
+// workgroup tree-reduce), async-read back to populate the metrics panel.
+// The post-step state (final u after history rotation) is what reduces.
+metric peak   = max cells { abs(u) }
+metric active = count cells where abs(u) > 0.1
 `;
 
 export const pipeline = compileV2(pipelineDsl);

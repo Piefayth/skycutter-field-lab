@@ -108,6 +108,36 @@ step {
 // is the safety net)
 // -----------------------------------------------------------------------------
 
+test("count cells with a body is rejected (count's body is implicitly 1)", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+step { stage s { reads u; writes u; cell { set u = u } } }
+metric bad = count cells where u > 0 { u }
+`), "count cells does not take a body");
+});
+
+test("metric body referencing an undeclared field is rejected", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+step { stage s { reads u; writes u; cell { set u = u } } }
+metric bad = max cells { missing_field }
+`), "unknown identifier");
+});
+
+test("metric where-predicate referencing an undeclared field is rejected", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+step { stage s { reads u; writes u; cell { set u = u } } }
+metric bad = sum cells where missing > 0 { u }
+`), "unknown identifier");
+});
+
 test("metric reduction op must be one of the five", () => {
   expectThrow(() => compileV2(`
 recipe "X"
@@ -116,6 +146,91 @@ field u: f32
 step { stage s { reads u; writes u; cell { set u = u } } }
 metric weird = median cells { u }
 `), "unknown reduction");
+});
+
+// -----------------------------------------------------------------------------
+// Imports — when present, validation-only constraint. When absent, all
+// builtins in scope.
+// -----------------------------------------------------------------------------
+
+test("recipe with no `import` line accepts every builtin", () => {
+  // Sanity: the converted recipes don't declare imports and use lots of
+  // builtins; this just confirms the no-import path keeps working.
+  compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+step {
+  stage s {
+    reads u
+    writes u
+    cell {
+      let avg = mean n in neighbors { u@n }
+      set u = clamp(sin(u) * cos(u) + avg, -1, 1)
+    }
+  }
+}
+`);
+});
+
+test("explicit imports constrain — using a builtin not imported is rejected", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+import sin
+field u: f32
+step {
+  stage s {
+    reads u
+    writes u
+    cell { set u = cos(u) }
+  }
+}
+`), "core.cos is not imported");
+});
+
+test("explicit imports — listing the right names compiles", () => {
+  compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+import sin, cos, clamp
+field u: f32
+step {
+  stage s {
+    reads u
+    writes u
+    cell { set u = clamp(sin(u) + cos(u), -1, 1) }
+  }
+}
+`);
+});
+
+test("import of an unknown name fails fast", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+import sin, totallyMadeUpFunction
+field u: f32
+step {
+  stage s { reads u; writes u; cell { set u = sin(u) } }
+}
+`), "is not a recognized builtin");
+});
+
+test("import constrains clock builtins (e.g. `dt` requires import)", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+import sin
+field u: f32
+step {
+  stage s {
+    reads u
+    writes u
+    cell { set u = sin(u) * dt }
+  }
+}
+`), "clock.dt is not imported");
 });
 
 test("metric name collision with field is rejected", () => {

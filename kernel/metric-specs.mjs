@@ -96,6 +96,16 @@ export function evaluateMetricSource(state, source, values = deriveMetricValues(
     return values.eventsByLabel?.[source.slice("event:".length)] ?? 0;
   }
 
+  // v2 DSL `metric <id> = <reduction> cells [where pred] { expr }` —
+  // the GPU metric runtime populates state.dslMetrics[id] each tick
+  // (async readback; null until first readback completes). The
+  // metrics panel renders null/NaN as "—".
+  if (source.startsWith("dsl:")) {
+    const id = source.slice("dsl:".length);
+    const v = state.dslMetrics?.[id];
+    return v == null ? NaN : v;
+  }
+
   // Bare field name → mean. Matches the prior pre-populated behavior
   // (a metric `source: "u"` reads the mean of fields.u) but only does
   // the O(N) scan when something actually asks for it.

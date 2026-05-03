@@ -2,10 +2,12 @@ import { createGeodesicGrid } from "../kernel/geodesic-grid.mjs";
 import {
   buildWebGpuGeodesicUniforms,
   compileWebGpuGeodesicPipeline,
+  compileWebGpuMetric,
 } from "../dsl/webgpu-geodesic-compiler.mjs";
 import { evalExpression } from "../dsl/expression-runtime.mjs";
 import { clamp, hashNoise, smoothstep, spatialNoise } from "../kernel/kernel.mjs";
 import { createWebGpuGeodesicRuntime } from "./webgpu-geodesic-runtime.mjs";
+import { MetricRuntime } from "./webgpu-metric-runtime.mjs";
 
 // =============================================================================
 // Recipe-shaped WebGPU geodesic runner.
@@ -45,12 +47,22 @@ export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGri
   const historyFieldSet = new Set(historyFieldNames);
   for (const name of historyFieldNames) runtime.ensureHistory(name);
 
+  // Compile every v2 `metric x = ...` into a per-cell pass + reduce
+  // pipelines. Allocates scratch / readback buffers and pre-builds the
+  // pipelines so per-tick dispatch is just bind-group + dispatch calls.
+  const compiledMetrics = (dsl.metrics ?? []).map((m) => compileWebGpuMetric(m, dsl));
+  const metricRuntime = compiledMetrics.length > 0
+    ? new MetricRuntime({ runtime, metrics: compiledMetrics })
+    : null;
+
   return {
     grid,
     runtime,
+    metricRuntime,
     fieldNames,
     stages,
     eventCounters,
+    metrics: compiledMetrics,
     uploadState(state, names = fieldNames) {
       runtime.uploadState(state, names);
     },
@@ -150,8 +162,22 @@ export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGri
       // current and demote the previous current to prev (so next
       // tick's prev(u) reads u_N, completing the leapfrog cycle).
       if (historyFieldNames.length) runtime.rotateHistory(historyFieldNames);
+      // V2 metrics: dispatch per-cell + cascading reduce passes for
+      // every declared metric. Reads use post-rotation currentBuffer
+      // (the just-written value) for each field. Async readback
+      // populates the metric runtime's value cache; consumers see the
+      // latest completed readback via readDslMetrics() below.
+      if (metricRuntime) metricRuntime.dispatch();
+    },
+    // Returns the most recent post-readback values for every metric
+    // declared in the recipe. Values may be null until the first
+    // readback completes — the metrics panel renders nulls as "—".
+    readDslMetrics() {
+      if (!metricRuntime) return {};
+      return metricRuntime.values_snapshot();
     },
     dispose() {
+      metricRuntime?.dispose();
       runtime.dispose();
     },
   };
