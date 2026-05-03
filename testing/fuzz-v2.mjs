@@ -119,12 +119,22 @@ function genCellExpr(ctx, scope, depth = 0) {
   }
   if (choice < 0.50) {
     const fn = pick(r, MATH_FUNCS_1);
-    return `${fn}(${genCellExpr(ctx, scope, depth + 1)})`;
+    let arg = genCellExpr(ctx, scope, depth + 1);
+    // WGSL's parser does compile-time const-eval for math intrinsics
+    // and rejects sqrt(negative-literal). Wrap in abs() so the
+    // generator can produce the full math zoo without tripping that
+    // edge case (sqrt(|x|) is always well-defined for real x).
+    if (fn === "sqrt") arg = `abs(${arg})`;
+    return `${fn}(${arg})`;
   }
   if (choice < 0.65) {
     const fn = pick(r, MATH_FUNCS_2);
-    const a = genCellExpr(ctx, scope, depth + 1);
+    let a = genCellExpr(ctx, scope, depth + 1);
     const b = genCellExpr(ctx, scope, depth + 1);
+    // pow(base, exp) is mathematically real-undefined when base is
+    // negative AND exp is non-integer; WGSL flags some const-eval
+    // forms at compile time. Same trick as sqrt — wrap base in abs.
+    if (fn === "pow") a = `abs(${a})`;
     return `${fn}(${a}, ${b})`;
   }
   if (choice < 0.78) {
@@ -415,7 +425,73 @@ function compileOnce(dsl, { wgsl } = {}) {
   return { phase: "ok", result };
 }
 
-export function runFuzz({ count = 100, seedStart = 1, wgsl = false, log = console.log } = {}) {
+// Execute a compiled DSL on a real GPU for one tick and verify the
+// outputs aren't NaN/Inf. Uses the same seeded PRNG as the generator
+// so initial field values are deterministic per seed (failures
+// reproducible). Returns the same { phase, error } shape as
+// compileOnce — phase "execute" if anything goes wrong, "ok" if every
+// post-tick field value is finite.
+//
+// The harness is constructed and disposed per recipe — dawn-node
+// devices are cheap (sub-ms), and per-recipe isolation means a
+// recipe that wedges its device can't poison the next iteration.
+async function executeOnce(compiled, seed, { harness: harnessApi }) {
+  const { makeHarness } = harnessApi;
+  let harness;
+  const fieldDecls = compiled.fields ?? [];
+  // Deterministic-per-seed init RNG. Separate from the generator's
+  // RNG so adding execute later doesn't shift the generator's
+  // PRNG stream.
+  const initRng = makeRng(seed ^ 0x1F4ED7);
+  try {
+    harness = await makeHarness({ dsl: compiled, frequency: 16 });
+  } catch (err) {
+    return { phase: "execute", error: err };
+  }
+  try {
+    for (const f of fieldDecls) {
+      const components = f.type === "vec2" ? 2 : 1;
+      const Ctor = (f.type === "u32" || f.type === "bool") ? Uint32Array : Float32Array;
+      const arr = new Ctor(harness.cellCount * components);
+      for (let i = 0; i < arr.length; i++) {
+        if (Ctor === Uint32Array) arr[i] = Math.floor(initRng() * 4);
+        else arr[i] = (initRng() - 0.5) * 0.5;
+      }
+      harness.uploadField(f.name, arr);
+    }
+    await harness.tick();
+    for (const f of fieldDecls) {
+      const data = await harness.readField(f.name);
+      for (let i = 0; i < data.length; i++) {
+        if (!Number.isFinite(data[i])) {
+          return {
+            phase: "execute",
+            error: new Error(`field ${f.name}[${i}] = ${data[i]} after one tick (NaN/Inf)`),
+          };
+        }
+      }
+    }
+    return { phase: "ok" };
+  } catch (err) {
+    return { phase: "execute", error: err };
+  } finally {
+    try { harness.dispose(); } catch (_) { /* idempotent */ }
+  }
+}
+
+export async function runFuzz({ count = 100, seedStart = 1, wgsl = false, execute = false, log = console.log } = {}) {
+  // The execute path needs the harness module loaded lazily — only
+  // when --execute is set, so static fuzz runs don't pay the cost
+  // of a dawn-node import.
+  let harnessApi = null;
+  if (execute) {
+    const mod = await import("./wgsl-harness.mjs");
+    if (!await mod.harnessAvailable()) {
+      log("fuzz: --execute requested but dawn-node not available; run `npm install`");
+      return { succeeded: 0, failures: [] };
+    }
+    harnessApi = mod;
+  }
   const failures = [];
   let succeeded = 0;
   for (let i = 0; i < count; i++) {
@@ -427,11 +503,19 @@ export function runFuzz({ count = 100, seedStart = 1, wgsl = false, log = consol
       failures.push({ phase: "generate", seed, dsl: null, error: err.message, stack: err.stack });
       continue;
     }
-    const { phase, error } = compileOnce(dsl, { wgsl });
-    if (phase === "ok") { succeeded++; continue; }
-    failures.push({ phase, seed, dsl, error: error.message, stack: error.stack });
+    // Execute mode forces wgsl=true since execute needs the WGSL
+    // emitter to succeed first.
+    const { phase, error, result } = compileOnce(dsl, { wgsl: wgsl || execute });
+    if (phase !== "ok") {
+      failures.push({ phase, seed, dsl, error: error.message, stack: error.stack });
+      continue;
+    }
+    if (!execute) { succeeded++; continue; }
+    const exec = await executeOnce(result.dsl, seed, { harness: harnessApi });
+    if (exec.phase === "ok") { succeeded++; continue; }
+    failures.push({ phase: exec.phase, seed, dsl, error: exec.error.message, stack: exec.error.stack });
   }
-  log(`fuzz: ${succeeded}/${count} compiled cleanly (${failures.length} failures)`);
+  log(`fuzz: ${succeeded}/${count} ${execute ? "executed" : "compiled"} cleanly (${failures.length} failures)`);
   return { succeeded, failures };
 }
 
@@ -447,9 +531,13 @@ function parseFlag(args, name, fallback) {
 if (import.meta.url === `file://${process.argv[1]}`) {
   const args = process.argv.slice(2);
   const seed = parseInt(parseFlag(args, "--seed", "0"), 10);
-  const count = parseInt(parseFlag(args, "--count", "100"), 10);
+  const execute = args.includes("--execute");
+  const wgsl = args.includes("--wgsl") || execute;
+  // Execute mode is GPU-bound (~10-30ms/iteration on dawn-node) so
+  // default to a smaller count than static-compile mode.
+  const defaultCount = execute ? 30 : 100;
+  const count = parseInt(parseFlag(args, "--count", String(defaultCount)), 10);
   const show = args.includes("--show");
-  const wgsl = args.includes("--wgsl");
 
   if (seed > 0 && show) {
     // Single-seed display mode
@@ -462,7 +550,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
 
   const seedStart = seed > 0 ? seed : 1;
-  const { succeeded, failures } = runFuzz({ count, seedStart, wgsl });
+  const { succeeded, failures } = await runFuzz({ count, seedStart, wgsl, execute });
 
   if (failures.length === 0) {
     console.log("no failures");

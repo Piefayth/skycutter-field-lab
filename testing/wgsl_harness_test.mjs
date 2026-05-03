@@ -45,7 +45,7 @@ scenarios { scenario blank "Blank" { set u = 0 } }
     try {
       const initial = new Float32Array(h.cellCount).fill(0.42);
       h.uploadField("u", initial);
-      h.tick();
+      await h.tick();
       const out = await h.readField("u");
       for (let i = 0; i < out.length; i++) {
         assert.ok(closeTo(out[i], 0.42), `cell ${i}: got ${out[i]}, want 0.42`);
@@ -90,7 +90,7 @@ scenarios { scenario blank "Blank" { set u = 0 } }
       initial[0] = 1.0;
       h.uploadField("u", initial);
 
-      h.tick({ params: { diff: 0.5 } });
+      await h.tick({ params: { diff: 0.5 } });
 
       const out = await h.readField("u");
       // Hot cell decreased.
@@ -142,7 +142,7 @@ scenarios { scenario blank "Blank" { set u = 1 } }
     try {
       h.uploadField("u", new Float32Array(h.cellCount).fill(1.0));
       // dt = 1, k = 0.25 → u *= 0.75 across the board.
-      h.tick({ dt: 1, params: { k: 0.25 } });
+      await h.tick({ dt: 1, params: { k: 0.25 } });
       const out = await h.readField("u");
       for (let i = 0; i < out.length; i++) {
         assert.ok(closeTo(out[i], 0.75, 1e-4), `cell ${i}: got ${out[i]}, want 0.75`);
@@ -184,7 +184,7 @@ scenarios { scenario blank "Blank" { set u = 0 } }
       initial[1] = -0.5;  // -> -5 -> clamp -> -1
       initial[2] = 0.05;  // -> 0.5 -> clamp -> 0.5
       h.uploadField("u", initial);
-      h.tick();
+      await h.tick();
       const out = await h.readField("u");
       assert.ok(closeTo(out[0], 1.0), `cell 0: got ${out[0]}, want 1.0`);
       assert.ok(closeTo(out[1], -1.0), `cell 1: got ${out[1]}, want -1.0`);

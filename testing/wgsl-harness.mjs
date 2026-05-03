@@ -157,11 +157,19 @@ export async function makeHarness({ recipeDsl, dsl, frequency = 16 } = {}) {
     },
 
     // Run every pass in declared order — equivalent to one tick of
-    // the recipe's `step { ... }` block.
-    tick({ dt = 1 / 60, frame = 0, params = {}, consts = {} } = {}) {
+    // the recipe's `step { ... }` block. Async because we wrap the
+    // dispatch in an error scope and await it: dawn-node logs WGSL
+    // validation failures to stderr by default but doesn't throw, so
+    // without scoping a recipe with bad WGSL would silently produce
+    // garbage. popErrorScope returns the first uncaptured error
+    // queued during the tick (or null if everything succeeded).
+    async tick({ dt = 1 / 60, frame = 0, params = {}, consts = {} } = {}) {
+      device.pushErrorScope("validation");
       for (let i = 0; i < passes.length; i++) {
         this.runPass(i, { dt, frame, params, consts });
       }
+      const err = await device.popErrorScope();
+      if (err) throw new Error(`WGSL tick failed: ${err.message}`);
     },
 
     dispose() {

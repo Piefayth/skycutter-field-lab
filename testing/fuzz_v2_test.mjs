@@ -25,8 +25,8 @@ test("fuzzer: different seeds → different DSL", () => {
   assert.notEqual(generateRecipe(1), generateRecipe(2));
 });
 
-test("fuzzer: small batch — log compile-failure stats without failing the suite", () => {
-  const { succeeded, failures } = runFuzz({ count: 50, seedStart: 1, log: () => {} });
+test("fuzzer: small batch — log compile-failure stats without failing the suite", async () => {
+  const { succeeded, failures } = await runFuzz({ count: 50, seedStart: 1, log: () => {} });
   // Crash-summary stays in the test log so a regression sweep can
   // notice if a previously-clean batch starts failing.
   console.log(`  fuzz seeds 1..50: ${succeeded}/50 compiled cleanly, ${failures.length} failures`);
