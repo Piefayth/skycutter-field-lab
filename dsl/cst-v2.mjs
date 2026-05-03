@@ -288,7 +288,7 @@ function scanStatements(source, sanitized, root, blocks) {
   const statements = [];
   const lineRanges = computeLineRanges(source);
   for (const line of lineRanges) {
-    for (const segment of statementSegmentsForLine(sanitized, line)) {
+    for (const segment of statementSegmentsForLine(source, sanitized, line)) {
       const text = source.slice(segment.from, segment.to);
       const clean = sanitized.slice(segment.from, segment.to);
       const words = [...clean.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)];
@@ -323,8 +323,9 @@ function scanStatements(source, sanitized, root, blocks) {
   return statements;
 }
 
-function statementSegmentsForLine(sanitized, line) {
+function statementSegmentsForLine(source, sanitized, line) {
   const raw = sanitized.slice(line.from, line.to);
+  const original = source.slice(line.from, line.to);
   const points = [0];
   for (let i = 0; i < raw.length; i++) {
     if (raw[i] === "{") {
@@ -361,7 +362,9 @@ function statementSegmentsForLine(sanitized, line) {
         break;
       }
     }
-    while (to > from && /\s/.test(raw[to - 1])) to--;
+    const lineComment = original.indexOf("//", from);
+    if (lineComment >= 0 && lineComment < to) to = lineComment;
+    while (to > from && /\s/.test(raw[to - 1]) && /\s/.test(original[to - 1])) to--;
     if (to > from) out.push({ from: line.from + from, to: line.from + to });
   }
   return out;

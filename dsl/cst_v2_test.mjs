@@ -57,6 +57,7 @@ test("CST records blocks, statements, symbols, and names", () => {
   const cst = parseDslCst(SOURCE);
   assert(cst.blocks.some((block) => block.keyword === "stage" && block.id === "move"));
   assert(!cst.blocks.some((block) => block.keyword === "?"));
+  assertEq(cst.root.statements.find((stmt) => stmt.keyword === "recipe").text, "recipe \"CST\"");
   assert(cst.statements.some((stmt) => stmt.keyword === "reads" && stmt.role === "stageIo"));
   assertEq(cst.names.fields, ["u"]);
   assertEq(cst.names.parameters, ["speed"]);
