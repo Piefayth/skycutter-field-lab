@@ -105,6 +105,45 @@ step {
   assertEq(labels(source, "@@").filter((label) => ["reads", "writes", "cell"].includes(label)), ["reads", "writes", "cell"]);
 });
 
+test("source declarations and source references participate in completion", () => {
+  const sourceType = `
+recipe "S"
+substrate geodesic frequency 16
+source mask: @@
+field u: f32
+step { stage hold { reads u; writes u; cell { set u = u } } }
+`;
+  assertEq(labels(sourceType, "@@"), ["f32", "vec2", "u32", "bool"]);
+
+  const reads = `
+recipe "S"
+substrate geodesic frequency 16
+source mask: f32
+field u: f32
+step {
+  stage hold {
+    reads @@
+    writes u
+    cell { set u = u }
+  }
+}`;
+  assertEq(labels(reads, "@@", "m"), ["mask"]);
+
+  const stamp = `
+recipe "S"
+substrate geodesic frequency 16
+source mask: f32
+field u: f32
+stamps {
+  stamp paint {
+    spot @@
+  }
+}
+step { stage hold { reads u; writes u; cell { set u = u } } }
+`;
+  assertEq(labels(stamp, "@@", "m"), ["mask"]);
+});
+
 test("views section offers view declarations", () => {
   const source = `
 views {

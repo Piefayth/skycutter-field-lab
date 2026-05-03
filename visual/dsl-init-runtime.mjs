@@ -358,7 +358,7 @@ function addGeodesicBlobAtVector(state, fieldName, center, radius, amount) {
   const ay = components === 2 ? amount.y : 0;
   const grid = geodesicGrid(state, "spot");
   const centerCell = nearestGeodesicCell(grid, center);
-  const ringRadius = Math.max(1, Math.round(Math.abs(radius) / averageNeighborAngle(grid, centerCell)));
+  const ringRadius = Math.max(0, Math.round(Math.abs(radius) / averageNeighborAngle(grid, centerCell)));
   const visited = new Uint8Array(grid.cellCount);
   const queue = [{ cell: centerCell, depth: 0 }];
   visited[centerCell] = 1;

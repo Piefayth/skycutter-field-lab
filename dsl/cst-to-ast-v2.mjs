@@ -11,6 +11,7 @@ export function recipeCstToAst(cst, options = {}) {
   const recipe = {};
   let substrate = null;
   const fields = [];
+  const sources = [];
   const params = [];
   const constants = [];
   const importedNames = [];
@@ -21,6 +22,7 @@ export function recipeCstToAst(cst, options = {}) {
     else if (stmt.keyword === "recommendedPreset") recipe.recommendedPreset = wordsAfterKeyword(stmt)[0] ?? null;
     else if (stmt.keyword === "substrate") substrate = substrateCstToAst(stmt);
     else if (stmt.keyword === "field") fields.push(fieldCstToAst(stmt));
+    else if (stmt.keyword === "source") sources.push(sourceCstToAst(stmt));
     else if (stmt.keyword === "param") params.push(paramCstToAst(cst, stmt));
     else if (stmt.keyword === "const") constants.push(constCstToAst(stmt));
     else if (stmt.keyword === "import") importedNames.push(...wordsAfterKeyword(stmt));
@@ -44,8 +46,8 @@ export function recipeCstToAst(cst, options = {}) {
     resolution: {},
     importedNames: importedNames.length > 0 ? dedupe(importedNames) : null,
     imports: [],
-    fields,
-    sources: [],
+    fields: [...fields, ...sources],
+    sources,
     settings: [],
     parameters: params,
     presets: scenarios.map((s) => ({ id: s.id, label: s.label, actions: s.actions, paramOverrides: s.paramOverrides ?? {} })),
@@ -71,7 +73,7 @@ function validateStrictRecipeCst(cst) {
 
   const rootStatementKinds = new Set([
     "recipe", "summary", "recommendedPreset", "substrate",
-    "field", "param", "const", "import", "metric",
+    "field", "source", "param", "const", "import", "metric",
     "step", "views", "stamps", "scenarios",
   ]);
   for (const stmt of sorted(cst.root.statements)) {
@@ -390,6 +392,21 @@ function fieldCstToAst(stmt) {
     history: 0,
     type,
     derived: words.includes("derived"),
+  };
+}
+
+function sourceCstToAst(stmt) {
+  const words = wordsFrom(stmt.cleanText);
+  const name = words[1] ?? null;
+  const type = words.find((word) => FIELD_TYPES.has(word)) ?? null;
+  if (!name || !type) throw new Error("v2 CST projection: incomplete source declaration");
+  if (words.includes("derived")) throw new Error(`v2 parse: source ${name}: sources cannot be derived`);
+  return {
+    name,
+    kind: "source",
+    history: 0,
+    type,
+    derived: false,
   };
 }
 

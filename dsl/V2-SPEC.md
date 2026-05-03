@@ -118,7 +118,26 @@ X Y Z`. Recipes target a specific substrate; substrate-specific helpers (e.g.
 ```
 field u: f32                # primary state, paintable, written by stages
 field abs_u: f32 derived    # computed per-cell by stages, not paintable
+source wall: f32            # persistent user-authored state; stages read it
 ```
+
+### Sources
+
+A `source` is allocated like a field and has the same storage types, but it is
+not part of the simulation update loop:
+
+- stages may list sources in `reads`
+- stages may not list sources in `writes`
+- scenarios may initialize sources
+- stamps may edit sources, including erase stamps that subtract or reset source
+  values
+- `spot sourceName ... radius=0` targets exactly the nearest cell, which makes
+  single-cell source editing possible even when the UI brush radius slider is
+  larger
+
+Use sources for persistent masks, walls, emitters, terrain/material layers, and
+other authorable substrates that should remain fixed until the user explicitly
+paints or erases them.
 
 ### Types
 

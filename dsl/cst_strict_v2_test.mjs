@@ -83,6 +83,23 @@ step {
   assertEq(abs_u.derived, true);
 });
 
+test("source declaration projects as immutable stage-readable storage", () => {
+  const out = parseStrict(`
+recipe "Source"
+substrate geodesic frequency 16
+field u: f32
+source rock: f32
+step {
+  stage step1 { reads u, rock; writes u; cell { set u = u + rock } }
+}
+`);
+  const rock = out.sources.find(f => f.name === "rock");
+  assertEq(rock.kind, "source");
+  assertEq(rock.type, "f32");
+  assertEq(rock.derived, false);
+  assert(out.fields.some(f => f.name === "rock" && f.kind === "source"), "source included in allocated fields");
+});
+
 // -----------------------------------------------------------------------------
 // Param sliders, toggles, defaults
 // -----------------------------------------------------------------------------

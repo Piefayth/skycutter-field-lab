@@ -353,7 +353,6 @@ export function validatePresets(presets, schema = {}) {
 export function validateStamps(stamps, schema = {}) {
   const ids = new Set();
   const declaredFields = new Set((schema.fields ?? []).map((decl) => decl.name).filter(Boolean));
-  const sourceFields = new Set((schema.sources ?? []).map((decl) => decl.name).filter(Boolean));
   const declaredParams = new Set((schema.parameters ?? []).map((decl) => decl.name).filter(Boolean));
   const declaredConstants = new Set((schema.constants ?? []).map((decl) => decl.name).filter(Boolean));
   const declaredPlanet = new Set(Object.keys(schema.planet ?? {}));
@@ -361,18 +360,17 @@ export function validateStamps(stamps, schema = {}) {
   for (const stamp of stamps) {
     if (ids.has(stamp.id)) throw new Error(`Duplicate stamp id: ${stamp.id}`);
     ids.add(stamp.id);
-    validateStampActions(stamp.actions, declaredFields, sourceFields, declaredParams, declaredConstants, declaredPlanet, imports, stamp.id);
+    validateStampActions(stamp.actions, declaredFields, declaredParams, declaredConstants, declaredPlanet, imports, stamp.id);
   }
 }
 
-function validateStampActions(actions, declaredFields, sourceFields, declaredParams, declaredConstants, declaredPlanet, imports, label, locals = new Set()) {
+function validateStampActions(actions, declaredFields, declaredParams, declaredConstants, declaredPlanet, imports, label, locals = new Set()) {
   const allFieldsVisible = declaredFields.size === 0 ? null : declaredFields;
   const extra = STAMP_IDENTIFIERS;
   for (const action of actions) {
     if (action.type === "spot") {
       requireImport(imports, "init", "spot", label);
       requireDeclaredField(action.field, declaredFields, label, "spot");
-      requireMutableField(action.field, sourceFields, label, "spot");
       validateExpr(action.lon, allFieldsVisible ?? new Set(), locals, `${label} spot lon`, declaredParams, declaredConstants, declaredPlanet, imports, extra);
       validateExpr(action.lat, allFieldsVisible ?? new Set(), locals, `${label} spot lat`, declaredParams, declaredConstants, declaredPlanet, imports, extra);
       validateExpr(action.radius, allFieldsVisible ?? new Set(), locals, `${label} spot radius`, declaredParams, declaredConstants, declaredPlanet, imports, extra);
@@ -380,7 +378,6 @@ function validateStampActions(actions, declaredFields, sourceFields, declaredPar
     } else if (action.type === "ellipse") {
       requireImport(imports, "init", "ellipse", label);
       requireDeclaredField(action.field, declaredFields, label, "ellipse");
-      requireMutableField(action.field, sourceFields, label, "ellipse");
       validateExpr(action.lon, allFieldsVisible ?? new Set(), locals, `${label} ellipse lon`, declaredParams, declaredConstants, declaredPlanet, imports, extra);
       validateExpr(action.lat, allFieldsVisible ?? new Set(), locals, `${label} ellipse lat`, declaredParams, declaredConstants, declaredPlanet, imports, extra);
       validateExpr(action.rx, allFieldsVisible ?? new Set(), locals, `${label} ellipse rx`, declaredParams, declaredConstants, declaredPlanet, imports, extra);
@@ -812,12 +809,6 @@ function requireRead(field, reads, stageId) {
 function requireDeclaredField(field, declaredFields, stageId, label) {
   if (declaredFields.size > 0 && !declaredFields.has(field)) {
     throw new Error(`${stageId}: ${label} references undeclared field ${field}`);
-  }
-}
-
-function requireMutableField(field, sourceFields, stageId, label) {
-  if (sourceFields.has(field)) {
-    throw new Error(`${stageId}: ${label} references immutable source ${field}`);
   }
 }
 

@@ -7,6 +7,7 @@
     "shallow-water",
     "smoothlife",
     "nonlocal-ecology",
+    "chemotaxis-colony",
     "kuramoto-chimera",
     "ising-model",
     "kobayashi-snowflake",
@@ -61,6 +62,7 @@
       "recipes": [
         "klausmeier",
         "predator-prey",
+        "chemotaxis-colony",
         "sir-epidemic"
       ]
     },
@@ -135,6 +137,12 @@
       "name": "Predator-prey (example)",
       "path": "recipes/predator-prey.mjs",
       "summary": "Rosenzweig-MacArthur with diffusion. Prey colonizes empty cells, predators follow eating, a void trails the predators which is then re-colonized. Sustained chase-wave limit cycle."
+    },
+    {
+      "id": "chemotaxis-colony",
+      "name": "Chemotaxis colony (example)",
+      "path": "recipes/chemotaxis-colony.mjs",
+      "summary": "A population actively steers up food gradients and away from toxin gradients. Paint food, bugs, and repellent to create clustering, chase fronts, avoidance corridors, and collapsing trails."
     },
     {
       "id": "wave-equation",

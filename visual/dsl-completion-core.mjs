@@ -27,7 +27,7 @@ const TOP_LEVEL_COMPLETIONS = [
   keywordOption("recommendedPreset", "recommendedPreset scenarioId"),
   keywordOption("substrate", "substrate geodesic frequency 64", 30),
   keywordOption("field", "field name: f32", 30),
-  keywordOption("source", "source name: vec2"),
+  keywordOption("source", "source name: f32"),
   keywordOption("const", "const NAME = value", 30),
   keywordOption("import", "import builtinName"),
   keywordOption("param", "param name slider lo..hi default value", 30),
@@ -250,7 +250,7 @@ function optionsForGrammarPosition(ctx, mode, prefix) {
   if (mode.mode === "topLevel") {
     if (/^\s*recommendedPreset\s+$/.test(line)) return structural(scenariosFromAst(ctx));
     if (/^\s*field\s+[A-Za-z_][A-Za-z0-9_]*\s*:\s*$/.test(line)) return structural(FIELD_TYPE_COMPLETIONS);
-    if (/^\s*source\s+[A-Za-z_][A-Za-z0-9_]*\s*:\s*$/.test(line)) return structural([keywordOption("vec2", "2-component source vector")]);
+    if (/^\s*source\s+[A-Za-z_][A-Za-z0-9_]*\s*:\s*$/.test(line)) return structural(FIELD_TYPE_COMPLETIONS);
     if (/^\s*field\s+[A-Za-z_][A-Za-z0-9_]*\s*:\s+\w+\s+$/.test(line)) return structural([keywordOption("derived", "computed field")]);
     if (/^\s*param\s+[A-Za-z_][A-Za-z0-9_]*\s+$/.test(line)) return structural(PARAM_WIDGET_COMPLETIONS);
     if (/^\s*param\s+[A-Za-z_][A-Za-z0-9_]*\s+(slider|toggle)\s+.*\s+$/.test(line)) return structural(PARAM_MODIFIER_COMPLETIONS);
@@ -265,7 +265,8 @@ function optionsForGrammarPosition(ctx, mode, prefix) {
   }
 
   if (mode.mode === "stageBody") {
-    if (/^\s*(reads|writes)\s+[\w\s,]*$/.test(line)) return structural(fieldsFromAst(ctx));
+    if (/^\s*reads\s+[\w\s,]*$/.test(line)) return structural(storageNamesFromAst(ctx));
+    if (/^\s*writes\s+[\w\s,]*$/.test(line)) return structural(fieldsFromAst(ctx));
     if (/^\s*[A-Za-z_]*$/.test(trimmed)) {
       return structural([
         keywordOption("reads", "reads field1, field2", 30),
@@ -300,7 +301,7 @@ function optionsForGrammarPosition(ctx, mode, prefix) {
 
   if (mode.mode === "viewBody") {
     if (/^\s*color\s+$/.test(line)) return structural([keywordOption("ramp", "color ramp field palette PALETTE", 30), keywordOption("wheel", "color wheel field", 30), keywordOption("expr", "color expr { ... }", 30)]);
-    if (/^\s*color\s+(ramp|wheel)\s+$/.test(line)) return structural(fieldsFromAst(ctx));
+    if (/^\s*color\s+(ramp|wheel)\s+$/.test(line)) return structural(storageNamesFromAst(ctx));
     if (/^\s*color\s+ramp\s+[A-Za-z_][A-Za-z0-9_]*\s+$/.test(line)) return structural([keywordOption("range", "range [lo, hi]"), keywordOption("palette", "palette NAME"), keywordOption("stops", "stops { stop ... }")]);
     if (/^\s*color\s+ramp\s+[A-Za-z_][A-Za-z0-9_]*\s+range\s+\[[^\]]+\]\s+$/.test(line)) return structural([keywordOption("palette", "palette NAME"), keywordOption("stops", "stops { stop ... }")]);
     if (/^\s*color\s+wheel\s+[A-Za-z_][A-Za-z0-9_]*\s+$/.test(line)) return structural([keywordOption("range", "range [lo, hi]")]);
@@ -311,7 +312,7 @@ function optionsForGrammarPosition(ctx, mode, prefix) {
   }
 
   if (mode.mode === "presetBody") {
-    if (/^\s*(set|spot|ellipse|region)\s+$/.test(line)) return structural(fieldsFromAst(ctx));
+    if (/^\s*(set|spot|ellipse|region)\s+$/.test(line)) return structural(storageNamesFromAst(ctx));
     if (/\bat\s+$/.test(line) && ctx.stack.includes("stamp")) return structural([declaredOption("brush", "declared")]);
     if (initial || /^\s*[A-Za-z_]*$/.test(trimmed)) {
       return structural([
@@ -325,7 +326,7 @@ function optionsForGrammarPosition(ctx, mode, prefix) {
   }
 
   if (mode.mode === "cellBody" || mode.mode === "initCellBody") {
-    if (/^\s*(set|add)\s+$/.test(line)) return structural(fieldsFromAst(ctx));
+    if (/^\s*(set|add)\s+$/.test(line)) return structural(mode.mode === "initCellBody" ? storageNamesFromAst(ctx) : fieldsFromAst(ctx));
     if (initial || /^\s*[A-Za-z_]*$/.test(trimmed)) {
       return structural([
         keywordOption("let", "let name = expr", 30),
@@ -393,6 +394,14 @@ function astNames(ctx) {
 
 function fieldsFromAst(ctx) {
   return optionsFromNames(astNames(ctx).fields, "field");
+}
+
+function storageNamesFromAst(ctx) {
+  const names = astNames(ctx);
+  return [
+    ...optionsFromNames(names.fields, "field"),
+    ...optionsFromNames(names.sources, "source"),
+  ];
 }
 
 function palettesFromAst(ctx) {

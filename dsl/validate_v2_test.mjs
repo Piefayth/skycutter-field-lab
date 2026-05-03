@@ -236,6 +236,37 @@ step {
 });
 
 // -----------------------------------------------------------------------------
+// Sources: stage-immutable, stamp/scenario writable
+// -----------------------------------------------------------------------------
+
+test("source can be read by stages and written by stamps", () => {
+  compileV2(`recipe "X"
+substrate geodesic frequency 16
+field u: f32
+source mask: f32
+
+stamps {
+  stamp paintMask "paint mask" {
+    spot mask at brush.pos, radius=0, amount=1
+  }
+}
+
+step {
+  stage step1 { reads u, mask; writes u; cell { set u = u + mask } }
+}`);
+});
+
+test("source cannot be written by stages", () => {
+  expectThrow(() => compileV2(`recipe "X"
+substrate geodesic frequency 16
+field u: f32
+source mask: f32
+step {
+  stage step1 { reads u; writes u, mask; cell { set mask = 1 } }
+}`), "source mask is immutable");
+});
+
+// -----------------------------------------------------------------------------
 // Metric purity (only triggers when metric body has hostile shape; current
 // parser doesn't allow set/add inside metric expressions, but the validator
 // is the safety net)

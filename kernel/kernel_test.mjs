@@ -1,6 +1,7 @@
 import { DEFAULT_CELL_COUNT, createState, hashNoise, reallocateState } from "./kernel.mjs";
 import { createGeodesicGrid } from "./geodesic-grid.mjs";
 import { materializeRecipe } from "../visual/recipes.mjs";
+import { compileV2 } from "../dsl/compile-v2.mjs";
 import * as klausmeier from "../recipes/klausmeier.mjs";
 
 // Klausmeier is the v2 stamp fixture: it has `stamp seed "Plant patch"` /
@@ -60,7 +61,29 @@ test("v2 stamps mutate geodesic fields", () => {
   assert(Math.abs(after - before) > 1e-5, "`seed` stamp should change biomass field n on a geodesic grid");
 });
 
-function makeGeodesicStampState(frequency) {
+test("source stamps can target exactly one geodesic cell", () => {
+  const recipe = materializeRecipe({
+    pipeline: compileV2(`
+recipe "Source stamp"
+substrate geodesic frequency 8
+source mask: f32
+field u: f32
+stamps {
+  stamp mark "Mark source cell" {
+    spot mask at brush.pos, radius=0, amount=1
+  }
+}
+step { stage s { reads u, mask; writes u; cell { set u = u + mask } } }
+`),
+  });
+  const state = makeGeodesicStampState(8, recipe);
+  const stamp = recipe.stamps.find((s) => s.id === "mark");
+  assert(stamp, "source stamp must materialize");
+  stamp.run(state, 128, 64, 10, { lon: 0, lat: 0, u: 0.5, v: 0.5, px: 1, py: 0, pz: 0 });
+  assert(nonZeroCount(state.fields.mask) === 1, "radius=0 source stamp should affect exactly one cell");
+});
+
+function makeGeodesicStampState(frequency, recipe = stampRecipe) {
   const topology = createGeodesicGrid({ frequency });
   const state = createState();
   state.grid = {
@@ -71,7 +94,7 @@ function makeGeodesicStampState(frequency) {
     width: 256,
     height: 128,
   };
-  reallocateState(state, { fields: stampRecipe.fields });
+  reallocateState(state, { fields: recipe.fields });
   return state;
 }
 
@@ -101,4 +124,12 @@ function sum(field) {
   let total = 0;
   for (const value of field) total += value;
   return total;
+}
+
+function nonZeroCount(field) {
+  let count = 0;
+  for (const value of field) {
+    if (Math.abs(value) > 1e-9) count++;
+  }
+  return count;
 }
