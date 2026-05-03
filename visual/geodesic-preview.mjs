@@ -138,9 +138,17 @@ function createGlyphLayer(scene, grid) {
 
   function buildInstancedMesh(texture, label, renderOrder) {
     const geometry = new THREE.PlaneGeometry(1, 1);
+    // No `vertexColors: true` here — that flag enables a per-vertex
+    // `color` attribute path which PlaneGeometry doesn't provide, and
+    // when both vertexColors and the missing attribute are in play
+    // Three.js silently bypasses the per-instance color path too,
+    // leaving the texture rendering at uniform white.
+    //
+    // `mesh.instanceColor` (set below as an InstancedBufferAttribute)
+    // is a separate mechanism — Three.js's renderer detects it and
+    // injects the right shader chunk automatically.
     const material = new THREE.MeshBasicMaterial({
       map: texture,
-      vertexColors: true,
       transparent: true,
       alphaTest: 0.05,
       side: THREE.DoubleSide,
