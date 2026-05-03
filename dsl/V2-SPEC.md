@@ -520,6 +520,15 @@ Reserved in grammar, not implemented in v2 first cut:
   recipe's `views[]` / paint stamp list. **Pending evidence** — only
   Kuramoto's `cosTheta` is currently derived, so the UI gap isn't yet
   user-visible.
+- Editor / autocomplete v2-aware — **DONE**. Highlighter recognizes
+  v2 keywords (substrate / scenario / step / for / metric / import /
+  derived / previous / cells / where / at), drops v1-only ones (use /
+  preset / source / setting / fill / each / event), and renders `@`
+  in coordinate queries as an operator. Autocomplete classifies block
+  context as v2 (cell / step / scenario / stamp), and auto-import
+  inserts/extends flat `import name1, name2` lines instead of v1's
+  per-namespace `use NS name` form. Docs categories updated to
+  describe v2 constructs (no more "after `use core ...`" phrasing).
 - Coordinate-query architecture — **DONE**. `u@prev` and `u@n` are
   first-class `CoordRead { field, coord }` AST nodes (NOT lowered to
   `Call(prev, [u])` or a synthetic Identifier). The WGSL compiler

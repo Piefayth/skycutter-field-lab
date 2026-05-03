@@ -21,17 +21,17 @@ import { createFieldColorPalette, fieldCssColor, fieldCssBgPill } from "./field-
 
 // Recipe-identity declarations. One per line.
 const RECIPE_KEYWORDS = new Set([
-  "recipe", "summary", "recommendedPreset", "grid",
+  "recipe", "summary", "recommendedPreset", "substrate",
 ]);
 
 // Schema declarations — introduce names into the recipe.
 const SCHEMA_KEYWORDS = new Set([
-  "planet", "const", "use", "field", "source", "setting", "param",
+  "const", "field", "param", "import", "metric",
 ]);
 
-// Block headers — `stage id "label" { ... }`.
+// Block headers — `stage id "label" { ... }` and friends.
 const DEFINITION_KEYWORDS = new Set([
-  "stage", "preset", "stamp",
+  "stage", "scenario", "stamp",
 ]);
 
 // Stage I/O lists.
@@ -41,28 +41,44 @@ const DECLARATION_KEYWORDS = new Set([
 
 // Control-flow blocks. `when` doubles as a function helper; the
 // `(`-lookahead in token() routes the call form to "function" first.
+// `step` is the v2 tick-block wrapper. `for` introduces `for each cell`.
 const CONTROL_KEYWORDS = new Set([
-  "cell", "event", "each", "eachCell", "when", "if", "else",
-  "neighbor",
+  "step", "cell", "for", "when", "if", "else",
+  "neighbors", "neighbor",
 ]);
 
-// Statement verbs inside stage / preset / stamp bodies.
+// Statement verbs inside stage / scenario / stamp bodies.
+//   set/add/let — cell-action verbs
+//   spot/ellipse/region — scenario/stamp action verbs
+//   wind/advect — v2 stage primitives kept until vector-field types
+//                 and continuous-position CoordRead land
+//   sum/max/min/mean/count — neighbor reduction ops + metric ops
 const ACTION_KEYWORDS = new Set([
   "add", "set", "let",
-  "fill", "spot", "ellipse", "region", "copy",
-  "wind", "advect", "diffuse", "clamp", "normalize",
-  "decay", "divergence", "gradient", "curl",
+  "spot", "ellipse", "region",
+  "wind", "advect",
+  "sum", "max", "min", "mean", "count",
 ]);
 
 // Trailing-argument keywords on action lines and param lines. Words
 // that overlap with builtins (`min`, `max`, `dt`, `step`) deliberately
 // stay out — the tokenizer can't reliably tell which form is intended.
+//   `derived` — field-decl annotation
+//   `previous` — explicit history declaration on stage reads
+//   `cells` / `where` — metric reduction shape
+//   `at` / `in` — positional/iteration prepositions
+//   `radius` / `lon` / `lat` / `rx` / `ry` / `angle` — spot/ellipse args
+//   `slider` / `toggle` / `default` / `step` / `label` — param-decl form
+//   `geodesic` / `frequency` — substrate-decl form
 const MODIFIER_KEYWORDS = new Set([
-  "by", "amount", "damping", "strength",
+  "derived", "previous",
+  "cells", "where", "at", "in",
+  "by", "strength",
   "radius", "angle", "rx", "ry", "lon", "lat",
-  "slider", "boolean", "label",
+  "lonMin", "lonMax", "latMin", "latMax", "amount",
+  "slider", "toggle", "boolean", "label",
   "step", "default",
-  "geodesic", "frequency", "tiles", "tileSize",
+  "geodesic", "frequency",
 ]);
 
 const LOGICAL_OPS = new Set(["and", "or", "not"]);
@@ -108,15 +124,21 @@ export { sourceRefTag };
 // - "namespace": the first identifier is the namespace; the rest are
 //   keyword-matched (since they're imported keyword names).
 const LINE_MODES = {
-  field: "field-list",
-  source: "source-list",
-  setting: "single-def",
+  // V2 fields are one-per-line with a type annotation (`field u: f32`).
+  // The "single-def" mode highlights the first identifier as a definition
+  // and lets the rest of the line tokenize normally (type annotation,
+  // optional `derived`).
+  field: "single-def",
   param: "single-def",
   const: "single-def",
   stage: "single-def",
-  preset: "single-def",
+  scenario: "single-def",
   stamp: "single-def",
-  use: "namespace",
+  metric: "single-def",
+  // `import sin, cos, ...` — every identifier on the line is a builtin
+  // name being brought into scope. Treat as namespace mode (no
+  // declaration emphasis on the names).
+  import: "namespace",
 };
 
 export const fieldLabHighlight = HighlightStyle.define([
@@ -255,6 +277,13 @@ function makeFieldLabLanguage({ fieldTags, tokenNames, sourceTokenNames, immutab
 
     if (stream.match(/^[{}()[\]]/)) return "bracket";
     if (stream.match(/^[,;]/)) return "punctuation";
+
+    // V2 coordinate query: `field@coord`. Highlight the `@` as an
+    // operator so the eye picks it out as a special read (the model's
+    // unifying primitive) rather than blending into the identifier.
+    if (stream.eat("@")) {
+      return "operator";
+    }
 
     if (stream.eat(".")) {
       state.afterDot = true;

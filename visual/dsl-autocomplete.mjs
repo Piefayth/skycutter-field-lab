@@ -218,9 +218,11 @@ function detectContext(state, pos) {
     if (ch === "{") {
       // Look back to the keyword that opened this block — limit lookback
       // to the previous newline so a `{` on its own line still finds
-      // the keyword on the line above.
+      // the keyword on the line above. v2 block keywords: stage,
+      // scenario, stamp, step, cell, when. (`for each cell { ... }` —
+      // we match `cell` at the end which is good enough for context.)
       const before = text.slice(Math.max(0, i - 200), i);
-      const m = /\b(stage|preset|stamp|cell|each|event|eachCell|when)\b[^{]*$/.exec(before);
+      const m = /\b(stage|scenario|stamp|step|cell|when)\b[^{]*$/.exec(before);
       stack.push(m ? m[1] : "?");
       i++;
       continue;
@@ -241,18 +243,13 @@ function detectContext(state, pos) {
 // `when ... { CURSOR }` inside `cell { ... }` still classifies as cellBody.
 function classifyContext(ctx) {
   const line = ctx.lineUpToCursor;
-  // `use …` lines. The first word after `use` is the namespace; the rest
-  // are imports. Detect whether the cursor is still in the namespace
-  // slot or past it by counting completed (whitespace/comma-terminated)
-  // tokens, ignoring any trailing partial identifier the user is mid-
-  // typing. This way `use s` still suggests namespaces, and
-  // `use sim d` suggests sim imports starting with `d`.
-  if (/^\s*use(\s|$)/.test(line)) {
-    const afterUse = line.replace(/^\s*use\s*/, "");
-    const terminated = afterUse.replace(/[A-Za-z_$][A-Za-z0-9_$]*$/, "");
-    const tokens = terminated.split(/[\s,]+/).filter(Boolean);
-    if (tokens.length === 0) return { mode: "useNamespace" };
-    return { mode: "useImports", ns: tokens[0] };
+  // `import …` lines (v2). All names on the line are flat builtin
+  // imports — autocomplete from the unified catalog. v1's per-namespace
+  // `use sim cell` model is gone, but we still recognize `use` lines
+  // for any leftover saved-recipe text and route them through the same
+  // flat-name suggestion path.
+  if (/^\s*(import|use)(\s|$)/.test(line)) {
+    return { mode: "v2Import" };
   }
 
   let inner = null;
@@ -263,10 +260,10 @@ function classifyContext(ctx) {
     break;
   }
   if (!inner) return { mode: "topLevel" };
-  if (inner === "cell" || inner === "each" || inner === "event") return { mode: "cellBody" };
-  if (inner === "eachCell") return { mode: "initCellBody" };
+  if (inner === "cell") return { mode: "cellBody" };
   if (inner === "stage") return { mode: "stageBody" };
-  if (inner === "preset" || inner === "stamp") return { mode: "presetBody" };
+  if (inner === "step") return { mode: "stepBody" };
+  if (inner === "scenario" || inner === "stamp") return { mode: "presetBody" };
   return { mode: "topLevel" };
 }
 
@@ -288,17 +285,13 @@ function symbolsForMode(mode) {
       return DSL_SYMBOLS.filter((s) => PRESET_BODY_KINDS.has(s.kind));
     case "initCellBody":
       return DSL_SYMBOLS.filter((s) => INIT_CELL_KINDS.has(s.kind));
-    case "useNamespace":
-      return ALL_NAMESPACES.map((ns) => ({
-        name: ns,
-        kind: "modifier",
-        category: "Use namespace",
-        importLine: null,
-        signature: `use ${ns} ...`,
-        doc: NAMESPACE_DOC[ns] ?? "",
-      }));
-    case "useImports":
-      return DSL_SYMBOLS.filter((s) => importNamespace(s) === mode.ns);
+    case "stepBody":
+      // Inside `step { ... }` only stage declarations belong here.
+      return DSL_SYMBOLS.filter((s) => s.kind === "definitionKw" || s.name === "stage");
+    case "v2Import":
+      // Flat list of every importable builtin. v1's namespace gating
+      // is gone; v2 imports each name by itself.
+      return DSL_SYMBOLS.filter((s) => importNamespace(s));
     default:
       return DSL_SYMBOLS;
   }
@@ -334,7 +327,12 @@ function buildOptions(state, ctx, mode, prefix) {
   const catalogOptions = catalog
     .filter((s) => !prefix || s.name.toLowerCase().startsWith(prefix.toLowerCase()))
     .map((sym) => {
-      if (mode.mode === "useNamespace") return catalogCompletion(sym, { withImport: false });
+      // V2 imports are inserted as `import name1, name2, ...` lines —
+      // the auto-import path injects the symbol's name into an
+      // existing import line or creates one if none exists. When the
+      // user is autocompleting INSIDE an `import` line, no auto-import
+      // is needed (they're typing the import directly).
+      if (mode.mode === "v2Import") return catalogCompletion(sym, { withImport: false });
       const present = sym.importLine ? importedAlready(docText, sym) : true;
       return catalogCompletion(sym, { withImport: !present });
     });
@@ -358,42 +356,40 @@ function buildOptions(state, ctx, mode, prefix) {
 function importedAlready(docText, sym) {
   const ns = importNamespace(sym);
   if (!ns) return true;
+  // V2 imports are flat (one `import name1, name2` line, no namespace).
+  // A recipe is "ALREADY OK" if either:
+  //   - it has no `import` line at all (default = all builtins in scope), OR
+  //   - it has at least one `import` line and the symbol's name appears.
   // Strip line comments so trailing `// note` text doesn't get parsed
-  // as identifiers. The DSL supports only single-line `use` directives,
-  // so a per-line scan suffices.
+  // as identifiers.
   const cleaned = docText.split("\n").map((l) => l.replace(/\/\/.*$/, "")).join("\n");
-  const re = new RegExp(`^[ \\t]*use[ \\t]+${ns}[ \\t]+([\\w$,\\s]+)$`, "gm");
-  for (const m of cleaned.matchAll(re)) {
+  const importLines = [...cleaned.matchAll(/^[ \t]*import[ \t]+([\w$,\s]+)$/gm)];
+  if (importLines.length === 0) return true;
+  for (const m of importLines) {
     const names = m[1].split(",").map((s) => s.trim());
     if (names.includes(sym.name)) return true;
   }
   return false;
 }
 
-// Insert (or extend) a `use NS name` line.
-//   1. If a `use NS …` line already exists, append `, name` to it.
-//   2. Else, drop a fresh `use NS name` line — after the last existing
-//      `use` line if any; else after the last schema directive
-//      (recipe / summary / recommendedPreset / grid / planet / const);
-//      else at the top of file.
-//   3. Cursor is shifted forward by the inserted length so the user
-//      stays at their typing position.
+// Insert (or extend) an `import name` line. Two paths:
+//   1. If an `import …` line already exists, append `, name` to it.
+//   2. Else, drop a fresh `import name` line — after the last existing
+//      schema directive, else at the top of file.
+// V2 imports are flat (no namespace), so the matching is simpler than
+// v1's `use NS name` shape.
 function ensureImportFor(view, sym) {
   const ns = importNamespace(sym);
   if (!ns) return;
   const docText = view.state.doc.toString();
   if (importedAlready(docText, sym)) return;
 
-  const lineRe = new RegExp(`^([ \\t]*use[ \\t]+${ns}[ \\t]+)([\\w$,\\s]+)$`, "m");
+  const lineRe = /^([ \t]*import[ \t]+)([\w$,\s]+)$/m;
   const extend = lineRe.exec(docText);
   if (extend) {
     const lineEnd = extend.index + extend[0].length;
     const inserted = `, ${sym.name}`;
     const cursor = view.state.selection.main.head;
-    // Compute new cursor: extend's lineEnd is upstream of the cursor
-    // (we only auto-import for body-context completions), so the cursor
-    // shifts forward by inserted.length. If somehow the cursor is
-    // upstream, leave it alone.
     const newCursor = cursor > lineEnd ? cursor + inserted.length : cursor;
     view.dispatch({
       changes: { from: lineEnd, to: lineEnd, insert: inserted },
@@ -410,8 +406,11 @@ function ensureImportFor(view, sym) {
   const needsLeadingNewline = insertAt === docText.length
     && docText.length > 0
     && !docText.endsWith("\n");
+  // V2 imports are flat — a single `import name` line, no namespace.
+  // The first auto-imported name creates the line; further names
+  // extend it (handled by the `extend` branch above).
   const insertText = (needsLeadingNewline ? "\n" : "")
-    + `use ${ns} ${sym.name}\n`;
+    + `import ${sym.name}\n`;
   const cursor = view.state.selection.main.head;
   const newCursor = cursor > insertAt ? cursor + insertText.length : cursor;
   view.dispatch({
@@ -422,22 +421,21 @@ function ensureImportFor(view, sym) {
 
 function chooseImportInsertPoint(docText) {
   const lines = docText.split("\n");
-  let lastUse = -1;
+  let lastImport = -1;
   let lastSchema = -1;
   for (let i = 0; i < lines.length; i++) {
     const trimmed = lines[i].trim();
-    if (/^use\s+\w+/.test(trimmed)) lastUse = i;
-    else if (/^(recipe|summary|recommendedPreset|grid|planet|const)\b/.test(trimmed)) {
+    // Both v2 `import` and any leftover v1 `use` — either acts as an
+    // anchor for "drop the new directive after existing ones."
+    if (/^(import|use)\s+\w+/.test(trimmed)) lastImport = i;
+    else if (/^(recipe|summary|recommendedPreset|substrate|grid|planet|const)\b/.test(trimmed)) {
       lastSchema = i;
     }
   }
-  const target = lastUse >= 0 ? lastUse : lastSchema;
+  const target = lastImport >= 0 ? lastImport : lastSchema;
   if (target < 0) return 0;
   let offset = 0;
   for (let i = 0; i <= target; i++) offset += lines[i].length + 1;
-  // The +1 newline-per-line accounting overshoots when the target IS the
-  // doc's last line and the file has no trailing newline. Clamp so CM's
-  // change-set doesn't have to.
   return Math.min(offset, docText.length);
 }
 

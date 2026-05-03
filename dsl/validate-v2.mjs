@@ -36,6 +36,70 @@ export function validateV2(schema) {
     validateDerivedFields(schema, derivedFields);
   }
   validateMetrics(schema);
+  validateExplicitPreviousReads(schema);
+}
+
+// Per V2-SPEC.md "Stage I/O": history depth is inferred from `@prev`
+// usage by default, but a stage can also declare explicitly via
+// `reads u previous`. When the explicit form is used, the declared
+// set must match the inferred set bidirectionally — otherwise the
+// declaration is misleading documentation.
+//
+// Rule:
+//   - If a stage declares ANY field as `previous`, then:
+//     - every declared-previous field must actually be read with @prev
+//       in the cell body (else: "declared but never used")
+//     - every field read with @prev in the cell body must be declared
+//       (else: "used but not declared")
+//   - If a stage declares no explicit previous, the inference is
+//     silent — recipe authors don't have to opt in.
+function validateExplicitPreviousReads(schema) {
+  for (const stage of schema.stages ?? []) {
+    const declared = new Set(stage.previousReads ?? []);
+    if (declared.size === 0) continue;
+    const inferred = collectStagePrevReads(stage);
+    for (const name of declared) {
+      if (!inferred.has(name)) {
+        throw new Error(
+          `stage "${stage.id}": declares \`reads ${name} previous\` but the cell body never reads ${name}@prev — ` +
+          `drop the \`previous\` annotation or use ${name}@prev in the body`,
+        );
+      }
+    }
+    for (const name of inferred) {
+      if (!declared.has(name)) {
+        throw new Error(
+          `stage "${stage.id}": cell body reads ${name}@prev but the stage's reads clause doesn't list \`${name} previous\` — ` +
+          `add \`${name} previous\` to reads, or remove all \`<field> previous\` annotations to fall back to inference`,
+        );
+      }
+    }
+  }
+}
+
+function collectStagePrevReads(stage) {
+  const out = new Set();
+  function walk(ast) {
+    if (!ast || typeof ast !== "object") return;
+    if (ast.type === "CoordRead" && ast.coord?.kind === "prev") {
+      out.add(ast.field);
+    }
+    if (ast.type === "Call" && ast.callee?.type === "Identifier" && ast.callee.name === "prev") {
+      const arg = ast.args?.[0];
+      if (arg?.type === "Identifier") out.add(arg.name);
+    }
+    for (const k of Object.keys(ast)) {
+      const v = ast[k];
+      if (Array.isArray(v)) v.forEach(walk);
+      else if (v && typeof v === "object") walk(v);
+    }
+  }
+  for (const stmt of stage.body?.statements ?? []) {
+    if (stmt.type === "cell") {
+      for (const action of stmt.actions ?? []) walk(action);
+    }
+  }
+  return out;
 }
 
 // =============================================================================

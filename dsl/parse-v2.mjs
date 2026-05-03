@@ -586,8 +586,25 @@ function parseStage(ctx) {
       const cellBody = readBracedBlock(inner);
       const cellActions = parseCellActions(cellBody, `stage ${id} cell`);
       statements.push({ type: "cell", actions: cellActions });
-    } else if (kw === "advect" || kw === "wind" || kw === "diffuse" || kw === "clamp" || kw === "normalize") {
-      statements.push(parseLegacyPrimitive(inner, id));
+    } else if (kw === "advect" || kw === "wind") {
+      // Stage primitives that don't (yet) fold into cell { } expressions:
+      //   advect — semi-Lagrangian sample at a continuous upstream
+      //            position. Will retire when continuous-position
+      //            CoordRead lands (`u@(self - wind*dt)`).
+      //   wind   — pressure-gradient + Coriolis on the local sphere
+      //            tangent frame. Will retire when vector field types
+      //            and the gradient-stencil family land.
+      statements.push(parseStagePrimitive(inner, id));
+    } else if (kw === "diffuse" || kw === "clamp" || kw === "normalize") {
+      // V2 retires these — they're trivially expressible as cell-body
+      // expressions (`add u = (mean n in neighbors { u@n } - u) *
+      // amount`, `set u = clamp(u, lo, hi)`). Erroring here points
+      // recipe authors at the v2 idiom instead of letting them write
+      // syntax that looks like it should work.
+      throw new Error(
+        `v2 parse: stage ${id}: \`${kw}\` is no longer a stage primitive in v2. ` +
+        `${redirectFor(kw)}`,
+      );
     } else {
       throw new Error(`v2 parse: stage ${id}: unknown clause "${kw}"`);
     }
@@ -606,12 +623,26 @@ function parseStage(ctx) {
   };
 }
 
-// Parse a legacy stage primitive: advect / wind / diffuse / clamp /
-// normalize. Same surface syntax as v1 — bridges to the existing v1
-// AST nodes the WGSL emitter knows how to handle. Will be retired
-// once v2 has coordinate-query advect (`u@(self - wind*dt)`) and
-// neighbor-derived wind primitives.
-function parseLegacyPrimitive(ctx, stageId) {
+function redirectFor(kw) {
+  if (kw === "diffuse") {
+    return `Use a cell expression instead:\n  add field = (mean n in neighbors { field@n } - field) * <amount>`;
+  }
+  if (kw === "clamp") {
+    return `Use a cell expression instead:\n  set field = clamp(field, <lo>, <hi>)`;
+  }
+  if (kw === "normalize") {
+    return `Normalize requires a global reduction; v2 has no equivalent yet. Compute the global mean as a metric and divide cell values by it from JS, or implement a reduction-and-broadcast stage when the kernel infra exists.`;
+  }
+  return "";
+}
+
+// Parse a v2 stage primitive: `advect FIELD by U, V dt EXPR` or
+// `wind PRESSURE -> U, V[, LIFT] strength EXPR`. These two encapsulate
+// GPU kernels that don't fold naturally into per-cell expressions
+// (semi-Lagrangian sampling, gradient stencils on tangent frames).
+// They're not legacy bridges — they're first-class v2 primitives until
+// continuous-position CoordRead and vector field types replace them.
+function parseStagePrimitive(ctx, stageId) {
   const kw = peekKeyword(ctx);
   if (kw === "wind") {
     consumeKeyword(ctx, "wind");
@@ -641,49 +672,7 @@ function parseLegacyPrimitive(ctx, stageId) {
     const dt = parseExpressionUntilLine(ctx);
     return { type: "advect", field, windU, windV, dt };
   }
-  if (kw === "diffuse") {
-    consumeKeyword(ctx, "diffuse");
-    const field = readIdent(ctx, "diffuse field");
-    consumeKeyword(ctx, "amount");
-    const amount = parseExpressionUntilLine(ctx);
-    return { type: "diffuse", field, amount };
-  }
-  if (kw === "clamp") {
-    consumeKeyword(ctx, "clamp");
-    const field = readIdent(ctx, "clamp field");
-    // Two number expressions, space-separated, until end of line.
-    skipInlineWs(ctx);
-    const lo = parseExpressionUntilSpace(ctx);
-    skipInlineWs(ctx);
-    const hi = parseExpressionUntilLine(ctx);
-    return { type: "clamp", field, lo, hi };
-  }
-  if (kw === "normalize") {
-    consumeKeyword(ctx, "normalize");
-    const field = readIdent(ctx, "normalize field");
-    consumeKeyword(ctx, "damping");
-    const damping = parseExpressionUntilWhen(ctx);
-    consumeKeyword(ctx, "when");
-    const condition = parseExpressionUntilLine(ctx);
-    return { type: "normalize", field, damping, condition };
-  }
-  throw new Error(`v2 parse: stage ${stageId}: unknown legacy primitive "${kw}"`);
-}
-
-// Helpers for the legacy primitives' awkward cases.
-function parseExpressionUntilSpace(ctx) {
-  const text = readExpressionTextUntil(ctx, [" ", "\n", ";"]);
-  return parseExpressionFromString(text, "expression");
-}
-
-function parseExpressionUntilWhen(ctx) {
-  // Read until ` when ` (preceded by space) or end of line.
-  let s = "";
-  while (!atEnd(ctx) && ctx.source[ctx.i] !== "\n") {
-    if (/^\s+when\b/.test(ctx.source.slice(ctx.i))) break;
-    s += ctx.source[ctx.i++];
-  }
-  return parseExpressionFromString(s.trim(), "expression");
+  throw new Error(`v2 parse: stage ${stageId}: unknown stage primitive "${kw}"`);
 }
 
 // Parse a comma-separated list of field references, optionally each tagged

@@ -108,6 +108,126 @@ step {
 // is the safety net)
 // -----------------------------------------------------------------------------
 
+// -----------------------------------------------------------------------------
+// Explicit `reads u previous` declarations must match inferred set.
+// -----------------------------------------------------------------------------
+
+test("explicit `reads u previous` matching the cell body's @prev usage compiles", () => {
+  compileV2(`
+recipe "Wave"
+substrate geodesic frequency 16
+field u: f32
+step {
+  stage propagate {
+    reads u, u previous
+    writes u
+    cell { set u = 2*u - u@prev }
+  }
+}
+`);
+});
+
+test("explicit `reads u previous` declared but never used in the body errors", () => {
+  expectThrow(() => compileV2(`
+recipe "Wave"
+substrate geodesic frequency 16
+field u: f32
+step {
+  stage propagate {
+    reads u, u previous
+    writes u
+    cell { set u = u + 1 }
+  }
+}
+`), "but the cell body never reads u@prev");
+});
+
+test("cell body uses @prev but explicit-previous list omits it errors", () => {
+  expectThrow(() => compileV2(`
+recipe "Wave"
+substrate geodesic frequency 16
+field u: f32
+field v: f32
+step {
+  stage propagate {
+    reads u, u previous, v
+    writes u, v
+    cell { set u = u - u@prev - v@prev; set v = v }
+  }
+}
+`), "doesn't list `v previous`");
+});
+
+test("no explicit `previous` declarations falls back to silent inference", () => {
+  // No `<field> previous` mentioned anywhere — the inference path
+  // takes over silently. This is what every shipped recipe does.
+  compileV2(`
+recipe "Wave"
+substrate geodesic frequency 16
+field u: f32
+step {
+  stage propagate {
+    reads u
+    writes u
+    cell { set u = 2*u - u@prev }
+  }
+}
+`);
+});
+
+// -----------------------------------------------------------------------------
+// Retired stage primitives — diffuse / clamp / normalize have to be
+// expressed as cell expressions in v2.
+// -----------------------------------------------------------------------------
+
+test("`diffuse` as a stage primitive is rejected (use cell expression)", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+step {
+  stage step1 {
+    reads u
+    writes u
+    diffuse u amount 0.1
+  }
+}
+`), "no longer a stage primitive");
+});
+
+test("`clamp` as a stage primitive is rejected (use cell expression)", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+step {
+  stage step1 {
+    reads u
+    writes u
+    clamp u 0 1
+  }
+}
+`), "no longer a stage primitive");
+});
+
+test("`advect` as a stage primitive is accepted (kept until continuous-pos CoordRead lands)", () => {
+  // klausmeier still uses advect; it stays a real v2 primitive.
+  compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+field windU: f32
+field windV: f32
+step {
+  stage flow {
+    reads u, windU, windV
+    writes u
+    advect u by windU, windV dt 0.1
+  }
+}
+`);
+});
+
 test("count cells with a body is rejected (count's body is implicitly 1)", () => {
   expectThrow(() => compileV2(`
 recipe "X"
