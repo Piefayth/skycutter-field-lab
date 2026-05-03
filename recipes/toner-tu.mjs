@@ -206,7 +206,11 @@ scenarios {
     // Each cell gets a random direction at ~unit speed. The
     // alignment dynamics will polarise the whole sphere over
     // 10-30 wall-seconds at default noise; cranking NOISE past
-    // ~0.25 keeps it permanently turbulent.
+    // ~0.25 keeps it permanently turbulent. Lower CS2 from the
+    // recipe default 0.10 to 0.05 — random initial velocities
+    // produce large divergence and the explicit-Euler pressure
+    // term stresses the integrator at the default pressure.
+    param CS2 = 0.05
     set rho = 1
     for each cell {
       let theta = cellRand(7) * 2 * PI
@@ -231,7 +235,11 @@ scenarios {
   scenario denseCore "Dense pile + ambient flow" {
     // A high-density patch radiates outward as the pressure gradient
     // pushes it. Combined with the self-propulsion drive, the patch
-    // fragments into traveling bands.
+    // fragments into traveling bands. The dense patch produces
+    // strong gradients; lower CS2 keeps the pressure response in
+    // the integrator-stable range while still letting the patch
+    // drive flow.
+    param CS2 = 0.05
     set rho = 0.8
     set v = vec2(0, 0)
     spot rho at lon=0, lat=0, radius=0.4, amount=1.5

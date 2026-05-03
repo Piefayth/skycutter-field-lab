@@ -154,6 +154,11 @@ scenarios {
   }
 
   scenario spots "Turing spots (no slope)" {
+    // Slope set to zero kills the slope-driven advection; flowSpeed=0
+    // makes the kinetics-only Turing regime explicit so the slider
+    // doesn't dangle a non-physical "downhill flow" knob over a
+    // flat domain.
+    param flowSpeed = 0
     set slope = vec2(0, 0)
     set w = 1
     for each cell {

@@ -208,13 +208,13 @@ scenarios {
   }
 
   scenario uniform "All synchronised" {
-    // Every cell at exactly 0.4. With ε=0 they'd all run identical
-    // chaotic trajectories and never desync (they're given the same
-    // initial condition under a deterministic map). The coupling
-    // provides no symmetry-breaking either, so the sphere stays
-    // perfectly homogeneous — useful for verifying the sync ground
-    // state. Nudge ε down to 0 and one cell with the kick stamp to
-    // watch the perturbation propagate.
+    // Every cell at exactly 0.4 with EPS=0 — isolated maps. They all
+    // run identical chaotic trajectories and stay perfectly
+    // homogeneous (deterministic same-input → same-output). Useful
+    // for verifying the sync ground state, then painting a single
+    // cell with the kick stamp to watch the perturbation propagate
+    // (or fail to, at EPS=0).
+    param EPS = 0
     set x = 0.4
     set xAvg = 0.4
   }

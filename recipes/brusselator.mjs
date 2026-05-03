@@ -157,6 +157,19 @@ scenarios {
     set v = 1.5
     spot u at lon=0, lat=0, radius=0.12, amount=0.6
   }
+
+  scenario hopf "Hopf regime — global oscillation" {
+    // B past the Hopf threshold (1 + A² = 5 at A=2): the homogeneous
+    // fixed point loses stability and the well-mixed kinetics
+    // oscillate. With diffusion, the entire sphere pulses in phase.
+    // Shipping with B = 5.5 ensures the regime change is the
+    // scenario, not "switch scenario then go tune the slider".
+    param B = 5.5
+    for each cell {
+      set u = 2.0 + cellNoise(11, 1.2) * 0.05
+      set v = 2.75 + cellNoise(13, 1.2) * 0.03
+    }
+  }
 }
 `;
 
