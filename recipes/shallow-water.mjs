@@ -92,6 +92,7 @@ param gravity   slider 0..0.5    step 0.005   default 0.05  label "GRAVITY g"
 param friction  slider 0..0.5    step 0.005   default 0.02  label "FRICTION"
 param hMin      slider 0.05..1   step 0.01    default 0.1   label "MIN DEPTH"
 param dyeFade   slider 0..0.05   step 0.0005  default 0.005 label "DYE FADE"
+param flowScale slider 0..0.05   step 0.0005  default 0.005 label "DYE FLOW"
 param simRateHz slider 0..360    step 1       default 60    label "SIM RATE"
 param rate      slider 1..200    step 1       default 80    label "RATE"
 
@@ -112,9 +113,15 @@ stamp clearDye "Erase dye" {
 }
 
 scenario bulge "Single bulge at the equator" {
+  // Pre-paint dye stripes so the flow is visible from the first
+  // tick — without this the user has to hand-paint dye AND wait for
+  // the wave to reach it before the flow shows up. Stripes get
+  // stretched and folded along the wavefronts as it propagates.
   set h = 1
   set m = vec2(0, 0)
-  set dye = 0
+  for each cell {
+    set dye = sin(lat * 12) * 0.5 + 0.5
+  }
   spot h at lon=0, lat=0, radius=0.2, amount=1.2
 }
 
@@ -211,10 +218,16 @@ step {
     reads dye, m, h
     writes dye
     cell {
+      // Velocity = m / h. The flowScale factor compensates for the
+      // internal *15 calibration in the @upstream WGSL helper (which
+      // was tuned for v1-era recipes that fed it dt-on-the-order-of-
+      // 0.001). Without it the effective walk is velocity*20 sphere
+      // radians per tick — the dye samples from random points across
+      // the planet and averages to a uniform color.
       let invH = 1.0 / max(h, hMin)
       let vx = m.x * invH
       let vy = m.y * invH
-      set dye = dye@upstream(vx, vy, dt * rate) * (1 - dyeFade * dt * rate)
+      set dye = dye@upstream(vx, vy, dt * rate * flowScale) * (1 - dyeFade * dt * rate)
     }
   }
 
