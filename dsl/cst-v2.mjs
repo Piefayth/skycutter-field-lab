@@ -9,7 +9,7 @@
 const BLOCK_KEYWORDS = new Set([
   "views", "stamps", "scenarios",
   "palette", "view", "stamp", "scenario",
-  "step", "stage", "cell", "when",
+  "step", "stage", "cell", "when", "for",
 ]);
 
 const NAME_DECL_KEYWORDS = new Set([
@@ -266,6 +266,11 @@ function readBlockHeader(sanitized, openBrace) {
   let keyword = "?";
   let id = null;
   let from = headerStart;
+  const forEachMatches = [...header.matchAll(/\bfor\s+each\s+cell\b/g)];
+  const forEach = forEachMatches[forEachMatches.length - 1];
+  if (forEach) {
+    return { keyword: "for", id: null, from: headerStart + forEach.index };
+  }
   for (let i = matches.length - 1; i >= 0; i--) {
     const word = matches[i][0];
     if (BLOCK_KEYWORDS.has(word)) {
@@ -427,6 +432,13 @@ function annotateStatement(stmt) {
     const start = line.indexOf("when") + "when".length;
     const brace = line.indexOf("{", start);
     addExpr(start, brace >= 0 ? brace : line.length, "condition");
+    return;
+  }
+
+  if (stmt.keyword === "for") {
+    const where = line.indexOf("where");
+    const brace = line.indexOf("{");
+    if (where >= 0) addExpr(where + "where".length, brace >= 0 ? brace : line.length, "eachCellPredicate");
     return;
   }
 

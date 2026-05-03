@@ -3,11 +3,12 @@
 // Every layer should enter here over time:
 //   source -> tolerant CST + optional strict compiler AST + parse errors
 //
-// The compiler still consumes parse-v2's existing AST shape. The editor
-// consumes the CST. Keeping both under one facade lets us migrate callers
-// without forcing a risky all-at-once parser rewrite.
+// The compiler consumes the CST-projected version of parse-v2's existing AST
+// shape. During the transition, parse-v2 still runs as the strict validation
+// gate so this front-end can move over without weakening parse errors.
 
 import { parseDslCst } from "./cst-v2.mjs";
+import { recipeCstToAst } from "./cst-to-ast-v2.mjs";
 import { parseV2 } from "./parse-v2.mjs";
 
 export function parseRecipeSource(source, options = {}) {
@@ -22,7 +23,7 @@ export function parseRecipeSource(source, options = {}) {
 
   if (includeAst) {
     try {
-      ast = parseV2(source);
+      parseV2(source);
     } catch (error) {
       const parseError = {
         type: "StrictParseError",
@@ -36,6 +37,25 @@ export function parseRecipeSource(source, options = {}) {
         wrapped.cst = cst;
         wrapped.errors = errors;
         throw wrapped;
+      }
+    }
+    if (errors.length === 0) {
+      try {
+        ast = recipeCstToAst(cst);
+      } catch (error) {
+        const parseError = {
+          type: "CstProjectionError",
+          message: error?.message ?? String(error),
+          error,
+        };
+        errors.push(parseError);
+        if (!tolerant) {
+          const wrapped = new Error(parseError.message);
+          wrapped.cause = error;
+          wrapped.cst = cst;
+          wrapped.errors = errors;
+          throw wrapped;
+        }
       }
     }
   }

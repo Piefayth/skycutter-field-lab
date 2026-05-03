@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { metricCstToAst, stageCstToAst } from "./cst-to-ast-v2.mjs";
+import { recipeCstToAst } from "./cst-to-ast-v2.mjs";
 import { parseDslCst } from "./cst-v2.mjs";
 import { parseV2 } from "./parse-v2.mjs";
 
@@ -20,14 +20,7 @@ async function main() {
       if (!source) throw new Error(`${recipe.id}: missing pipelineDsl export`);
       const parsed = parseV2(source);
       const cst = parseDslCst(source);
-      const stages = cst.blocks
-        .filter((block) => block.keyword === "stage")
-        .map((block) => stageCstToAst(cst, block));
-      const metrics = cst.statements
-        .filter((stmt) => stmt.keyword === "metric")
-        .map(metricCstToAst);
-      assertEq(stages, parsed.stages, `${recipe.id} stages`);
-      assertEq(metrics, parsed.metrics, `${recipe.id} metrics`);
+      assertEq(recipeCstToAst(cst), parsed, `${recipe.id} recipe`);
       ok(name);
     } catch (error) {
       fail(name, error);
