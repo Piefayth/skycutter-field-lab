@@ -181,12 +181,16 @@ function populateArrows({ grid, geometry, fields = {}, viewSpec, arrowsBuffer, a
     // 0..1 per channel; tileStarts[cell] gives the first vertex of
     // that cell's fan. Rec.601 luma weights — gives ~white on cold
     // blue (matches lab convention) and ~black on warm yellow.
-    let r = 0, g = 0, b = 0;
+    // (Variable names suffixed `T` to avoid shadowing the outer
+    // `r` that's already in scope as the sphere-radius offset —
+    // shadowing puts the outer `r` in TDZ for this whole block,
+    // and earlier expressions like `cx * r` would crash.)
+    let rT = 0, gT = 0, bT = 0;
     if (tileColors && tileStarts) {
       const v = tileStarts[cell] * 3;
-      r = tileColors[v]; g = tileColors[v + 1]; b = tileColors[v + 2];
+      rT = tileColors[v]; gT = tileColors[v + 1]; bT = tileColors[v + 2];
     }
-    const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+    const luma = 0.299 * rT + 0.587 * gT + 0.114 * bT;
     const c = luma > 0.55 ? 0 : 1;
     const colorIdx = arrowCount * 9;
     arrowsColorsBuffer[colorIdx + 0] = c;
