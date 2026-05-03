@@ -83,8 +83,10 @@ field changed:    u32 derived   // 1 if this cell advanced this tick, 0 otherwis
 
 param numStates  slider 3..32  step 1   default 14   label "STATES N"
 param threshold  slider 1..6   step 1   default 1    label "THRESHOLD"
+// (No rate param: cyclic-CA is a pure state-replacement rule — no dt
+// to multiply by — so a rate slider would do nothing. Tune simRateHz
+// instead if you want the sim to chew through ticks faster.)
 param simRateHz  slider 0..120 step 1   default 30   label "SIM RATE"
-param rate       slider 1..10  step 1   default 1    label "RATE"
 
 step {
   stage advance "Cyclic-CA step" {

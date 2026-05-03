@@ -78,8 +78,10 @@ param P_GROWTH    slider 0..0.05    step 0.0005  default 0.010 label "p (REGROWT
 // time but bigger when they happen.
 param F_LIGHTNING slider 0..0.005   step 0.00005 default 0.00005 label "f (LIGHTNING)"
 
+// (No rate param: forest-fire transitions are pure state replacement;
+// there's no dt to multiply by. Tune simRateHz to chew through ticks
+// faster — at 30 Hz the SOC dynamics are easily watchable.)
 param simRateHz   slider 0..120 step 1     default 30   label "SIM RATE"
-param rate        slider 1..10  step 1     default 1    label "RATE"
 
 step {
   // Stage 1 — Apply the three update rules. Order matters:
@@ -91,9 +93,10 @@ step {
     reads state
     writes state
     cell {
-      // Has any neighbor caught fire? state@n == 2 → 1, else 0; sum
-      // counts burning neighbours. Threshold 1 means "at least one".
-      let burnNbrs = sum n in neighbors { (state@n == 2) ? 1 : 0 }
+      // Has any neighbor caught fire? state@n >= 2 catches state=2
+      // (burning) AND state=3+ (paint-overflowed, also treated as
+      // burning — see below).
+      let burnNbrs = sum n in neighbors { (state@n >= 2) ? 1 : 0 }
       // cellRand returns [-1, 1]; remap to [0, 1] before comparing
       // against probabilities (otherwise half of cells fire every tick
       // regardless of f and p).
@@ -102,7 +105,13 @@ step {
       let strike  = strikeR < F_LIGHTNING
       let sprout  = sproutR < P_GROWTH
 
-      let isBurningCell = (state == 2) ? 1 : 0
+      // Predicates are written >= k rather than == k so paint stamps
+      // and scenarios that ADD into state (the spot semantics) can't
+      // produce zombie cells. e.g. painting the ignite stamp (amount=2)
+      // onto a tree (state=1) gives state=3, which would fall through
+      // every == k rule and stay state=3 forever. With >= 2 the
+      // overflow registers as burning and the next tick clears it to 0.
+      let isBurningCell = (state >= 2) ? 1 : 0
       let isTreeCell    = (state == 1) ? 1 : 0
       let isEmptyCell   = (state == 0) ? 1 : 0
 
@@ -127,7 +136,7 @@ step {
     writes stateNorm, isBurning, isTree, isEmpty
     cell {
       set stateNorm = state * 0.5
-      set isBurning = (state == 2) ? 1 : 0
+      set isBurning = (state >= 2) ? 1 : 0
       set isTree    = (state == 1) ? 1 : 0
       set isEmpty   = (state == 0) ? 1 : 0
     }

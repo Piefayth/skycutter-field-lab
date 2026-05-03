@@ -81,10 +81,11 @@ field align: f32 derived     // |neighborhood-mean heading|, defect indicator
 
 // Single noise knob — Vicsek's order parameter is a function of η alone
 // at fixed density. The geodesic mesh fixes density, so noise is the
-// whole transition.
+// whole transition. (No rate param: the Vicsek update rule is a pure
+// state-replacement per tick — there's no dt to multiply by, so a rate
+// slider would do nothing.)
 param noise     slider 0..1     step 0.005  default 0.15  label "NOISE η"
 param simRateHz slider 0..120   step 1      default 60    label "SIM RATE"
-param rate      slider 1..10    step 1      default 1     label "RATE"
 
 step {
   stage align "Align with neighbors + random kick" {
