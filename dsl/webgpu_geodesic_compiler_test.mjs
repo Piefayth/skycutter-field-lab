@@ -670,11 +670,14 @@ step {
     "divergence call lowered to helper invocation");
 });
 
-test("gradient on a vec2 field is rejected at WGSL emit time", async () => {
+test("gradient on a vec2 field is rejected by the type checker", async () => {
+  // This used to surface only at WGSL emit time. The v2 type checker
+  // (typecheck-v2.mjs) now catches it at recipe load with a clearer
+  // message — assert the early-exit path.
   const { compileV2 } = await import("./compile-v2.mjs");
   let threw = null;
   try {
-    const recipe = compileV2(`
+    compileV2(`
 recipe "BadGrad"
 substrate geodesic frequency 16
 field wind: vec2
@@ -691,10 +694,9 @@ step {
   }
 }
 `);
-    compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
   } catch (e) { threw = e.message; }
-  assert(threw && threw.includes("requires a scalar (f32) field"),
-    `expected gradient-on-vec2 error; got: ${threw}`);
+  assert(threw && /gradient.*only defined on scalar/.test(threw),
+    `expected gradient-on-vec2 type-check error; got: ${threw}`);
 });
 
 test("@upstream coord-arg field references add the field to pass.reads", async () => {

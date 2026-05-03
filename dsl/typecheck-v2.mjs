@@ -1,0 +1,492 @@
+// Field Lab DSL v2 type checker.
+//
+// Lightweight scalar/vec2/bool type inference + assignment-mismatch
+// checking for v2 stages, scenarios, stamps, and metric bodies. The
+// reviewer flagged the absence of this layer: `set u = wind` (vec2
+// assigned to f32 field) and `metric m = sum cells { wind }` (vec2
+// inside a scalar reduction) compiled without complaint and only blew
+// up at WGSL pipeline creation time with a cryptic shader-compile
+// error. This module catches those at recipe-load time, with a clear
+// DSL-level error message.
+//
+// Scope is intentionally minimal:
+//   - Three types: "f32", "vec2", "bool"
+//   - Field types come from the recipe's field declarations
+//   - Params, consts, planet constants, geo builtins, clock builtins
+//     are all f32
+//   - Locals (`let name = expr`) inherit type from the RHS
+//   - vec2 is supported via:
+//       - vec2 fields,
+//       - the `vec2(x, y)` constructor,
+//       - `gradient(scalarField)` (vec2),
+//       - `length(vec2)` (f32),
+//       - `divergence(vec2Field)` (f32),
+//       - `.x` / `.y` member access on a vec2 (f32),
+//       - arithmetic mixing scalars and vec2s with WGSL-compatible
+//         broadcast semantics,
+//       - CoordRead (`field@<coord>`) inheriting the field's type.
+//
+// Anything we can't classify yields type "unknown" and falls through —
+// the type checker NEVER errors on its own ignorance. It only fires
+// when it has both source and target types and they don't match.
+
+const KNOWN_TYPES = new Set(["f32", "vec2", "bool", "unknown"]);
+
+const F32_BUILTINS = new Set([
+  "dt", "frame", "lon", "lat", "x", "y", "u", "v",
+  "px", "py", "pz", "i", "N", "PI", "TAU", "r", "z",
+]);
+
+// Math functions that return f32 from f32-only args. We only enumerate
+// the ones the type checker needs to disambiguate; anything not in this
+// list (or in VEC2_RETURNING_BUILTINS / SHAPE_SPECIAL_BUILTINS) gets
+// classified as "unknown" and falls through.
+const F32_RETURNING_BUILTINS = new Set([
+  "abs", "min", "max", "hypot", "sin", "cos", "asin", "exp",
+  "sqrt", "pow", "smoothstep", "clamp", "cellNoise", "cellRand",
+  "wrapAngle",
+]);
+
+// length(vec2) → f32 — and additionally must check the arg is vec2.
+const LENGTH_BUILTIN = "length";
+// vec2(f32, f32) → vec2 — both args must be f32.
+const VEC2_CONSTRUCTOR = "vec2";
+// gradient(scalarFieldName) → vec2 — arg must be a scalar field identifier.
+const GRADIENT_BUILTIN = "gradient";
+// divergence(vec2FieldName) → f32 — arg must be a vec2 field identifier.
+const DIVERGENCE_BUILTIN = "divergence";
+
+// =============================================================================
+// Public entry point
+// =============================================================================
+
+export function typecheckV2(schema) {
+  const ctx = buildContext(schema);
+  for (const stage of schema.stages ?? []) {
+    typecheckStage(stage, ctx);
+  }
+  for (const stamp of schema.stamps ?? []) {
+    typecheckScenarioOrStamp(stamp, ctx, "stamp");
+  }
+  for (const preset of schema.presets ?? []) {
+    typecheckScenarioOrStamp(preset, ctx, "scenario");
+  }
+  for (const metric of schema.metrics ?? []) {
+    typecheckMetric(metric, ctx);
+  }
+}
+
+// =============================================================================
+// Context
+// =============================================================================
+
+function buildContext(schema) {
+  const fieldTypes = new Map();
+  for (const decl of schema.fields ?? []) {
+    if (!decl?.name) continue;
+    const t = decl.type === "vec2" ? "vec2" : "f32";
+    fieldTypes.set(decl.name, t);
+  }
+  return { schema, fieldTypes };
+}
+
+// =============================================================================
+// Stage walker
+// =============================================================================
+
+function typecheckStage(stage, ctx) {
+  const label = `stage "${stage.id}"`;
+  for (const statement of stage.body?.statements ?? []) {
+    if (statement.type !== "cell") continue;
+    typecheckActionList(statement.actions ?? [], new Map(), ctx, label);
+  }
+}
+
+// =============================================================================
+// Stamp / scenario walker
+// =============================================================================
+
+function typecheckScenarioOrStamp(decl, ctx, kind) {
+  const label = `${kind} "${decl.id}"`;
+  for (const action of decl.actions ?? []) {
+    if (action.type === "fill") {
+      checkFieldAssignment(action.field, action.value, ctx, `${label} fill`);
+    } else if (action.type === "spot" || action.type === "ellipse" || action.type === "region") {
+      // Stamp position/size/amount expressions are scalars.
+      const exprs = ["lon", "lat", "radius", "rx", "ry", "amount", "lonMin", "lonMax", "latMin", "latMax", "angle"]
+        .map((k) => action[k])
+        .filter(Boolean);
+      for (const expr of exprs) {
+        const t = typeOfExpr(expr, new Map(), ctx, `${label} ${action.type}`);
+        if (t === "vec2") throwTypeError(`${label} ${action.type} expression: expected scalar, got vec2`);
+        if (t === "bool") throwTypeError(`${label} ${action.type} expression: expected scalar, got bool`);
+      }
+      // For non-region: `amount` becomes the value written to a scalar
+      // field, but stamps support vec2 fields by writing component-wise.
+      // The value-vs-field type relationship is handled by the runtime;
+      // we don't enforce it here because stamps target either f32 or
+      // (for vec2 fields) accept scalar amounts that broadcast.
+    } else if (action.type === "eachCell") {
+      typecheckActionList(action.actions ?? [], new Map(), ctx, `${label} for each cell`);
+    }
+    // Other action types (e.g. raw set/add at scenario top level for
+    // single-field assignments) flow through the same cell-action
+    // checker.
+  }
+  // Scenarios also accept top-level cell-style actions (`set field = expr`).
+  // The parser flattens those into the same `actions` array; if any are
+  // cell-action shapes, run them through typecheckActionList too.
+  const cellActions = (decl.actions ?? []).filter(
+    (a) => a.type === "set" || a.type === "add" || a.type === "let" || a.type === "when",
+  );
+  if (cellActions.length > 0) {
+    typecheckActionList(cellActions, new Map(), ctx, `${label} top-level`);
+  }
+}
+
+// =============================================================================
+// Cell-action list walker
+// =============================================================================
+
+function typecheckActionList(actions, locals, ctx, label) {
+  for (const action of actions) {
+    if (action.type === "let") {
+      const t = typeOfExpr(action.expr, locals, ctx, `${label} let ${action.name}`);
+      // Locals can be of any inferred type; record it for later refs.
+      locals.set(action.name, t);
+    } else if (action.type === "set" || action.type === "add") {
+      checkFieldAssignment(action.field, action.expr, ctx, `${label} ${action.type} ${action.field}`, locals);
+    } else if (action.type === "when") {
+      const condType = typeOfExpr(action.condition, locals, ctx, `${label} when condition`);
+      if (condType !== "bool" && condType !== "unknown") {
+        throwTypeError(`${label} when condition: expected bool, got ${condType}`);
+      }
+      typecheckActionList(action.actions ?? [], new Map(locals), ctx, `${label} when`);
+    }
+  }
+}
+
+function checkFieldAssignment(fieldName, expr, ctx, label, locals = new Map()) {
+  const fieldType = ctx.fieldTypes.get(fieldName);
+  if (!fieldType) {
+    // Field not declared — let the v1 validator surface that. Type
+    // checker stays out of identifier resolution.
+    return;
+  }
+  const exprType = typeOfExpr(expr, locals, ctx, label);
+  if (exprType === "unknown") return;
+  if (exprType !== fieldType) {
+    throwTypeError(
+      `${label}: type mismatch — assigning ${exprType} to ${fieldType} field "${fieldName}". ` +
+      (fieldType === "f32" && exprType === "vec2"
+        ? `Take a component (e.g. \`${fieldName} = ${stringifyExprBest(expr)}.x\`), ` +
+          `or use \`length(...)\` / \`divergence(...)\` to reduce to a scalar.`
+        : fieldType === "vec2" && exprType === "f32"
+          ? `Wrap the scalar with \`vec2(x, y)\`, or assign to a scalar field instead.`
+          : `Adjust the right-hand side or the field's type to match.`),
+    );
+  }
+}
+
+// =============================================================================
+// Metric walker
+// =============================================================================
+
+function typecheckMetric(metric, ctx) {
+  const label = `metric "${metric.id}"`;
+  if (metric.body) {
+    const t = typeOfExpr(metric.body, new Map(), ctx, label);
+    if (t === "vec2") {
+      throwTypeError(
+        `${label}: ${metric.op} body produces a vec2. Reductions sum scalars over the grid; ` +
+        `take a component (\`.x\` / \`.y\`) or call \`length(...)\` to get a scalar magnitude.`,
+      );
+    }
+    if (t === "bool" && metric.op !== "count") {
+      // validateMetrics already flags this for the obvious top-level
+      // boolean shapes; the type checker catches subtler cases (a let
+      // bound to a comparison, then referenced).
+      throwTypeError(
+        `${label}: ${metric.op} body produces a bool. Use \`count cells where <pred>\` ` +
+        `for "fraction of cells matching", or \`mean cells { <pred> ? 1 : 0 }\`.`,
+      );
+    }
+  }
+  if (metric.predicate) {
+    const t = typeOfExpr(metric.predicate, new Map(), ctx, `${label} where`);
+    if (t !== "bool" && t !== "unknown") {
+      throwTypeError(`${label} where clause: expected bool predicate, got ${t}`);
+    }
+  }
+}
+
+// =============================================================================
+// Type inference for expressions
+// =============================================================================
+
+function typeOfExpr(ast, locals, ctx, label) {
+  if (!ast || typeof ast !== "object") return "unknown";
+  switch (ast.type) {
+    case "Number":
+      return "f32";
+    case "Identifier":
+      return typeOfIdentifier(ast.name, locals, ctx);
+    case "Member":
+      return typeOfMember(ast, locals, ctx, label);
+    case "Unary":
+      return typeOfUnary(ast, locals, ctx, label);
+    case "Binary":
+      return typeOfBinary(ast, locals, ctx, label);
+    case "Conditional":
+      return typeOfConditional(ast, locals, ctx, label);
+    case "Call":
+      return typeOfCall(ast, locals, ctx, label);
+    case "NeighborReduce":
+      // Neighbor reductions over a per-cell expression collapse to a
+      // scalar regardless of body — vec2 reduction isn't implemented
+      // in the kernel emitter today (it would need component-wise
+      // accumulators). Reject vec2 bodies here so the failure is at
+      // recipe load, not WGSL emit time.
+      return typeOfNeighborReduce(ast, locals, ctx, label);
+    case "CoordRead":
+      return ctx.fieldTypes.get(ast.field) ?? "unknown";
+    default:
+      return "unknown";
+  }
+}
+
+function typeOfIdentifier(name, locals, ctx) {
+  if (name === "true" || name === "false") return "bool";
+  if (locals.has(name)) return locals.get(name);
+  if (ctx.fieldTypes.has(name)) return ctx.fieldTypes.get(name);
+  if (F32_BUILTINS.has(name)) return "f32";
+  if (paramOrConstOrPlanet(name, ctx)) return "f32";
+  return "unknown";
+}
+
+function paramOrConstOrPlanet(name, ctx) {
+  for (const p of ctx.schema.parameters ?? []) if (p?.name === name) return true;
+  for (const c of ctx.schema.constants ?? []) if (c?.name === name) return true;
+  if (ctx.schema.planet && Object.prototype.hasOwnProperty.call(ctx.schema.planet, name)) return true;
+  return false;
+}
+
+function typeOfMember(ast, locals, ctx, label) {
+  const objType = typeOfExpr(ast.object, locals, ctx, label);
+  if (objType === "vec2") {
+    if (ast.prop === "x" || ast.prop === "y") return "f32";
+    throwTypeError(`${label}: vec2 has no member "${ast.prop}" (only .x / .y)`);
+  }
+  // Brush.* / similar struct-shaped builtins are scalar-component
+  // accesses; we don't model them yet, fall through.
+  return "unknown";
+}
+
+function typeOfUnary(ast, locals, ctx, label) {
+  const operandType = typeOfExpr(ast.expr, locals, ctx, label);
+  if (ast.op === "!") {
+    if (operandType !== "bool" && operandType !== "unknown") {
+      throwTypeError(`${label}: \`!\` expects bool, got ${operandType}`);
+    }
+    return "bool";
+  }
+  if (ast.op === "-" || ast.op === "+") {
+    if (operandType === "bool") {
+      throwTypeError(`${label}: unary \`${ast.op}\` is not defined on bool`);
+    }
+    return operandType === "unknown" ? "unknown" : operandType;
+  }
+  return "unknown";
+}
+
+function typeOfBinary(ast, locals, ctx, label) {
+  const op = ast.op;
+  const leftType = typeOfExpr(ast.left, locals, ctx, label);
+  const rightType = typeOfExpr(ast.right, locals, ctx, label);
+
+  if (op === "&&" || op === "||") {
+    if (leftType !== "bool" && leftType !== "unknown") {
+      throwTypeError(`${label}: \`${op}\` expects bool on the left, got ${leftType}`);
+    }
+    if (rightType !== "bool" && rightType !== "unknown") {
+      throwTypeError(`${label}: \`${op}\` expects bool on the right, got ${rightType}`);
+    }
+    return "bool";
+  }
+
+  if (op === "==" || op === "!=" || op === "<" || op === ">" || op === "<=" || op === ">=") {
+    if (leftType === "vec2" || rightType === "vec2") {
+      throwTypeError(`${label}: comparison \`${op}\` is not defined on vec2 (compare per-component instead, e.g. \`v.x ${op} ...\`)`);
+    }
+    if (leftType === "bool" || rightType === "bool") {
+      throwTypeError(`${label}: comparison \`${op}\` is not defined on bool`);
+    }
+    return "bool";
+  }
+
+  // Arithmetic +, -, *, /
+  if (leftType === "bool" || rightType === "bool") {
+    throwTypeError(`${label}: arithmetic \`${op}\` is not defined on bool`);
+  }
+  // vec2 op vec2 → vec2
+  if (leftType === "vec2" && rightType === "vec2") return "vec2";
+  // vec2 op f32 / f32 op vec2 → vec2 (broadcast — WGSL supports both
+  // for + - * /)
+  if (leftType === "vec2" && rightType === "f32") return "vec2";
+  if (leftType === "f32" && rightType === "vec2") return "vec2";
+  if (leftType === "f32" && rightType === "f32") return "f32";
+  // unknown propagates
+  if (leftType === "vec2" || rightType === "vec2") return "vec2";
+  return "unknown";
+}
+
+function typeOfConditional(ast, locals, ctx, label) {
+  const testType = typeOfExpr(ast.test, locals, ctx, label);
+  if (testType !== "bool" && testType !== "unknown") {
+    throwTypeError(`${label}: ternary test expects bool, got ${testType}`);
+  }
+  const consType = typeOfExpr(ast.consequent, locals, ctx, label);
+  const altType = typeOfExpr(ast.alternate, locals, ctx, label);
+  if (consType === "unknown") return altType;
+  if (altType === "unknown") return consType;
+  if (consType !== altType) {
+    throwTypeError(`${label}: ternary branches have different types (${consType} vs ${altType})`);
+  }
+  return consType;
+}
+
+function typeOfCall(ast, locals, ctx, label) {
+  const callee = ast.callee;
+  if (callee?.type !== "Identifier") return "unknown";
+  const name = callee.name;
+  const args = ast.args ?? [];
+
+  if (name === VEC2_CONSTRUCTOR) {
+    if (args.length !== 2) {
+      throwTypeError(`${label}: vec2(...) expects 2 arguments, got ${args.length}`);
+    }
+    for (let i = 0; i < args.length; i++) {
+      const t = typeOfExpr(args[i], locals, ctx, label);
+      if (t === "vec2") {
+        throwTypeError(`${label}: vec2(...) argument ${i + 1} must be a scalar, got vec2`);
+      }
+      if (t === "bool") {
+        throwTypeError(`${label}: vec2(...) argument ${i + 1} must be a scalar, got bool`);
+      }
+    }
+    return "vec2";
+  }
+
+  if (name === LENGTH_BUILTIN) {
+    if (args.length !== 1) {
+      throwTypeError(`${label}: length(...) expects 1 argument, got ${args.length}`);
+    }
+    const t = typeOfExpr(args[0], locals, ctx, label);
+    if (t !== "vec2" && t !== "unknown") {
+      throwTypeError(`${label}: length(...) expects a vec2, got ${t}`);
+    }
+    return "f32";
+  }
+
+  if (name === GRADIENT_BUILTIN) {
+    if (args.length !== 1 || args[0]?.type !== "Identifier") {
+      throwTypeError(`${label}: gradient(field) expects a single field identifier`);
+    }
+    const fname = args[0].name;
+    const ftype = ctx.fieldTypes.get(fname);
+    if (ftype === "vec2") {
+      throwTypeError(`${label}: gradient(${fname}) — gradient is only defined on scalar (f32) fields`);
+    }
+    // ftype === undefined falls through (v1 validator handles unknown
+    // identifiers).
+    return "vec2";
+  }
+
+  if (name === DIVERGENCE_BUILTIN) {
+    if (args.length !== 1 || args[0]?.type !== "Identifier") {
+      throwTypeError(`${label}: divergence(field) expects a single field identifier`);
+    }
+    const fname = args[0].name;
+    const ftype = ctx.fieldTypes.get(fname);
+    if (ftype === "f32") {
+      throwTypeError(`${label}: divergence(${fname}) — divergence is only defined on vec2 fields`);
+    }
+    return "f32";
+  }
+
+  if (F32_RETURNING_BUILTINS.has(name)) {
+    // Per-arg shape check: scalar fns reject vec2 args. Skip for
+    // `clamp` so its 1st arg can also be a vec2 (broadcast — but we
+    // don't currently emit that path; keep conservative and reject).
+    for (let i = 0; i < args.length; i++) {
+      const t = typeOfExpr(args[i], locals, ctx, label);
+      if (t === "vec2") {
+        throwTypeError(`${label}: ${name}(...) argument ${i + 1} must be a scalar, got vec2`);
+      }
+      if (t === "bool") {
+        throwTypeError(`${label}: ${name}(...) argument ${i + 1} must be a scalar, got bool`);
+      }
+    }
+    return "f32";
+  }
+
+  // Unknown function — let the v1 validator's identifier check surface
+  // it. Walk args anyway to type-check inside them.
+  for (const arg of args) typeOfExpr(arg, locals, ctx, label);
+  return "unknown";
+}
+
+function typeOfNeighborReduce(ast, locals, ctx, label) {
+  const bodyLabel = `${label} ${ast.op}-reduction`;
+  // Bindings (v1-shape) introduce neighbor names that are scalar reads
+  // of their bound fields.
+  const innerLocals = new Map(locals);
+  for (const binding of ast.bindings ?? []) {
+    const ftype = ctx.fieldTypes.get(binding.field);
+    if (ftype === "vec2") {
+      throwTypeError(`${bodyLabel}: binding "${binding.name}" is bound to vec2 field "${binding.field}" — neighbor reductions only carry scalar values today`);
+    }
+    innerLocals.set(binding.name, ftype ?? "unknown");
+  }
+  const bodyType = typeOfExpr(ast.body, innerLocals, ctx, bodyLabel);
+  if (bodyType === "vec2") {
+    throwTypeError(`${bodyLabel}: neighbor reduction body produces a vec2 — reductions accumulate scalars; take a component or use \`length(...)\``);
+  }
+  if (bodyType === "bool") {
+    throwTypeError(`${bodyLabel}: neighbor reduction body produces a bool — reductions accumulate numeric values`);
+  }
+  return "f32";
+}
+
+// =============================================================================
+// Diagnostics helpers
+// =============================================================================
+
+function throwTypeError(message) {
+  throw new Error(message);
+}
+
+// Best-effort source-string for an expression — used to build helpful
+// "did you mean .x?" suggestions in error messages. Not a faithful
+// printer; just enough for a one-line hint.
+function stringifyExprBest(ast) {
+  if (!ast || typeof ast !== "object") return "...";
+  switch (ast.type) {
+    case "Number":     return String(ast.value);
+    case "Identifier": return ast.name;
+    case "Member":     return `${stringifyExprBest(ast.object)}.${ast.prop}`;
+    case "Call": {
+      const name = ast.callee?.type === "Identifier" ? ast.callee.name : "fn";
+      return `${name}(...)`;
+    }
+    case "CoordRead":  return `${ast.field}@${ast.coord?.kind ?? "?"}`;
+    default:           return "...";
+  }
+}
+
+// Smoke check for KNOWN_TYPES — keeps the literal set in sync with the
+// switch arms above. Triggered on module import; fails fast if a future
+// refactor drops a type without updating the predicate.
+for (const t of ["f32", "vec2", "bool", "unknown"]) {
+  if (!KNOWN_TYPES.has(t)) throw new Error(`typecheck-v2: KNOWN_TYPES out of sync with checker (missing "${t}")`);
+}

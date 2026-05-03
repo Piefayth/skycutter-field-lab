@@ -1,6 +1,7 @@
 // Field Lab DSL v2 validator.
 //
 import { MATH_FUNCTIONS, STENCIL_HELPERS, CLOCK_HELPERS } from "./dsl-spec.mjs";
+import { typecheckV2 } from "./typecheck-v2.mjs";
 
 // Set of function names callable from inside a metric expression. Math
 // fns + stencil helpers + clock helpers (prev). Builtin identifier
@@ -38,6 +39,12 @@ export function validateV2(schema) {
   validateMetrics(schema);
   validateExplicitPreviousReads(schema);
   validateImportsOnSchema(schema);
+  // Type checking runs last: it relies on identifier resolution
+  // (declared fields, params, etc.) being well-formed, which the
+  // earlier passes guarantee. Catches the assignment-mismatch /
+  // wrong-shape errors that used to surface only at WGSL emit time
+  // with cryptic shader compile messages.
+  typecheckV2(schema);
 }
 
 // V2 import constraint. When the recipe declares no `import` line,

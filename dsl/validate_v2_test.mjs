@@ -518,3 +518,149 @@ step { stage s { reads peak; writes peak; cell { set peak = peak } } }
 metric peak = max cells { peak }
 `), "name collides");
 });
+
+// -----------------------------------------------------------------------------
+// Type checker — `typecheck-v2.mjs`. Catches the assignment-mismatch /
+// wrong-shape errors that used to surface only at WGSL emit time.
+// -----------------------------------------------------------------------------
+
+test("type-check rejects assigning vec2 to f32 field", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+field wind: vec2
+step {
+  stage s { reads wind; writes u; cell { set u = wind } }
+}
+`), "assigning vec2 to f32 field");
+});
+
+test("type-check rejects assigning f32 to vec2 field", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+field wind: vec2
+step {
+  stage s { reads u; writes wind; cell { set wind = u } }
+}
+`), "assigning f32 to vec2 field");
+});
+
+test("type-check rejects vec2 in scalar metric body", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field wind: vec2
+step { stage s { reads wind; writes wind; cell { set wind = wind } } }
+metric bad = sum cells { wind }
+`), "produces a vec2");
+});
+
+test("type-check accepts length(wind) in scalar metric body", () => {
+  // length(vec2) → f32, so the reduction is well-typed.
+  compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field wind: vec2
+step { stage s { reads wind; writes wind; cell { set wind = wind } } }
+metric speed = mean cells { length(wind) }
+`);
+});
+
+test("type-check accepts vec2 component access in metric body", () => {
+  compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field wind: vec2
+step { stage s { reads wind; writes wind; cell { set wind = wind } } }
+metric ux = mean cells { wind.x }
+`);
+});
+
+test("type-check rejects gradient on vec2 field", () => {
+  // `gradient` is a tangent-frame stencil only defined on scalar fields.
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field wind: vec2
+field other: vec2
+step {
+  stage s { reads wind; writes other; cell { set other = gradient(wind) } }
+}
+`), "only defined on scalar");
+});
+
+test("type-check rejects divergence on f32 field", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+field d: f32
+step {
+  stage s { reads u; writes d; cell { set d = divergence(u) } }
+}
+`), "only defined on vec2");
+});
+
+test("type-check accepts well-typed vec2 wiring", () => {
+  // wind is built from gradient(pressure); length(wind) flows into a
+  // scalar field. All assignments shape-match.
+  compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field pressure: f32
+field wind: vec2
+field speed: f32
+step {
+  stage build { reads pressure; writes wind; cell { set wind = gradient(pressure) } }
+  stage measure { reads wind; writes speed; cell { set speed = length(wind) } }
+}
+`);
+});
+
+test("type-check rejects non-bool when condition", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+field wind: vec2
+step {
+  stage s { reads wind; writes u; cell {
+    when wind { set u = 0 }
+  } }
+}
+`), "expected bool");
+});
+
+test("type-check rejects vec2 inside neighbor reduction body", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field wind: vec2
+field u: f32
+step {
+  stage s { reads wind; writes u; cell {
+    set u = sum n in neighbors { wind@n }
+  } }
+}
+`), "vec2");
+});
+
+test("type-check accepts @upstream coord-arg expressions on vec2 fields", () => {
+  // Regression: the reviewer-flagged @upstream bug already covered the
+  // dependency / validator paths; this confirms the new type checker
+  // doesn't false-fire on the legitimate vec2-component coord-args.
+  compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field w: f32
+field slope: vec2
+step {
+  stage flow { reads w, slope; writes w; cell {
+    set w = w@upstream(slope.x, slope.y, dt)
+  } }
+}
+`);
+});
