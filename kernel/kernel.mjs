@@ -113,62 +113,6 @@ export function resetState(state) {
   }
 }
 
-// =========================================================================
-// Metrics — kernel-shipped basic summary. Recipes that don't declare a
-// "cloud" field (every non-weather recipe in the gallery, currently)
-// get 0 in those slots — the recipe's own `metrics[]` declarations
-// surface meaningful values via `evaluateMetricDecls()` instead.
-// =========================================================================
-export function metrics(state) {
-  const cloudArr = state.fields.cloud ?? null;
-  const reactionArr = state.fields.reaction ?? null;
-  const moistureArr = state.fields.moisture ?? null;
-  const windUArr = state.fields.windU ?? null;
-  const windVArr = state.fields.windV ?? null;
-  let cloud = 0;
-  let cloudSq = 0;
-  let growth = 0;
-  let wind = 0;
-  let moisture = 0;
-  let maxCloud = 0;
-  let maxWind = 0;
-  const count = state.grid?.cells
-    ?? cloudArr?.length
-    ?? reactionArr?.length
-    ?? moistureArr?.length
-    ?? windUArr?.length
-    ?? DEFAULT_CELL_COUNT;
-  for (let i = 0; i < count; i++) {
-    if (cloudArr) {
-      const c = cloudArr[i];
-      cloud += c;
-      cloudSq += c * c;
-      if (c > maxCloud) maxCloud = c;
-    }
-    if (windUArr && windVArr) {
-      const w = Math.hypot(windUArr[i], windVArr[i]);
-      wind += w;
-      if (w > maxWind) maxWind = w;
-    }
-    if (reactionArr) growth += reactionArr[i];
-    if (moistureArr) moisture += moistureArr[i];
-  }
-  cloud /= count;
-  const events = state.events ?? { totalThisTick: 0, byLabel: {} };
-  return {
-    frame: state.frame,
-    cloud,
-    cloudVariance: Math.max(0, cloudSq / count - cloud * cloud),
-    growth: growth / count,
-    wind: wind / count,
-    moisture: moisture / count,
-    maxCloud,
-    maxWind,
-    events: events.totalThisTick,
-    eventsByLabel: events.byLabel,
-  };
-}
-
 export function assertFiniteState(state) {
   for (const [name, field] of Object.entries(state.fields)) {
     for (let i = 0; i < field.length; i++) {

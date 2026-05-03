@@ -54,7 +54,7 @@ const REGIME_SEGMENTS = [
   { mod: "runaway", label: "RUNAWY", bucket: "runaway" },
 ];
 
-const REGIME_TITLE = "Phase-boundary classifier. Buckets are checked runaway → active → intermittent → silent; a bucket matches if any of its declared metric values exceeds its threshold. Recipes can override thresholds via `regime: { ... }`; missing means today's weather defaults.";
+const REGIME_TITLE = "Phase-boundary classifier. Buckets are checked runaway → active → intermittent → silent; a bucket matches if any of its declared metric values exceeds its threshold. Recipes override thresholds via `regime: { ... }`; missing falls back to the catalog's silent/intermittent/active/runaway defaults.";
 
 export function createMetrics({ ui }) {
   const varianceHistory = [];

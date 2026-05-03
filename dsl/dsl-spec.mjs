@@ -23,14 +23,14 @@
 //   - bare identifiers resolve to fields, params, consts, locals, builtins
 //   - `field@prev` reads the previous-tick value (CoordRead)
 //   - `field@n` (inside `<op> n in neighbors { ... }`) reads at neighbor n
+//   - `field@upstream(velX, velY, dt)` continuous-position semi-Lagrangian
 //   - math fns, neighbor reductions, position helpers (lon/lat/x/y/...)
+//   - `vec2`, `length`, `gradient`, `divergence` for vec2 fields
 //
-// V2 STAGE PRIMITIVES (kept until coord-query / vec types replace them):
-//   wind, advect — encapsulate kernels that don't fold into cell { }
-//
-// LEGACY v1 KEEPS THE INTERNAL CATALOG (for parse.mjs / validate.mjs
-// that still serve weather.mjs), but those entries are tagged
-// `v1Only: true` and filtered out of the v2 user-facing projection.
+// V2 has no stage primitives — every kernel operation is a cell stage.
+// The parser rejects v1's `wind`/`advect`/`diffuse`/`clamp`/`normalize`
+// statement forms with redirect messages pointing at the cell-stage
+// equivalents (`gradient(...)`, `field@upstream(...)`, etc.).
 //
 // Doc strings are user-facing — what they read in the in-app docs
 // window. Treat as API documentation.

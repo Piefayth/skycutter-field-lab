@@ -82,7 +82,7 @@
           <span class="metric-cell__label">δ45</span>
           <span class="metric-cell__num" id="metricActivity">—</span>
         </div>
-        <div class="regime" id="regimeIndicator" data-regime="idle" title="Phase-boundary classifier: SILENT (no events, low variance) → INTRMT (some events / low variance) → ACTIVE (events firing or variance > 0.012) → RUNAWAY (events > 5000/tick or active-area > 0.6). Heuristic; thresholds tuned for the weather pipeline.">
+        <div class="regime" id="regimeIndicator" data-regime="idle" title="Phase-boundary classifier: SILENT (no events, low variance) → INTRMT (some events / low variance) → ACTIVE (events firing or variance > 0.012) → RUNAWAY (events > 5000/tick or active-area > 0.6). Heuristic; recipe authors override thresholds via `regime: { … }`.">
           <span class="regime__legend">REGIME</span>
           <span class="regime__seg regime__seg--silent">SILENT</span>
           <span class="regime__seg regime__seg--inter">INTRMT</span>
