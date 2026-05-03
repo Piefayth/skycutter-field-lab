@@ -72,10 +72,11 @@ field isEmpty:      u32 derived  // 1 if currently empty, 0 otherwise
 // Default 0.01 → mean tree-regrowth time ~100 ticks.
 param P_GROWTH    slider 0..0.05    step 0.0005  default 0.010 label "p (REGROWTH)"
 // Lightning rate f: probability per tick that a tree spontaneously
-// ignites. Default 1e-4 → mean strike interval ~1e4 ticks per cell.
-// Cranking this up flattens the cluster-size distribution; cranking it
-// down sends fires further apart in time but bigger when they happen.
-param F_LIGHTNING slider 0..0.005   step 0.00005 default 0.0002 label "f (LIGHTNING)"
+// ignites. Default 5e-5 → on a 64-frequency icosphere (~25k cells)
+// that's ~1 strike per tick. Cranking this up flattens the cluster-
+// size distribution; cranking it down sends fires further apart in
+// time but bigger when they happen.
+param F_LIGHTNING slider 0..0.005   step 0.00005 default 0.00005 label "f (LIGHTNING)"
 
 param simRateHz   slider 0..120 step 1     default 30   label "SIM RATE"
 param rate        slider 1..10  step 1     default 1    label "RATE"
@@ -93,8 +94,13 @@ step {
       // Has any neighbor caught fire? state@n == 2 → 1, else 0; sum
       // counts burning neighbours. Threshold 1 means "at least one".
       let burnNbrs = sum n in neighbors { (state@n == 2) ? 1 : 0 }
-      let strike   = cellRand(frame) < F_LIGHTNING
-      let sprout   = cellRand(frame * 31 + 7) < P_GROWTH
+      // cellRand returns [-1, 1]; remap to [0, 1] before comparing
+      // against probabilities (otherwise half of cells fire every tick
+      // regardless of f and p).
+      let strikeR = cellRand(frame) * 0.5 + 0.5
+      let sproutR = cellRand(frame * 31 + 7) * 0.5 + 0.5
+      let strike  = strikeR < F_LIGHTNING
+      let sprout  = sproutR < P_GROWTH
 
       let isBurningCell = (state == 2) ? 1 : 0
       let isTreeCell    = (state == 1) ? 1 : 0

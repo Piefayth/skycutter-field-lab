@@ -54,7 +54,7 @@ export const regime = {
 export const pipelineDsl = `
 recipe "Toner-Tu flocking"
 summary "Continuum limit of Vicsek-style flocking. Velocity v is self-propelled toward magnitude √(α/β); density ρ is conserved by ∇·(ρv); pressure smooths density bunching, viscosity aligns neighbours. Below the critical noise the whole sphere polarises into a single global flow direction with persistent dense bands (Toner-Tu's giant number fluctuations); above it, flow is turbulent. The continuous-density alternative to the Vicsek-flock recipe."
-recommendedPreset noisy
+recommendedPreset eastward
 
 substrate geodesic frequency 48
 
@@ -72,7 +72,7 @@ param BETA      slider 0..3   step 0.05  default 1.0  label "β (SATURATE)"
 param CS2       slider 0..2   step 0.02  default 0.30 label "c² (PRESSURE)"
 param DIFF      slider 0..0.5 step 0.01  default 0.10 label "D (VISCOSITY)"
 param FRICTION  slider 0..1   step 0.01  default 0.20 label "ζ (FRICTION)"
-param NOISE     slider 0..0.5 step 0.005 default 0.10 label "η (NOISE)"
+param NOISE     slider 0..0.5 step 0.005 default 0.05 label "η (NOISE)"
 
 step {
   // Stage 1 — Density flux for the continuity equation. ρ·v lands
@@ -111,10 +111,11 @@ step {
       let drive  = ALPHA - BETA * speed2
       let visc   = (mean n in neighbors { v@n } - v) * DIFF
       let press  = gradient(rho)
-      // Independent random kicks per component: cellRand seeded by
-      // frame gives independent samples each tick, scaled to ±1.
-      let nx = (cellRand(frame) - 0.5) * 2 * NOISE
-      let ny = (cellRand(frame * 17 + 3) - 0.5) * 2 * NOISE
+      // Independent random kicks per component. cellRand returns
+      // [-1, 1], so multiplying by NOISE directly gives the symmetric
+      // ±NOISE range we want — no biased shift.
+      let nx = cellRand(frame) * NOISE
+      let ny = cellRand(frame * 17 + 3) * NOISE
       let dvx = (drive * v.x - CS2 * press.x - FRICTION * v.x + visc.x + nx) * dt * rate
       let dvy = (drive * v.y - CS2 * press.y - FRICTION * v.y + visc.y + ny) * dt * rate
       add v = vec2(dvx, dvy)
