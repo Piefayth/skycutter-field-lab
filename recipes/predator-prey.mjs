@@ -23,63 +23,6 @@
 
 import { compileV2 } from "../dsl/compile-v2.mjs";
 
-// Composite view: prey N → green tint, predator P → red tint.
-// Where both are low: dark / "extinction void." Where both are
-// moderate: brown-orange / "transition zone." Saturating mapping
-// keeps the field readable across orders of magnitude.
-function predatorPreyComposite() {
-  const color = (i, fields) => {
-    const n = Math.max(0, Math.min(2.5, fields.N[i]));
-    const p = Math.max(0, Math.min(2.5, fields.P[i]));
-    // Green channel from prey, red from predator. Both go through
-    // smoothstep-y saturation so densities above ~1 don't keep
-    // brightening the cell to white.
-    const ng = Math.min(1, n * 0.8);
-    const pg = Math.min(1, p * 1.2);
-    const r = Math.round(40 + pg * 215);
-    const g = Math.round(28 + ng * 200 - pg * 30);
-    const b = Math.round(34 + ng * 60);
-    return [
-      Math.max(0, Math.min(255, r)),
-      Math.max(0, Math.min(255, g)),
-      Math.max(0, Math.min(255, b)),
-    ];
-  };
-  color.write = (i, fields, data, k) => {
-    const [r, g, b] = color(i, fields);
-    data[k + 0] = r;
-    data[k + 1] = g;
-    data[k + 2] = b;
-  };
-  color.fields = ["N", "P"];
-  return color;
-}
-
-function rampColor(field, lo, hi, scale = 1) {
-  const color = (i, fields) => {
-    const v = Math.max(0, Math.min(1, (fields[field][i] || 0) * scale));
-    return [
-      Math.round(lo[0] + (hi[0] - lo[0]) * v),
-      Math.round(lo[1] + (hi[1] - lo[1]) * v),
-      Math.round(lo[2] + (hi[2] - lo[2]) * v),
-    ];
-  };
-  color.write = (i, fields, data, k) => {
-    const [r, g, b] = color(i, fields);
-    data[k + 0] = r;
-    data[k + 1] = g;
-    data[k + 2] = b;
-  };
-  color.fields = [field];
-  return color;
-}
-
-export const views = [
-  { id: "composite", label: "N + P composite", color: predatorPreyComposite() },
-  { id: "N",         label: "Prey (N)",        color: rampColor("N", [22, 28, 22], [120, 230, 110], 1.0) },
-  { id: "P",         label: "Predator (P)",    color: rampColor("P", [28, 22, 22], [240, 110, 80], 1.5) },
-];
-
 export const overlays = [];
 
 export const metrics = [
@@ -106,6 +49,40 @@ substrate geodesic frequency 64
 
 field N: f32
 field P: f32
+
+palette N_RAMP {
+  stop 0 color [22, 28, 22]
+  stop 1 color [120, 230, 110]
+}
+
+palette P_RAMP {
+  stop 0 color [28, 22, 22]
+  stop 1 color [240, 110, 80]
+}
+
+// Composite view: prey N → green tint, predator P → red tint.
+// Where both are low: dark / "extinction void." Where both are
+// moderate: brown-orange / "transition zone." Saturating mapping
+// keeps the field readable across orders of magnitude.
+view composite "N + P composite" {
+  color expr {
+    let n  = clamp(N, 0, 2.5)
+    let p  = clamp(P, 0, 2.5)
+    let ng = clamp(n * 0.8, 0, 1)
+    let pg = clamp(p * 1.2, 0, 1)
+    set red   = 40 + pg * 215
+    set green = 28 + ng * 200 - pg * 30
+    set blue  = 34 + ng * 60
+  }
+}
+
+view N "Prey (N)" {
+  color ramp N range [0, 1] palette N_RAMP
+}
+
+view P "Predator (P)" {
+  color ramp P range [0, 0.667] palette P_RAMP
+}
 
 param simRateHz slider 0..360    step 1    default 60    label "SIM RATE"
 param r         slider 0..2      step 0.01 default 0.55  label "r (PREY GROWTH)"

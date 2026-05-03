@@ -20,60 +20,7 @@
 // Murray's classic "rabies-fox" application of this model produces a
 // ring of rabid foxes propagating across a continent.
 
-import { ramp, gray } from "../prims/colorers.mjs";
 import { compileV2 } from "../dsl/compile-v2.mjs";
-
-// Composite view. Three compartments mapped to a high-contrast palette
-// so each one occupies a different part of the lightness/temperature
-// space rather than three pastel siblings. The eye picks the wave
-// (hot fire) instantly; the susceptible territory stays bright (ready
-// to burn); the recovered trail recedes into deep cool grey-blue
-// (out of the action). Inspired by the visual language of forest-fire
-// satellite imagery: untouched canopy = pale, active fire = orange,
-// burn scar = dark.
-const COL_S = [248, 232, 175]; // pale cream — naive, "ready to burn"
-const COL_I = [255,  85,  35]; // bright fire orange — actively infectious
-const COL_R = [ 36,  50,  85]; // deep navy — burned, dormant, immune
-
-function sirCompositeColor(s, infected, r) {
-  // Renormalize so we always blend by the relative shares (each cell
-  // should sum near 1, but stamps and roundoff can push it off).
-  const total = Math.max(s + infected + r, 1e-6);
-  const ws = s / total;
-  const wi = infected / total;
-  const wr = r / total;
-  // Boost the Infected contribution heavily — even a 5% I share
-  // saturates the orange channel. Without this the thin wavefront
-  // gets washed out by the surrounding S+R blend.
-  const iBoost = Math.min(1, wi * 6);
-  const remaining = 1 - iBoost;
-  const sw = ws / Math.max(ws + wr, 1e-6) * remaining;
-  const rw = wr / Math.max(ws + wr, 1e-6) * remaining;
-  return [
-    Math.round(COL_S[0] * sw + COL_I[0] * iBoost + COL_R[0] * rw),
-    Math.round(COL_S[1] * sw + COL_I[1] * iBoost + COL_R[1] * rw),
-    Math.round(COL_S[2] * sw + COL_I[2] * iBoost + COL_R[2] * rw),
-  ];
-}
-
-function sirComposite() {
-  const color = (i, fields) => sirCompositeColor(fields.S[i], fields.I[i], fields.R[i]);
-  color.write = (i, fields, data, k) => {
-    const rgb = sirCompositeColor(fields.S[i], fields.I[i], fields.R[i]);
-    data[k + 0] = rgb[0];
-    data[k + 1] = rgb[1];
-    data[k + 2] = rgb[2];
-  };
-  color.fields = ["S", "I", "R"];
-  return color;
-}
-
-export const views = [
-  { id: "composite", label: "S / I / R",        color: sirComposite() },
-  { id: "I",         label: "Infected (I)",     color: ramp("I", [12, 12, 22], [255, 110, 50], 1.5) },
-  { id: "R",         label: "Recovered (R)",    color: ramp("R", [16, 22, 28], [120, 200, 240]) },
-  { id: "S",         label: "Susceptible (S)",  color: gray("S") },
-];
 
 export const overlays = [];
 
@@ -102,6 +49,62 @@ substrate geodesic frequency 64
 field S: f32
 field I: f32
 field R: f32
+
+// Three compartments mapped to a high-contrast palette so each one
+// occupies a different part of the lightness/temperature space rather
+// than three pastel siblings. Visual language is forest-fire satellite
+// imagery — untouched canopy = pale cream, active fire = orange,
+// burn scar = deep navy.
+//   S = [248, 232, 175]
+//   I = [255,  85,  35]
+//   R = [ 36,  50,  85]
+
+palette I_RAMP {
+  stop 0 color [12, 12, 22]
+  stop 1 color [255, 110, 50]
+}
+
+palette R_RAMP {
+  stop 0 color [16, 22, 28]
+  stop 1 color [120, 200, 240]
+}
+
+palette S_RAMP {
+  stop 0 color [0, 0, 0]
+  stop 1 color [255, 255, 255]
+}
+
+view composite "S / I / R" {
+  color expr {
+    let total     = max(S + I + R, 0.000001)
+    let ws        = S / total
+    let wi        = I / total
+    let wr        = R / total
+    // Boost the Infected contribution — even a 5% I share saturates
+    // the orange channel, so the wavefront stays visible against the
+    // surrounding S+R blend.
+    let iBoost    = clamp(wi * 6, 0, 1)
+    let remaining = 1 - iBoost
+    let srSum     = max(ws + wr, 0.000001)
+    let sw        = ws / srSum * remaining
+    let rw        = wr / srSum * remaining
+    set red   = 248 * sw + 255 * iBoost + 36 * rw
+    set green = 232 * sw + 85  * iBoost + 50 * rw
+    set blue  = 175 * sw + 35  * iBoost + 85 * rw
+  }
+}
+
+view I "Infected (I)" {
+  color ramp I range [0, 1.5] palette I_RAMP
+}
+
+view R "Recovered (R)" {
+  color ramp R range [0, 1] palette R_RAMP
+}
+
+view S "Susceptible (S)" {
+  color ramp S range [0, 1] palette S_RAMP
+}
 
 param simRateHz slider 0..360 step 1 default 60 label "SIM RATE"
 // Infection rate per S·I contact. Together with gamma sets R0 = β/γ.

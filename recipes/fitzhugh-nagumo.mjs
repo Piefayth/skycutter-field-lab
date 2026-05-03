@@ -6,13 +6,7 @@
 // turns local spikes into traveling waves; an asymmetric v gradient
 // breaks a wave into a rotating spiral.
 
-import { ramp, gray } from "../prims/colorers.mjs";
 import { compileV2 } from "../dsl/compile-v2.mjs";
-
-export const views = [
-  { id: "u", label: "U (membrane)", color: gray("u") },
-  { id: "v", label: "V (recovery)", color: ramp("v", [16, 22, 32], [220, 110, 110]) },
-];
 
 export const overlays = [];
 
@@ -44,6 +38,24 @@ const gamma = 1.0
 
 field u: f32
 field v: f32
+
+palette MONO {
+  stop 0 color [0, 0, 0]
+  stop 1 color [255, 255, 255]
+}
+
+palette RECOVERY {
+  stop 0 color [16, 22, 32]
+  stop 1 color [220, 110, 110]
+}
+
+view u "U (membrane)" {
+  color ramp u range [0, 1] palette MONO
+}
+
+view v "V (recovery)" {
+  color ramp v range [0, 1] palette RECOVERY
+}
 
 param simRateHz slider 0..360 step 1   default 60  label "SIM RATE"
 param diffusion slider 0..4   step 0.05 default 1.0 label "DIFF"

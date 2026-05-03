@@ -35,20 +35,7 @@
 // requires component-wise scalar reductions today), and renders
 // the result via atan2 + the existing phase colorer.
 
-import { ramp, phase } from "../prims/colorers.mjs";
 import { compileV2 } from "../dsl/compile-v2.mjs";
-
-export const views = [
-  // Heading direction → phase color wheel. Defects appear where the
-  // wheel wraps around a singularity (a topological vortex of order
-  // ±1). Two adjacent cells with opposite phase colors = a defect
-  // line.
-  { id: "dir",   label: "Heading direction", color: phase("dir") },
-  // Local alignment magnitude. 1 = neighbors all point the same way
-  // (interior of a domain); 0 = neighbors cancel (a defect core).
-  // Defects show as dark spots in an otherwise bright field.
-  { id: "align", label: "Local alignment",   color: ramp("align", [12, 14, 28], [220, 240, 255], 1.2) },
-];
 
 export const overlays = [];
 
@@ -83,6 +70,25 @@ field heading: vec2
 // Diagnostics — both surfaces update every tick from the heading.
 field dir: f32 derived       // atan2(heading.y, heading.x), for phase coloring
 field align: f32 derived     // |neighborhood-mean heading|, defect indicator
+
+palette ALIGN {
+  stop 0 color [12, 14, 28]
+  stop 1 color [220, 240, 255]
+}
+
+// Heading direction → color wheel. Defects appear where the wheel
+// wraps around a singularity (a topological vortex of order ±1). Two
+// adjacent cells with opposite phase colors = a defect line.
+view dir "Heading direction" {
+  color wheel dir
+}
+
+// Local alignment magnitude. 1 = neighbors all agree (interior of a
+// domain); 0 = neighbors cancel (a defect core). Defects show as dark
+// spots in an otherwise bright field.
+view align "Local alignment" {
+  color ramp align range [0, 0.833] palette ALIGN
+}
 
 // Single noise knob — Vicsek's order parameter is a function of η alone
 // at fixed density. The geodesic mesh fixes density, so noise is the

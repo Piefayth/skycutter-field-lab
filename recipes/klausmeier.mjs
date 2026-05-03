@@ -26,15 +26,7 @@
 // diffusion that produces spots instead of stripes — try the "spots"
 // preset.
 
-import { ramp, gray } from "../prims/colorers.mjs";
 import { compileV2 } from "../dsl/compile-v2.mjs";
-
-export const views = [
-  // Biomass: bare ground (dim) → green
-  { id: "n", label: "Biomass (n)", color: ramp("n", [22, 32, 22], [120, 200, 80], 0.6) },
-  // Water: dry (warm sand) → blue
-  { id: "w", label: "Water (w)",   color: ramp("w", [80, 60, 40], [60, 140, 220], 0.5) },
-];
 
 export const overlays = [];
 
@@ -64,6 +56,24 @@ field w: f32
 // Slope direction as a vec2 — east in .x, north in .y. Set once per
 // scenario; the advect primitive reads it directly.
 field slope: vec2
+
+palette N_RAMP {
+  stop 0 color [22, 32, 22]
+  stop 1 color [120, 200, 80]
+}
+
+palette W_RAMP {
+  stop 0 color [80, 60, 40]
+  stop 1 color [60, 140, 220]
+}
+
+view n "Biomass (n)" {
+  color ramp n range [0, 0.6] palette N_RAMP
+}
+
+view w "Water (w)" {
+  color ramp w range [0, 0.5] palette W_RAMP
+}
 
 param simRateHz slider 0..360   step 1     default 60   label "SIM RATE"
 param rainfall  slider 0..4     step 0.01  default 1.80 label "RAINFALL a"

@@ -38,20 +38,7 @@
 //     required to advance. 1 (default) gives spirals; 2-3 gives
 //     blockier patterns; higher values mostly freeze.
 
-import { phase, ramp } from "../prims/colorers.mjs";
 import { compileV2 } from "../dsl/compile-v2.mjs";
-
-export const views = [
-  // Phase color wheel mapped from state-space: state * TAU / N.
-  // The recipe writes that mapping into a derived `phaseAngle` field
-  // so the existing scalar-angle phase colorer can work without
-  // knowing about u32.
-  { id: "phaseAngle", label: "Phase (state)", color: phase("phaseAngle") },
-  // Raw state visualised as a normalized scalar — useful for
-  // debugging "is the state actually changing?" without the wrap-
-  // around of phase color.
-  { id: "stateNorm",  label: "State (raw)",   color: ramp("stateNorm", [10, 12, 28], [240, 250, 255], 1.0) },
-];
 
 export const overlays = [];
 
@@ -85,6 +72,25 @@ field state: u32
 field phaseAngle: f32 derived   // state * TAU / numStates, for phase coloring
 field stateNorm:  f32 derived   // state / numStates, for ramp coloring
 field changed:    u32 derived   // 1 if this cell advanced this tick, 0 otherwise
+
+palette STATE_RAMP {
+  stop 0 color [10, 12, 28]
+  stop 1 color [240, 250, 255]
+}
+
+// Color wheel mapped from state-space: state * TAU / N. The recipe
+// writes that mapping into the derived phaseAngle field, so the
+// wheel reads it as a smooth angle.
+view phaseAngle "Phase (state)" {
+  color wheel phaseAngle
+}
+
+// Raw state visualised as a normalized scalar — useful for debugging
+// "is the state actually changing?" without the wrap-around of the
+// phase wheel.
+view stateNorm "State (raw)" {
+  color ramp stateNorm range [0, 1] palette STATE_RAMP
+}
 
 param numStates  slider 3..32  step 1   default 14   label "STATES N"
 param threshold  slider 1..6   step 1   default 1    label "THRESHOLD"

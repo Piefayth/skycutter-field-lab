@@ -12,13 +12,7 @@
 // classical chimera (which needs nonlocal coupling). On the geodesic
 // sphere both regimes are visually rich.
 
-import { phase, gray } from "../prims/colorers.mjs";
 import { compileV2 } from "../dsl/compile-v2.mjs";
-
-export const views = [
-  { id: "phase", label: "Phase (θ)", color: phase("theta") },
-  { id: "omega", label: "Intrinsic ω", color: gray("omega") },
-];
 
 export const overlays = [];
 
@@ -51,6 +45,19 @@ substrate geodesic frequency 64
 field theta: f32
 field omega: f32
 field cosTheta: f32 derived
+
+palette OMEGA {
+  stop 0 color [10, 14, 22]
+  stop 1 color [240, 240, 240]
+}
+
+view phase "Phase (θ)" {
+  color wheel theta
+}
+
+view omega "Intrinsic ω" {
+  color ramp omega range [0, 2] palette OMEGA
+}
 
 param simRateHz   slider 0..360 step 1    default 60   label "SIM RATE"
 param K           slider 0..2   step 0.01 default 1.58 label "COUPLING K"

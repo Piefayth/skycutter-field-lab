@@ -18,60 +18,6 @@
 
 import { compileV2 } from "../dsl/compile-v2.mjs";
 
-// Wave-amplitude colorer. u is signed (positive crests, negative
-// troughs); a diverging palette with a stark white seam at zero
-// makes the propagating wavefront read as a sharp line. Saturation
-// boosts asymmetrically — small amplitudes already pop, large ones
-// don't blow out to pure white.
-function waveAmplitude(fieldName) {
-  const NEG = [40, 90, 200];   // deep blue trough
-  const NEG_MID = [120, 170, 230];
-  const ZERO = [240, 240, 240];
-  const POS_MID = [240, 160, 110];
-  const POS = [200, 50, 30];   // hot red crest
-
-  const stops = [
-    { t: -1.0, c: NEG },
-    { t: -0.3, c: NEG_MID },
-    { t: -0.05, c: ZERO },
-    { t:  0.05, c: ZERO },
-    { t:  0.3,  c: POS_MID },
-    { t:  1.0,  c: POS },
-  ];
-
-  function lookup(amp) {
-    if (!Number.isFinite(amp)) return [80, 60, 90];
-    const t = Math.max(-1.5, Math.min(1.5, amp));
-    if (t <= stops[0].t) return stops[0].c;
-    if (t >= stops[stops.length - 1].t) return stops[stops.length - 1].c;
-    for (let s = 0; s < stops.length - 1; s++) {
-      const a = stops[s];
-      const b = stops[s + 1];
-      if (t >= a.t && t <= b.t) {
-        const f = (t - a.t) / (b.t - a.t);
-        return [
-          Math.round(a.c[0] + (b.c[0] - a.c[0]) * f),
-          Math.round(a.c[1] + (b.c[1] - a.c[1]) * f),
-          Math.round(a.c[2] + (b.c[2] - a.c[2]) * f),
-        ];
-      }
-    }
-    return [128, 128, 128];
-  }
-
-  const color = (i, fields) => lookup(fields[fieldName][i]);
-  color.write = (i, fields, data, k) => {
-    const [r, g, b] = lookup(fields[fieldName][i]);
-    data[k + 0] = r; data[k + 1] = g; data[k + 2] = b;
-  };
-  color.fields = [fieldName];
-  return color;
-}
-
-export const views = [
-  { id: "u", label: "Amplitude (u)", color: waveAmplitude("u") },
-];
-
 export const overlays = [];
 
 // Per-recipe FPS readout stays JS-side (it's not field state). The
@@ -100,6 +46,23 @@ substrate geodesic frequency 64
 // History 1 buffer is allocated automatically when the compiler sees
 // any \`u@prev\` reference — no manual \`history N\` declaration needed.
 field u: f32
+
+// Diverging palette with a stark white seam at zero — the propagating
+// wavefront reads as a sharp line. Asymmetric saturation: small
+// amplitudes already pop, large ones don't blow out to pure white.
+// Stop t-values normalized into [0, 1] across the chosen range [-1, 1].
+palette WAVE {
+  stop 0.000 color [40, 90, 200]
+  stop 0.350 color [120, 170, 230]
+  stop 0.475 color [240, 240, 240]
+  stop 0.525 color [240, 240, 240]
+  stop 0.650 color [240, 160, 110]
+  stop 1.000 color [200, 50, 30]
+}
+
+view u "Amplitude (u)" {
+  color ramp u range [-1, 1] palette WAVE
+}
 
 // Effective wave speed coefficient. Per-tick update for a wavefront
 // at a sharp gradient is ~ speed² · neighbor-count, so this also

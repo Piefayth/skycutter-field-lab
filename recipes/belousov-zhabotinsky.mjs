@@ -12,47 +12,6 @@
 
 import { compileV2 } from "../dsl/compile-v2.mjs";
 
-// 3-channel composite that maps u → red+orange, v → green, w → blue
-// shadow. Rotating chemistry shifts each cell's hue as the species
-// chase each other through the cycle.
-function bzComposite() {
-  const color = (i, fields) => {
-    const u = Math.max(0, Math.min(1.4, fields.u?.[i] ?? 0));
-    const v = Math.max(0, Math.min(1.4, fields.v?.[i] ?? 0));
-    const w = Math.max(0, Math.min(1.4, fields.w?.[i] ?? 0));
-    const r = 28 + u * 220 - v * 50 - w * 10;
-    const g = 22 + v * 200 - u * 20;
-    const bl = 50 + w * 180 - u * 30;
-    return [
-      Math.max(0, Math.min(255, Math.round(r))),
-      Math.max(0, Math.min(255, Math.round(g))),
-      Math.max(0, Math.min(255, Math.round(bl))),
-    ];
-  };
-  color.fields = ["u", "v", "w"];
-  return color;
-}
-
-function rampColor(field, lo, hi) {
-  const color = (i, fields) => {
-    const v = Math.max(0, Math.min(1, fields[field]?.[i] ?? 0));
-    return [
-      Math.round(lo[0] + (hi[0] - lo[0]) * v),
-      Math.round(lo[1] + (hi[1] - lo[1]) * v),
-      Math.round(lo[2] + (hi[2] - lo[2]) * v),
-    ];
-  };
-  color.fields = [field];
-  return color;
-}
-
-export const views = [
-  { id: "composite", label: "Composite (u/v/w)", color: bzComposite() },
-  { id: "u", label: "U (autocatalyst)", color: rampColor("u", [14, 18, 26], [255, 200, 70]) },
-  { id: "v", label: "V (inhibitor)", color: rampColor("v", [14, 18, 26], [80, 220, 100]) },
-  { id: "w", label: "W (slow recovery)", color: rampColor("w", [14, 18, 26], [120, 100, 240]) },
-];
-
 export const overlays = [];
 
 export const metrics = [
@@ -84,6 +43,44 @@ const eps2 = 0.012
 field u: f32
 field v: f32
 field w: f32
+
+palette U_RAMP {
+  stop 0 color [14, 18, 26]
+  stop 1 color [255, 200, 70]
+}
+
+palette V_RAMP {
+  stop 0 color [14, 18, 26]
+  stop 1 color [80, 220, 100]
+}
+
+palette W_RAMP {
+  stop 0 color [14, 18, 26]
+  stop 1 color [120, 100, 240]
+}
+
+view composite "Composite (u/v/w)" {
+  color expr {
+    let uc = clamp(u, 0, 1.4)
+    let vc = clamp(v, 0, 1.4)
+    let wc = clamp(w, 0, 1.4)
+    set red   = 28 + uc * 220 - vc * 50 - wc * 10
+    set green = 22 + vc * 200 - uc * 20
+    set blue  = 50 + wc * 180 - uc * 30
+  }
+}
+
+view u "U (autocatalyst)" {
+  color ramp u range [0, 1] palette U_RAMP
+}
+
+view v "V (inhibitor)" {
+  color ramp v range [0, 1] palette V_RAMP
+}
+
+view w "W (slow recovery)" {
+  color ramp w range [0, 1] palette W_RAMP
+}
 
 param simRateHz  slider 0..360   step 1     default 60    label "SIM RATE"
 param rate       slider 1..100   step 1     default 30    label "RATE"

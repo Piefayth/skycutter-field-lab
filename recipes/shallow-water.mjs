@@ -33,24 +33,7 @@
 // substepping lets the user crank the visible wave speed without
 // blowing up the integrator.
 
-import { ramp, diverge } from "../prims/colorers.mjs";
 import { compileV2 } from "../dsl/compile-v2.mjs";
-
-export const views = [
-  // Height anomaly: rest depth is 1; show ±0.5 around it as red↔blue.
-  // The diagnostics stage emits `dh = h - 1`, so diverge() reads the
-  // signed deviation directly.
-  { id: "dh",    label: "Height anomaly", color: diverge("dh", 1.5) },
-  // Raw absolute height — bare-seabed brown to deep-water blue.
-  { id: "h",     label: "Height (h)",     color: ramp("h", [70, 35, 25], [60, 160, 230], 0.5) },
-  // Speed magnitude — calm to hot.
-  { id: "speed", label: "Speed |m|",      color: ramp("speed", [12, 14, 30], [255, 200, 50], 4) },
-  // Dye tracer — black background, bright cyan accumulation.
-  { id: "dye",   label: "Dye tracer",     color: ramp("dye", [8, 10, 14], [80, 240, 255], 1.0) },
-  // Divergence diagnostic — sources red, sinks blue. Useful for
-  // debugging mass conservation drift.
-  { id: "divM",  label: "div(m)",         color: diverge("divM", 8) },
-];
 
 export const overlays = [];
 
@@ -92,6 +75,57 @@ field dye: f32                // passive scalar tracer
 field dh: f32 derived         // h - 1 (signed anomaly for rendering)
 field speed: f32 derived      // length(m) for rendering
 field divM: f32 derived       // divergence(m) — diagnostic only
+
+// Diverging palette shared by dh and divM. Rest depth (or zero
+// divergence) sits at the white seam between cool blue troughs and
+// warm red crests. Built from the 2-stop diverge() factory's pair —
+// stop t-values normalized into [0, 1] across whatever range each
+// view picks.
+palette DIVERGE {
+  stop 0 color [40, 100, 240]
+  stop 1 color [235, 76, 70]
+}
+
+palette HEIGHT {
+  stop 0 color [70, 35, 25]
+  stop 1 color [60, 160, 230]
+}
+
+palette SPEED {
+  stop 0 color [12, 14, 30]
+  stop 1 color [255, 200, 50]
+}
+
+palette DYE {
+  stop 0 color [8, 10, 14]
+  stop 1 color [80, 240, 255]
+}
+
+// Height anomaly: signed deviation from rest depth. dh = h - 1.
+view dh "Height anomaly" {
+  color ramp dh range [-0.667, 0.667] palette DIVERGE
+}
+
+// Raw absolute height — bare-seabed brown to deep-water blue.
+view h "Height (h)" {
+  color ramp h range [0, 2] palette HEIGHT
+}
+
+// Speed magnitude — calm to hot.
+view speed "Speed |m|" {
+  color ramp speed range [0, 0.25] palette SPEED
+}
+
+// Dye tracer — black background, bright cyan accumulation.
+view dye "Dye tracer" {
+  color ramp dye range [0, 1] palette DYE
+}
+
+// Divergence diagnostic — sources red, sinks blue. Useful for
+// debugging mass conservation drift.
+view divM "div(m)" {
+  color ramp divM range [-0.125, 0.125] palette DIVERGE
+}
 
 // CFL: the explicit forward-Euler step requires
 // effective-dt · sqrt(g · h_max) < cell-size. With cell≈0.02 at

@@ -57,24 +57,7 @@
 //     barrier). Watch the wavefunction tunnel partway through and
 //     reflect with characteristic phase shift.
 
-import { ramp, diverge, phase } from "../prims/colorers.mjs";
 import { compileV2 } from "../dsl/compile-v2.mjs";
-
-export const views = [
-  // |ψ|² — the standard quantum probability density. Black where
-  // the particle isn't, bright where it is.
-  { id: "prob",  label: "Probability |ψ|²", color: ramp("prob", [4, 6, 16], [255, 220, 90], 5) },
-  // arg(ψ) — phase color wheel. The richest visualization: a
-  // dispersing wavepacket fills with rapid color rotations, two
-  // wavepackets meeting trace clear hyperbolic interference fringes.
-  { id: "phase", label: "Phase arg(ψ)",     color: phase("phase") },
-  // Re(ψ) directly — signed, so use diverge. Reads like the
-  // amplitude of a real wave; the carrier oscillation is visible
-  // as it traverses the sphere.
-  { id: "re",    label: "Re(ψ)",            color: diverge("re", 1.5) },
-  // V(x) — paintable potential. Wells appear blue, barriers red.
-  { id: "V",     label: "Potential V(x)",   color: diverge("V", 5) },
-];
 
 export const overlays = [];
 
@@ -111,6 +94,41 @@ field V: f32                   // Potential V(x), paintable
 
 field prob: f32 derived        // |ψ|² for visualization
 field phase: f32 derived       // arg(ψ) for the phase colorer
+
+palette PROB {
+  stop 0 color [4, 6, 16]
+  stop 1 color [255, 220, 90]
+}
+
+palette DIVERGE {
+  stop 0 color [40, 100, 240]
+  stop 1 color [235, 76, 70]
+}
+
+// |ψ|² — standard quantum probability density. Black where the
+// particle isn't, bright where it is.
+view prob "Probability |ψ|²" {
+  color ramp prob range [0, 0.2] palette PROB
+}
+
+// arg(ψ) — color wheel. The richest visualization: a dispersing
+// wavepacket fills with rapid color rotations, two wavepackets
+// meeting trace clear hyperbolic interference fringes.
+view phase "Phase arg(ψ)" {
+  color wheel phase
+}
+
+// Re(ψ) directly — signed, so use the diverging palette. Reads like
+// the amplitude of a real wave; the carrier oscillation is visible
+// as it traverses the sphere.
+view re "Re(ψ)" {
+  color ramp re range [-0.667, 0.667] palette DIVERGE
+}
+
+// V(x) — paintable potential. Wells appear blue, barriers red.
+view V "Potential V(x)" {
+  color ramp V range [-0.2, 0.2] palette DIVERGE
+}
 
 // CFL: the leapfrog step is stable when K·Δt·max_eig(∇²) < 2. With
 // the graph Laplacian's max eigenvalue ≈ 12 and Δt = (1/60)·rate at
