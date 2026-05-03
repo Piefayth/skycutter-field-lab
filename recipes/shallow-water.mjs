@@ -76,8 +76,8 @@ export const regime = {
 
 export const pipelineDsl = `
 recipe "Shallow water (sphere)"
-summary "Depth-averaged fluid on a sphere — gradient(h) drives momentum, divergence(m) drives continuity, dye rides @upstream of the velocity. Drop a height bulge with the BULGE stamp and watch the wave race around the planet, hit the antipode, and refocus. Paint colored dye with PAINT DYE to see the otherwise-invisible flow lines."
-recommendedPreset bulge
+summary "Depth-averaged fluid on a rotating sphere. gradient(h) drives momentum, divergence(m) drives continuity, dye rides @upstream of the velocity, and Coriolis rotates the flow with a latitude-dependent twist. Try the CYCLONES scenario — three identical bulges on a north-south line release as ring waves at the equator and tight spirals near the poles. Set ROTATION to 0 to compare against the non-rotating Earth: the polar spiral collapses to a symmetric ring."
+recommendedPreset cyclones
 
 // Frequency 32 (~6k cells) is the sweet spot: visibly resolved
 // detail without CFL strangling the explicit integrator. Each cell is
@@ -112,6 +112,16 @@ field divM: f32 derived       // divergence(m) — diagnostic only
 param gravity   slider 0..0.02    step 0.0002  default 0.002  label "GRAVITY g"
 param friction  slider 0..0.05    step 0.0005  default 0.005  label "FRICTION"
 param viscosity slider 0..0.5     step 0.005   default 0.15   label "VISCOSITY"
+// Planet rotation rate Ω. At rotation=0 the planet is non-rotating
+// — bulges expand into symmetric ring waves. At rotation=0.02 the
+// Coriolis parameter f = 2·Ω·sin(lat) reaches 0.04 at the poles,
+// comparable to the wave speed (Rossby number ≈ 1). Now waves
+// curve, vortices spin up around bulges with cyclonic
+// (counter-clockwise in the northern hemisphere) sense, and a
+// painted high/low pressure pair at mid-latitude generates a
+// persistent jet rather than dissipating. Set to 0 for the
+// non-rotating reference simulation.
+param rotation  slider 0..0.2     step 0.001   default 0.02   label "ROTATION Ω"
 param hMin      slider 0.05..1    step 0.01    default 0.1    label "MIN DEPTH"
 param dyeFade   slider 0..0.05    step 0.0005  default 0.003  label "DYE FADE"
 param flowScale slider 0..1       step 0.01    default 0.3    label "DYE FLOW"
@@ -182,18 +192,44 @@ scenario dipole "Bulge + dimple dipole" {
   spot h at lon=0.4,  lat=0, radius=0.2, amount=-0.7
 }
 
+scenario cyclones "Cyclones (rotation comparison)" {
+  // Three identical bulges along a north-south axis: equator, mid-
+  // latitude, near-pole. With rotation=0 they all release as
+  // identical symmetric ring waves. With rotation>0 the equatorial
+  // bulge still releases symmetrically (f=0 there), the mid-
+  // latitude bulge twists into a cyclonic spiral, and the polar
+  // bulge spins up tightly into a localized vortex. Side-by-side
+  // demonstration that one parameter changes everything about the
+  // dynamics.
+  set h = 1
+  set m = vec2(0, 0)
+  for each cell {
+    // Faint background dye so the spirals are visible from frame 1.
+    set dye = sin(lon * 5) * 0.4 + 0.5
+  }
+  spot h at lon=0, lat=-1.2, radius=0.18, amount=2     // near south pole
+  spot h at lon=0, lat=0,    radius=0.18, amount=2     // equator
+  spot h at lon=0, lat=1.2,  radius=0.18, amount=2     // near north pole
+}
+
 step {
   // Stage 1 — Momentum.
   //
-  // ∂m/∂t = -g·h·∇h - friction·m
+  // ∂m/∂t = -g·h·∇h - friction·m + f·k̂×m
   //
-  // gradient(h) returns the height gradient as a vec2 in the cell's
-  // tangent frame (east in .x, north in .y). Multiplying by h gives
-  // the pressure-gradient force per unit area; the negative sign
-  // means flow goes downhill. Linear friction damps the momentum
-  // toward zero — small values (~0.02) just shave off the highest
-  // frequencies; larger values bleed energy fast and the waves stop
-  // ringing.
+  // Three forces:
+  //   - pressure gradient: -g·h·∇h drives flow downhill. gradient(h)
+  //     returns the height gradient as a vec2 in the cell's tangent
+  //     frame (east in .x, north in .y).
+  //   - Coriolis: f·k̂×m, where f = 2·Ω·sin(lat) is the Coriolis
+  //     parameter and k̂ is the local outward normal. In the
+  //     east-north tangent basis this rotates m by 90°, with a
+  //     latitude-dependent rate. At the equator (lat=0) f=0 and
+  //     the term vanishes — Coriolis only acts on flows away from
+  //     the equator. Northern hemisphere f>0 deflects rightward;
+  //     southern f<0 deflects leftward. Set rotation=0 to disable.
+  //   - linear friction: -friction·m bleeds energy slowly so waves
+  //     don't ring forever. Larger values damp faster.
   stage momentum "Momentum step" {
     reads h, m
     writes m
@@ -201,7 +237,15 @@ step {
       let grad = gradient(h)
       // -g·h·∇h, expanded so the type checker sees vec2 - vec2 cleanly.
       let pressure = vec2(-gravity * h * grad.x, -gravity * h * grad.y)
-      add m = (pressure - m * friction) * dt * rate
+      // f·k̂×m. With m = (m.x·east + m.y·north), k̂×m rotates 90°
+      // around the local vertical: east→north, north→-east. The
+      // standard Coriolis force is -2Ω×v, which in this basis
+      // becomes (f·m.y, -f·m.x). Northern hemisphere f>0 sends
+      // northward flow rightward (eastward) — the cyclonic-spinup
+      // signature.
+      let f = 2 * rotation * sin(lat)
+      let coriolis = vec2(f * m.y, -f * m.x)
+      add m = (pressure + coriolis - m * friction) * dt * rate
     }
   }
 
