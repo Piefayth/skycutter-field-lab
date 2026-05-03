@@ -32,7 +32,7 @@
 
 import { MATH_FUNCTIONS } from "./dsl-spec.mjs";
 
-const KNOWN_TYPES = new Set(["f32", "vec2", "bool", "unknown"]);
+const KNOWN_TYPES = new Set(["f32", "vec2", "vec3", "bool", "unknown"]);
 
 // Registry-backed math-fn dispatch. Each MATH_FUNCTIONS entry's
 // argTypes / returnType drives the per-call type check; adding a new
@@ -82,6 +82,7 @@ export function typecheckV2(schema) {
 // on write). vec2 stays vec2; everything else f32.
 function expressionTypeOf(declaredType) {
   if (declaredType === "vec2") return "vec2";
+  if (declaredType === "vec3") return "vec3";
   return "f32";
 }
 
@@ -125,7 +126,7 @@ function typecheckScenarioOrStamp(decl, ctx, kind) {
         const expr = action[key];
         if (!expr) continue;
         const t = typeOfExpr(expr, new Map(), ctx, `${label} ${action.type} ${key}`);
-        if (t === "vec2") throwTypeError(`${label} ${action.type} ${key}: expected scalar, got vec2`);
+        if (t === "vec2" || t === "vec3") throwTypeError(`${label} ${action.type} ${key}: expected scalar, got ${t}`);
         if (t === "bool") throwTypeError(`${label} ${action.type} ${key}: expected scalar, got bool`);
       }
       // The `amount` expression must match the targeted field's type.
@@ -340,6 +341,10 @@ function typeOfMember(ast, locals, ctx, label) {
     if (ast.prop === "x" || ast.prop === "y") return "f32";
     throwTypeError(`${label}: vec2 has no member "${ast.prop}" (only .x / .y)`);
   }
+  if (objType === "vec3") {
+    if (ast.prop === "x" || ast.prop === "y" || ast.prop === "z") return "f32";
+    throwTypeError(`${label}: vec3 has no member "${ast.prop}" (only .x / .y / .z)`);
+  }
   // Brush.* / similar struct-shaped builtins are scalar-component
   // accesses; we don't model them yet, fall through.
   return "unknown";
@@ -378,11 +383,13 @@ function typeOfBinary(ast, locals, ctx, label) {
   }
 
   if (op === "==" || op === "!=" || op === "<" || op === ">" || op === "<=" || op === ">=") {
-    if (leftType === "vec2" || rightType === "vec2") {
-      throwTypeError(`${label}: comparison \`${op}\` is not defined on vec2 (compare per-component instead, e.g. \`v.x ${op} ...\`)`);
-    }
-    if (leftType === "bool" || rightType === "bool") {
-      throwTypeError(`${label}: comparison \`${op}\` is not defined on bool`);
+    for (const t of [leftType, rightType]) {
+      if (t === "vec2" || t === "vec3") {
+        throwTypeError(`${label}: comparison \`${op}\` is not defined on ${t} (compare per-component instead, e.g. \`v.x ${op} ...\`)`);
+      }
+      if (t === "bool") {
+        throwTypeError(`${label}: comparison \`${op}\` is not defined on bool`);
+      }
     }
     return "bool";
   }
@@ -391,15 +398,22 @@ function typeOfBinary(ast, locals, ctx, label) {
   if (leftType === "bool" || rightType === "bool") {
     throwTypeError(`${label}: arithmetic \`${op}\` is not defined on bool`);
   }
-  // vec2 op vec2 → vec2
+  // Mixing vec2 and vec3 doesn't broadcast cleanly — reject explicitly.
+  if ((leftType === "vec2" && rightType === "vec3") || (leftType === "vec3" && rightType === "vec2")) {
+    throwTypeError(`${label}: cannot mix vec2 and vec3 in \`${op}\` — extract components or use a uniform vec type`);
+  }
+  // Same-vec arithmetic.
   if (leftType === "vec2" && rightType === "vec2") return "vec2";
-  // vec2 op f32 / f32 op vec2 → vec2 (broadcast — WGSL supports both
-  // for + - * /)
+  if (leftType === "vec3" && rightType === "vec3") return "vec3";
+  // Vec * scalar / scalar * vec broadcasts (WGSL supports both for + - * /).
   if (leftType === "vec2" && rightType === "f32") return "vec2";
   if (leftType === "f32" && rightType === "vec2") return "vec2";
+  if (leftType === "vec3" && rightType === "f32") return "vec3";
+  if (leftType === "f32" && rightType === "vec3") return "vec3";
   if (leftType === "f32" && rightType === "f32") return "f32";
-  // unknown propagates
+  // unknown propagates the vec type if exactly one side is known.
   if (leftType === "vec2" || rightType === "vec2") return "vec2";
+  if (leftType === "vec3" || rightType === "vec3") return "vec3";
   return "unknown";
 }
 

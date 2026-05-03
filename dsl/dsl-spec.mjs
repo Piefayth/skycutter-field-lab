@@ -390,6 +390,20 @@ export const MATH_FUNCTIONS = [
     example: "field wind: vec2\nstage compute_wind {\n  reads pressure\n  writes wind\n  cell {\n    set wind = vec2(-grad_e, -grad_n) * strength\n  }\n}",
   },
   {
+    name: "vec3",
+    target: null,
+    arity: [3],
+    argTypes: SCALAR3,    returnType: "vec3",
+    wgsl: (args) => `vec3<f32>(${args[0]}, ${args[1]}, ${args[2]})`,
+    js: (args, cell, helpers) => helpers.makeVec3
+      ? helpers.makeVec3(args[0], args[1], args[2])
+      : { __vec3: true, x: Number(args[0]), y: Number(args[1]), z: Number(args[2]) },
+    importNamespace: "core",
+    signature: "vec3(x, y, z)",
+    doc: "Constructs a vec3 from three scalars. Pair with a `field name: vec3` declaration for true 3-vector fields — typical use cases are 3D-embedded vectors (Bx/By/Bz of a magnetic field, surface normals, RGB color packed as a single field). Storage is vec4-padded on the GPU (the .w slot is unused, 16 bytes per cell); the cell-expression view exposes only x/y/z. WGSL-native arithmetic for vec3 + vec3 / vec3 * scalar / etc; `length(v)` returns magnitude.",
+    example: "field B: vec3\nstage induction {\n  reads B\n  writes B\n  cell {\n    set B = vec3(B.x + dB.x, B.y + dB.y, B.z + dB.z)\n  }\n}",
+  },
+  {
     name: "length",
     target: "Math.hypot",
     arity: [1],
@@ -768,7 +782,7 @@ export const DECL_DIRECTIVES = [
   {
     name: "field",
     signature: "field NAME: TYPE [derived]",
-    doc: "Declares per-cell state. TYPE is `f32`, `vec2`, `u32`, or `bool`; `vec3` is reserved but not runtime-backed yet. `u32` and `bool` use integer storage and surface as scalar 0/1-style values in expressions; writes round/cast back to `u32`. Optional `derived` annotation marks the field as computed-by-stage — derived fields must be written by ≥1 stage and cannot be written by scenarios or stamps. History is inferred: any `field@prev` read anywhere allocates triple-buffer rotation for that field.",
+    doc: "Declares per-cell state. TYPE is `f32`, `vec2`, `vec3`, `u32`, or `bool`. `u32` and `bool` use integer storage and surface as scalar 0/1-style values in expressions; writes round/cast back to `u32`. `vec3` fields use vec4-aligned storage (16 bytes/cell) but the cell-expression view exposes only x/y/z; gradient/divergence are NOT defined on vec3 (they're tangent-space ops). Optional `derived` annotation marks the field as computed-by-stage — derived fields must be written by ≥1 stage and cannot be written by scenarios or stamps. History is inferred: any `field@prev` (or `field@prev(N)`) read anywhere allocates a (max-N + 2)-buffer rotation for that field.",
     example: "field u: f32\nfield wind: vec2\nfield state: u32\nfield abs_u: f32 derived",
   },
   {
