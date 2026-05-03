@@ -53,6 +53,56 @@ export function expressionCstToAst(node) {
   }
 }
 
+export function cellActionsCstToAst(cst, cellBlock) {
+  const statements = [...(cellBlock?.statements ?? [])]
+    .filter((stmt) => ["let", "set", "add", "when"].includes(stmt.keyword))
+    .sort((a, b) => a.from - b.from);
+  return statements.map((stmt) => cellActionCstToAst(cst, stmt));
+}
+
+export function cellActionCstToAst(cst, stmt) {
+  if (!stmt || stmt.type !== "Statement") throw new Error("v2 CST projection: missing cell action statement");
+  if (stmt.keyword === "let") {
+    if (!stmt.parts.local?.name) throw new Error("v2 CST projection: incomplete let action");
+    return {
+      type: "let",
+      name: stmt.parts.local.name,
+      expr: expressionCstToAst(firstExpression(stmt)),
+    };
+  }
+  if (stmt.keyword === "set" || stmt.keyword === "add") {
+    if (!stmt.parts.target?.name) throw new Error(`v2 CST projection: incomplete ${stmt.keyword} action`);
+    return {
+      type: stmt.keyword,
+      field: stmt.parts.target.name,
+      expr: expressionCstToAst(firstExpression(stmt)),
+    };
+  }
+  if (stmt.keyword === "when") {
+    const whenBlock = findBlockForStatement(cst, stmt, "when");
+    return {
+      type: "when",
+      condition: expressionCstToAst(firstExpression(stmt)),
+      actions: cellActionsCstToAst(cst, whenBlock),
+    };
+  }
+  throw new Error(`v2 CST projection: unsupported cell action ${stmt.keyword}`);
+}
+
+function firstExpression(stmt) {
+  const expr = stmt.expressions?.[0]?.node;
+  if (!expr) throw new Error(`v2 CST projection: ${stmt.keyword} action is missing expression`);
+  return expr;
+}
+
+function findBlockForStatement(cst, stmt, keyword) {
+  const block = (cst?.blocks ?? [])
+    .filter((candidate) => candidate.keyword === keyword && candidate.from === stmt.from)
+    .sort((a, b) => a.openBrace - b.openBrace)[0];
+  if (!block) throw new Error(`v2 CST projection: missing ${keyword} block for statement`);
+  return block;
+}
+
 function projectMember(node) {
   if (!node.prop) throw new Error("v2 CST projection: incomplete member access");
   const object = expressionCstToAst(node.object);

@@ -1,4 +1,4 @@
-import { expressionCstToAst } from "./cst-to-ast-v2.mjs";
+import { cellActionsCstToAst, expressionCstToAst } from "./cst-to-ast-v2.mjs";
 import { parseDslCst } from "./cst-v2.mjs";
 import { parseV2 } from "./parse-v2.mjs";
 
@@ -33,6 +33,32 @@ test("CST expression projection matches parse-v2 for neighbor reductions", () =>
 
 test("CST expression projection matches parse-v2 for upstream coord reads", () => {
   assertProjectionParity("u@upstream(wind.x, wind.y, dt)");
+});
+
+test("CST cell-action projection matches parse-v2 for let/set/add/when", () => {
+  const source = `
+recipe "Projection"
+substrate geodesic frequency 16
+field u: f32
+field wind: vec2
+step {
+  stage s {
+    reads u, wind
+    writes u
+    cell {
+      let lap = sum n in neighbors { u@n - u }
+      add u = lap * 0.1
+      when u > 1 {
+        set u = clamp(u@prev, 0, 1)
+      }
+    }
+  }
+}`;
+  const expected = parseV2(source).stages[0].body.statements[0].actions;
+  const cst = parseDslCst(source);
+  const cellBlock = cst.blocks.find((block) => block.keyword === "cell");
+  const actual = cellActionsCstToAst(cst, cellBlock);
+  assertEq(actual, expected);
 });
 
 function assertProjectionParity(expr) {
