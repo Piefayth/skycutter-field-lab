@@ -83,26 +83,44 @@ export async function createGeodesicPreview({ scene, globe, frequency = 48, grid
 // =============================================================================
 
 const GLYPH_TEXTURE_SIZE = 128;
+const GLYPH_FONT = `bold ${Math.floor(GLYPH_TEXTURE_SIZE * 0.78)}px "Helvetica Neue", "Arial", sans-serif`;
+const GLYPH_OUTLINE_WIDTH = Math.floor(GLYPH_TEXTURE_SIZE * 0.10);  // ~13 px halo
 
-// Rasterize a character to a CanvasTexture. White-on-transparent so
-// the per-instance color tints it via fragment-shader multiply. Big
-// enough that mip-mapped renderings look clean at typical zoom; the
-// alphaTest discards the transparent surround.
-function rasterizeGlyph(char) {
-  if (typeof document === "undefined") return null;        // not in a browser
+// Rasterize a character to two CanvasTextures — fill (solid character)
+// and outline (stroked-only character with a wider line). Rendering
+// the outline behind the fill produces a "text with halo" effect
+// that reads cleanly against any tile color: outline provides
+// separation from the tile, fill provides the main visible character.
+//
+// Both textures are white-on-transparent so the per-instance color
+// tints them via the fragment-shader multiply.
+function rasterizeGlyphPair(char) {
+  if (typeof document === "undefined") return null;
+  return {
+    fill: rasterizeOne(char, { mode: "fill" }),
+    outline: rasterizeOne(char, { mode: "stroke" }),
+  };
+}
+
+function rasterizeOne(char, { mode }) {
   const canvas = document.createElement("canvas");
   canvas.width = GLYPH_TEXTURE_SIZE;
   canvas.height = GLYPH_TEXTURE_SIZE;
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, GLYPH_TEXTURE_SIZE, GLYPH_TEXTURE_SIZE);
-  // Pick a font size that fills most of the canvas without clipping
-  // wide characters. Bold weight makes thin characters readable at
-  // small render scales.
-  ctx.font = `bold ${Math.floor(GLYPH_TEXTURE_SIZE * 0.78)}px "Helvetica Neue", "Arial", sans-serif`;
-  ctx.fillStyle = "#ffffff";
+  ctx.font = GLYPH_FONT;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText(char, GLYPH_TEXTURE_SIZE / 2, GLYPH_TEXTURE_SIZE / 2);
+  if (mode === "stroke") {
+    ctx.lineWidth = GLYPH_OUTLINE_WIDTH;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "#ffffff";
+    ctx.strokeText(char, GLYPH_TEXTURE_SIZE / 2, GLYPH_TEXTURE_SIZE / 2);
+  } else {
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(char, GLYPH_TEXTURE_SIZE / 2, GLYPH_TEXTURE_SIZE / 2);
+  }
   const tex = new THREE.CanvasTexture(canvas);
   tex.minFilter = THREE.LinearMipmapLinearFilter;
   tex.magFilter = THREE.LinearFilter;
@@ -112,15 +130,13 @@ function rasterizeGlyph(char) {
 }
 
 function createGlyphLayer(scene, grid) {
-  const cache = new Map();             // char → { texture, mesh, material, geometry }
-  let activeChar = null;
+  // Cache per character: { textures: {fill, outline}, fillMesh,
+  // outlineMesh, geometries, materials }. Two meshes per character —
+  // outline drawn first (renderOrder 5), fill on top (renderOrder 6).
+  // Same per-instance matrix on both, different per-instance color.
+  const cache = new Map();
 
-  // Build a fresh InstancedMesh + texture for `char` and cache it.
-  // Reused across refreshes; only the per-instance matrices and
-  // colors change per tick.
-  function ensureMeshFor(char) {
-    if (cache.has(char)) return cache.get(char);
-    const texture = rasterizeGlyph(char);
+  function buildInstancedMesh(texture, label, renderOrder) {
     const geometry = new THREE.PlaneGeometry(1, 1);
     const material = new THREE.MeshBasicMaterial({
       map: texture,
@@ -139,10 +155,18 @@ function createGlyphLayer(scene, grid) {
     mesh.count = 0;
     mesh.frustumCulled = false;
     mesh.visible = false;
-    mesh.renderOrder = 5;
-    mesh.name = `geodesic-glyph-${char}`;
+    mesh.renderOrder = renderOrder;
+    mesh.name = `geodesic-glyph-${label}`;
     scene.add(mesh);
-    const slot = { texture, geometry, material, mesh };
+    return { mesh, geometry, material };
+  }
+
+  function ensureMeshFor(char) {
+    if (cache.has(char)) return cache.get(char);
+    const textures = rasterizeGlyphPair(char);
+    const outline = buildInstancedMesh(textures.outline, `${char}-outline`, 5);
+    const fill = buildInstancedMesh(textures.fill, `${char}-fill`, 6);
+    const slot = { char, textures, outline, fill };
     cache.set(char, slot);
     return slot;
   }
@@ -150,20 +174,23 @@ function createGlyphLayer(scene, grid) {
   return {
     populate(args) {
       const glyph = args.viewSpec?.glyph;
-      // Hide every cached mesh; we only show one at a time.
-      for (const slot of cache.values()) slot.mesh.visible = false;
-      activeChar = null;
+      for (const slot of cache.values()) {
+        slot.outline.mesh.visible = false;
+        slot.fill.mesh.visible = false;
+      }
       if (!glyph) return;
       const slot = ensureMeshFor(glyph.char);
-      activeChar = glyph.char;
       populateGlyphMesh(slot, args);
     },
     dispose() {
-      for (const { mesh, geometry, material, texture } of cache.values()) {
-        scene.remove(mesh);
-        geometry.dispose();
-        material.dispose();
-        texture?.dispose?.();
+      for (const slot of cache.values()) {
+        for (const sub of [slot.outline, slot.fill]) {
+          scene.remove(sub.mesh);
+          sub.geometry.dispose();
+          sub.material.dispose();
+        }
+        slot.textures?.fill?.dispose?.();
+        slot.textures?.outline?.dispose?.();
       }
       cache.clear();
     },
@@ -174,14 +201,16 @@ function createGlyphLayer(scene, grid) {
 // distance ≈ 2π / (5.5 × N) sphere-radians. Use that as the
 // base unit; `length=1` produces glyphs ~ one neighbor-spacing big.
 // Default length=0.5 → half a cell.
-// Per-instance matrix scratch. Reused across cells/calls to avoid
-// allocating fresh Matrix4s in the hot loop.
+// Per-instance scratch. Reused across cells/calls to avoid allocating
+// fresh Matrix4s and Colors in the hot loop.
 const _glyphMatrix = new THREE.Matrix4();
-const _glyphColor = new THREE.Color();
+const _fillColor = new THREE.Color();
+const _outlineColor = new THREE.Color();
 
 function populateGlyphMesh(slot, { grid, tileGeometry, fields = {}, viewSpec }) {
   const glyph = viewSpec.glyph;
-  const mesh = slot.mesh;
+  const fillMesh = slot.fill.mesh;
+  const outlineMesh = slot.outline.mesh;
 
   const tileColors = tileGeometry.getAttribute("color")?.array;
   const tileStarts = tileGeometry.userData.tileStarts;
@@ -258,26 +287,48 @@ function populateGlyphMesh(slot, { grid, tileGeometry, fields = {}, viewSpec }) 
     m[1] = lx_y; m[5] = ly_y; m[9]  = lz_y; m[13] = py;
     m[2] = lx_z; m[6] = ly_z; m[10] = lz_z; m[14] = pz;
     m[3] = 0;    m[7] = 0;    m[11] = 0;    m[15] = 1;
-    mesh.setMatrixAt(activeCount, _glyphMatrix);
+    fillMesh.setMatrixAt(activeCount, _glyphMatrix);
+    outlineMesh.setMatrixAt(activeCount, _glyphMatrix);
 
-    // Per-cell color: black on bright tiles, white on dark. Texture
-    // alpha gates the visible pixels; this just tints them.
+    // Color scheme: outline + fill, picked so glyphs read clearly
+    // against any tile color while picking up a chromatic
+    // family-resemblance to the cell.
+    //   Bright tile (luma > 0.55):
+    //     fill    = tile × 0.15   (very dark version of the tile hue)
+    //     outline = white         (provides separation around the dark fill)
+    //   Dark tile (luma <= 0.55):
+    //     fill    = tile × 0.5 + 0.5  (light version of tile hue)
+    //     outline = black             (separation under the bright fill)
+    //
+    // Net effect: a tinted glyph that matches the tile's hue family,
+    // wrapped in a high-contrast halo so it's always legible.
     let rT = 0, gT = 0, bT = 0;
     if (tileColors && tileStarts) {
       const v = tileStarts[cell] * 3;
       rT = tileColors[v]; gT = tileColors[v + 1]; bT = tileColors[v + 2];
     }
     const luma = 0.299 * rT + 0.587 * gT + 0.114 * bT;
-    const c = luma > 0.55 ? 0.05 : 0.97;
-    _glyphColor.setRGB(c, c, c);
-    mesh.setColorAt(activeCount, _glyphColor);
+    let fr, fg, fb, oc;
+    if (luma > 0.55) {
+      fr = rT * 0.15; fg = gT * 0.15; fb = bT * 0.15;
+      oc = 0.97;
+    } else {
+      fr = rT * 0.5 + 0.5; fg = gT * 0.5 + 0.5; fb = bT * 0.5 + 0.5;
+      oc = 0.03;
+    }
+    _fillColor.setRGB(fr, fg, fb);
+    _outlineColor.setRGB(oc, oc, oc);
+    fillMesh.setColorAt(activeCount, _fillColor);
+    outlineMesh.setColorAt(activeCount, _outlineColor);
 
     activeCount++;
   }
-  mesh.instanceMatrix.needsUpdate = true;
-  if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  mesh.count = activeCount;
-  mesh.visible = activeCount > 0;
+  for (const m of [fillMesh, outlineMesh]) {
+    m.instanceMatrix.needsUpdate = true;
+    if (m.instanceColor) m.instanceColor.needsUpdate = true;
+    m.count = activeCount;
+    m.visible = activeCount > 0;
+  }
 }
 
 function muteGlobeMaterial(globe) {
