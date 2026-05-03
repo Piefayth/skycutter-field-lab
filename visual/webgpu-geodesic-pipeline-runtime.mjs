@@ -34,12 +34,15 @@ export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGri
   const { stages, eventCounters } = compileWebGpuGeodesicPipeline(dsl);
   const consts = Object.fromEntries((dsl.constants ?? []).map((decl) => [decl.name, decl.value]));
   const planet = dsl.planet ?? {};
-  // Allocate the per-tick history buffer for every history-declared
-  // field. Recorded once at recipe load; the snapshot routine in
-  // runTick uses this list to copy current → history at tick boundary.
+  // Upgrade every history-declared field to 3-buffer rotation. The
+  // cell pass that writes the field deposits the new value into the
+  // `next` slot; rotateHistory at end-of-tick promotes next→current
+  // and demotes the old current→prev (visible to next tick's
+  // prev(field) reads).
   const historyFieldNames = (dsl.fields ?? [])
     .filter((decl) => (decl?.history ?? 0) > 0)
     .map((decl) => decl.name);
+  const historyFieldSet = new Set(historyFieldNames);
   for (const name of historyFieldNames) runtime.ensureHistory(name);
 
   return {
@@ -50,6 +53,16 @@ export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGri
     eventCounters,
     uploadState(state, names = fieldNames) {
       runtime.uploadState(state, names);
+    },
+    // Initialize the prev slot of every history field from its current
+    // value. Called by the recipe layer after preset apply so the
+    // first tick's prev() reads the freshly-initialized state rather
+    // than uninitialized GPU memory. Stamps DON'T walk this path —
+    // their asymmetry between current and prev IS the velocity-impulse
+    // mechanism (post-stamp prev = pre-stamp current; the difference
+    // becomes the wave's launch velocity).
+    initHistory() {
+      if (historyFieldNames.length) runtime.initHistory(historyFieldNames);
     },
     async readState(state, names = fieldNames) {
       await runtime.readState(state, names);
@@ -68,16 +81,21 @@ export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGri
     runTick(dt) {
       const params = getParams?.() ?? {};
       const frame = getFrame?.() ?? 0;
-      // Tick-boundary history snapshot. Done BEFORE any stage runs,
-      // so prev(field) reads the value as of the start of this tick
-      // throughout — per-pass swaps inside the loop don't disturb it.
-      if (historyFieldNames.length) runtime.snapshotHistory(historyFieldNames);
       for (const stage of stages) {
         const delayedCellSwaps = stage.passes.length > 1 && stage.passes.every((pass) => pass.kind === "cell");
         const fieldsToSwap = [];
         for (const pass of stage.passes) {
           if (pass.kind === "cell") {
             if (pass.eventCounter) runtime.resetEventCounter(pass.eventCounter.key);
+            // History-field writes never swap. The cell pass deposits
+            // u_{N+1} into `next`; the end-of-tick rotateHistory call
+            // promotes it to current. Swapping mid-tick would scramble
+            // the {prev, current, next} invariant the rotation depends
+            // on. The validator restricts history fields to a single
+            // cell-pass writer, so this branch is the only place a
+            // history field's `next` is written within a tick.
+            const isHistoryWrite = historyFieldSet.has(pass.field);
+            const swapAfter = isHistoryWrite ? false : !delayedCellSwaps;
             runtime.runCellPass({
               key: pass.key,
               source: pass.source,
@@ -86,7 +104,7 @@ export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGri
               prevReads: pass.prevReads ?? [],
               needsNeighbors: pass.needsNeighbors,
               eventCounter: pass.eventCounter,
-              swapAfter: !delayedCellSwaps,
+              swapAfter,
               uniforms: buildWebGpuGeodesicUniforms(pass.layout, {
                 dt,
                 frame,
@@ -96,7 +114,7 @@ export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGri
                 planet,
               }),
             });
-            if (delayedCellSwaps) fieldsToSwap.push(pass.field);
+            if (delayedCellSwaps && !isHistoryWrite) fieldsToSwap.push(pass.field);
           } else if (pass.kind === "diffuse") {
             runtime.runDiffuse({ field: pass.field, amount: evalUniformExpr(pass.amount, { params, consts, planet, dt, frame }) });
           } else if (pass.kind === "clamp") {
@@ -127,6 +145,11 @@ export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGri
         }
         if (delayedCellSwaps) runtime.swapFields([...new Set(fieldsToSwap)]);
       }
+      // End-of-tick rotation for history fields. The cell pass that
+      // wrote u this tick produced u_{N+1} in `next`; promote it to
+      // current and demote the previous current to prev (so next
+      // tick's prev(u) reads u_N, completing the leapfrog cycle).
+      if (historyFieldNames.length) runtime.rotateHistory(historyFieldNames);
     },
     dispose() {
       runtime.dispose();

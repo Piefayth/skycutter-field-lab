@@ -434,6 +434,10 @@ export function initRecipes({
     let gpuRunner = null;
     let gpuReady = false;
     let dirty = true;
+    // Set by markPresetApplied: on the next upload, also seed the
+    // history field's prev slot from current. Stamps DON'T set this —
+    // their asymmetry between current and prev is the velocity impulse.
+    let presetJustApplied = true;
     let failed = false;
     let reading = false;
     let disposed = false;
@@ -443,6 +447,14 @@ export function initRecipes({
       grid: deps.state.grid?.topology ?? null,
       markStateDirty() {
         dirty = true;
+      },
+      // Distinct from markStateDirty: signals that current state.fields
+      // came from preset apply rather than a stamp. The next runTick
+      // will copy current → prev for every history field so prev(u)
+      // reads u_0 on the first tick instead of uninitialized memory.
+      markPresetApplied() {
+        dirty = true;
+        presetJustApplied = true;
       },
       readFields(state, names) {
         void readBack(state, names).catch(handleReadbackError);
@@ -459,6 +471,10 @@ export function initRecipes({
           }
           if (dirty) {
             gpuRunner.uploadState(state);
+            if (presetJustApplied) {
+              gpuRunner.initHistory?.();
+              presetJustApplied = false;
+            }
             dirty = false;
           }
           gpuRunner.runTick(dt);

@@ -175,6 +175,48 @@ export function validateStages(stages, schema = {}) {
       .filter((decl) => (decl?.history ?? 0) > 0)
       .map((decl) => [decl.name, decl.history]),
   );
+  // History fields rotate through three buffers ({prev, current, next})
+  // exactly once per tick at the tick boundary. Any mid-tick swap
+  // would scramble that rotation; therefore a history field can be
+  // written by at most one stage per tick, and that stage may only
+  // write it via cell statements (diffuse / clamp / advect / wind /
+  // normalize all swap their target's buffers). Detect violations
+  // here so recipe authors get a clean error rather than an
+  // "Cannot swap history field" runtime explosion.
+  const historyWriters = new Map();
+  for (const stage of stages) {
+    for (const field of stage.writes ?? []) {
+      if (!imports.historyFields.has(field)) continue;
+      const prior = historyWriters.get(field);
+      if (prior) {
+        throw new Error(
+          `${stage.id}: history field "${field}" is written by multiple stages ` +
+          `("${prior}" and "${stage.id}") — fold the writes into a single stage so ` +
+          `the {prev, current, next} rotation stays consistent`,
+        );
+      }
+      historyWriters.set(field, stage.id);
+    }
+  }
+  for (const stage of stages) {
+    const stageHistoryWrites = (stage.writes ?? []).filter((field) => imports.historyFields.has(field));
+    if (stageHistoryWrites.length === 0) continue;
+    for (const statement of stage.body.statements ?? []) {
+      if (statement.type === "cell" || statement.type === "each" || statement.type === "event") continue;
+      // Any statement that targets a history field with a non-cell
+      // primitive (the ones that buffer-swap their write) breaks the
+      // single-write-per-tick rotation invariant.
+      const target = statement.field;
+      if (target && stageHistoryWrites.includes(target)) {
+        throw new Error(
+          `${stage.id}: history field "${target}" cannot be written by ${statement.type} ` +
+          `(history fields rotate at the tick boundary; mid-tick swaps from diffuse/clamp/` +
+          `advect/wind/normalize would scramble the rotation). Fold the operation into the ` +
+          `cell { ... } that produces the new value.`,
+        );
+      }
+    }
+  }
   const availableDeclaredFields = new Set();
   for (const stage of stages) {
     if (ids.has(stage.id)) throw new Error(`Duplicate stage id: ${stage.id}`);

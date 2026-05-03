@@ -403,6 +403,67 @@ source w history 1
   assert(threw && threw.includes("history is only valid on"), `expected source-rejection error; got: ${threw}`);
 });
 
+test("validator rejects history field written by multiple stages", () => {
+  let threw = null;
+  try {
+    compileDsl(`
+recipe "Hist"
+use sim cell, clamp
+use clock dt, frame, prev
+use geo px, py, pz
+field u history 1
+
+stage step "Step" {
+  reads u
+  writes u
+  cell {
+    add u = (u - prev(u)) * dt
+  }
+}
+
+stage clip "Clip" {
+  reads u
+  writes u
+  clamp u -1 1
+}
+`);
+  } catch (error) {
+    threw = error.message;
+  }
+  assert(
+    threw && threw.includes("written by multiple stages"),
+    `expected multi-writer error; got: ${threw}`,
+  );
+});
+
+test("validator rejects history field written by non-cell primitive", () => {
+  let threw = null;
+  try {
+    compileDsl(`
+recipe "Hist"
+use sim cell, clamp
+use clock dt, frame, prev
+use geo px, py, pz
+field u history 1
+
+stage step "Step" {
+  reads u
+  writes u
+  cell {
+    add u = (u - prev(u)) * dt
+  }
+  clamp u -1 1
+}
+`);
+  } catch (error) {
+    threw = error.message;
+  }
+  assert(
+    threw && threw.includes("cannot be written by clamp"),
+    `expected non-cell-write error; got: ${threw}`,
+  );
+});
+
 test("WGSL compiler emits f_<name>_prev binding for prev() reads", () => {
   const recipe = compileDsl(`
 recipe "Hist"

@@ -96,7 +96,11 @@ ui.viewSelect.addEventListener("change", () => updateAll({ force: true }));
 
 function initPreset(name) {
   recipes.applyPreset?.(state, name);
-  getRunner()?.markStateDirty?.();
+  // Preset apply, not a stamp: signal so the runner seeds history
+  // fields (prev := current) before the first tick. markStateDirty
+  // alone would leave prev pointing at uninitialized memory.
+  const runner = getRunner();
+  (runner?.markPresetApplied ?? runner?.markStateDirty)?.call(runner);
   simAccumulator = 0;
   setFrame(state.frame);
   metrics.resetActivityHistory();

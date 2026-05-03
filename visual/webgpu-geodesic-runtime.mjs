@@ -65,95 +65,135 @@ export class WebGpuGeodesicRuntime {
   ensureField(name) {
     if (!name) throw new Error("field name required");
     if (this.fields.has(name)) return this.fields.get(name);
+    // Non-history fields use 2-buffer ping-pong: index toggles each
+    // swap, current = buffers[index], next = buffers[1-index]. History
+    // fields upgrade to a 3-buffer rotation in ensureHistory below.
     const entry = {
       buffers: [
         this.device.createBuffer({ size: this.byteLength, usage: fieldUsage() }),
         this.device.createBuffer({ size: this.byteLength, usage: fieldUsage() }),
       ],
+      history: false,
       index: 0,
-      // Allocated on demand for history-declared fields; null for the
-      // common case. Holds the field's value as of the last tick
-      // boundary — read by `prev(field)` in cell shaders.
-      historyBuffer: null,
+      prevIdx: 0,
+      currentIdx: 0,
+      nextIdx: 0,
     };
     this.fields.set(name, entry);
     return entry;
   }
 
-  // Allocate (idempotently) the per-tick history buffer for a field.
-  // Returns the buffer. Called by the pipeline runtime at recipe load
-  // for every field declared with `history N >= 1`.
+  // Upgrade a field to history mode: allocate a third buffer and
+  // switch from 2-buffer ping-pong to 3-buffer {prev, current, next}
+  // rotation. Called by the pipeline runtime at recipe load for every
+  // field declared with `history N >= 1`. Idempotent — calling twice
+  // is a no-op.
+  //
+  // Buffer roles:
+  //   prev    — value as of last tick (read by `prev(field)`)
+  //   current — value as of start of this tick (read by bare ident)
+  //   next    — written by the cell pass; promoted at end of tick
+  //
+  // History fields are NEVER swap()-ed within a tick; rotateHistory()
+  // is the only way their indices move. The validator enforces this
+  // by restricting history-field writes to a single cell-pass stage.
   ensureHistory(name) {
     const field = this.ensureField(name);
-    if (!field.historyBuffer) {
-      field.historyBuffer = this.device.createBuffer({
-        size: this.byteLength,
-        usage: fieldUsage(),
-      });
-    }
-    return field.historyBuffer;
+    if (field.history) return field;
+    field.buffers.push(
+      this.device.createBuffer({ size: this.byteLength, usage: fieldUsage() }),
+    );
+    field.history = true;
+    field.prevIdx = 0;
+    field.currentIdx = 1;
+    field.nextIdx = 2;
+    return field;
   }
 
   historyBuffer(name) {
     const field = this.fields.get(name);
-    if (!field?.historyBuffer) {
+    if (!field?.history) {
       throw new Error(`field ${name} was not allocated with history`);
     }
-    return field.historyBuffer;
-  }
-
-  // Copy each named field's current buffer into its history buffer in
-  // a single GPU command submission. Called at the tick boundary —
-  // before any stage runs — so `prev(field)` reads the value that was
-  // current at the start of the tick, regardless of how many per-pass
-  // swaps happen during the tick.
-  snapshotHistory(names = []) {
-    if (!names.length) return;
-    const encoder = this.device.createCommandEncoder();
-    let didCopy = false;
-    for (const name of names) {
-      const field = this.fields.get(name);
-      if (!field?.historyBuffer) continue;
-      encoder.copyBufferToBuffer(
-        field.buffers[field.index], 0,
-        field.historyBuffer, 0,
-        this.byteLength,
-      );
-      didCopy = true;
-    }
-    if (didCopy) this.device.queue.submit([encoder.finish()]);
+    return field.buffers[field.prevIdx];
   }
 
   currentBuffer(name) {
     const field = this.ensureField(name);
-    return field.buffers[field.index];
+    return field.history ? field.buffers[field.currentIdx] : field.buffers[field.index];
   }
 
   nextBuffer(name) {
     const field = this.ensureField(name);
-    return field.buffers[1 - field.index];
+    return field.history ? field.buffers[field.nextIdx] : field.buffers[1 - field.index];
   }
 
   swap(name) {
     const field = this.ensureField(name);
-    field.index = 1 - field.index;
+    if (field.history) {
+      // History fields rotate exactly once per tick at end-of-tick;
+      // a per-pass swap would either lose `prev` or shuffle the rotation
+      // into an inconsistent state. The validator forbids the recipe
+      // shape that would land here, so this is a defensive guardrail.
+      throw new Error(`Cannot swap history field ${name}; rotation happens at tick boundary`);
+    }
+    field.index ^= 1;
   }
 
   swapFields(names = []) {
     for (const name of names) this.swap(name);
   }
 
+  // End-of-tick rotation for history fields. The cell pass that wrote
+  // u this tick deposited the new value into nextBuffer. Promote that
+  // to current; demote the old current to prev (now u_{N-1} from the
+  // viewpoint of the next tick); recycle the old prev as scratch for
+  // the next tick's write.
+  rotateHistory(names = []) {
+    for (const name of names) {
+      const field = this.fields.get(name);
+      if (!field?.history) continue;
+      const oldPrev = field.prevIdx;
+      field.prevIdx = field.currentIdx;
+      field.currentIdx = field.nextIdx;
+      field.nextIdx = oldPrev;
+    }
+  }
+
   uploadField(name, values) {
     if (!values) return;
     const field = this.ensureField(name);
-    this.device.queue.writeBuffer(field.buffers[field.index], 0, values.buffer, values.byteOffset, values.byteLength);
-    // Initialize history slot to match. After preset apply / paint /
-    // any direct upload, the next-tick prev() should see this value
-    // rather than the stale previous frame's data — otherwise the
-    // first tick after init produces an artificial jump.
-    if (field.historyBuffer) {
-      this.device.queue.writeBuffer(field.historyBuffer, 0, values.buffer, values.byteOffset, values.byteLength);
+    const target = field.history ? field.buffers[field.currentIdx] : field.buffers[field.index];
+    this.device.queue.writeBuffer(target, 0, values.buffer, values.byteOffset, values.byteLength);
+    // Note: we do NOT copy into prev for history fields here.
+    // uploadField is hit on every tick (from stamp/paint markStateDirty
+    // paths as well as preset apply). Mirroring into prev every time
+    // would erase the velocity impulse a stamp creates — splash
+    // semantics would become "translate the medium" by accident.
+    // History prev-init is a separate explicit step (initHistory)
+    // called only after preset apply.
+  }
+
+  // Force-copy each history field's current buffer into its prev
+  // buffer right now. Use after preset apply so prev(u) reads the
+  // initialized value on the first tick rather than uninitialized GPU
+  // memory. Stamps deliberately bypass this path: their asymmetry
+  // between current and prev is the velocity-impulse mechanism.
+  initHistory(names = []) {
+    if (!names.length) return;
+    const encoder = this.device.createCommandEncoder();
+    let didCopy = false;
+    for (const name of names) {
+      const field = this.fields.get(name);
+      if (!field?.history) continue;
+      encoder.copyBufferToBuffer(
+        field.buffers[field.currentIdx], 0,
+        field.buffers[field.prevIdx], 0,
+        this.byteLength,
+      );
+      didCopy = true;
     }
+    if (didCopy) this.device.queue.submit([encoder.finish()]);
   }
 
   uploadState(state, names = Object.keys(state?.fields ?? {})) {

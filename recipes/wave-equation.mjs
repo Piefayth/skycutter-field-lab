@@ -172,18 +172,13 @@ stage propagate "Leapfrog wave step" {
     // Damping term: γ × (u − u_prev). Subtracted from the update so
     // it always opposes the local velocity.
     let damp = damping * (u - prev(u))
-    set u = 2 * u - prev(u) + speed * speed * lap - damp
+    let raw = 2 * u - prev(u) + speed * speed * lap - damp
+    // Inline clamp keeps a CFL-violating speed from blowing up the
+    // GPU buffer with NaN; saturation reads as a visible flat patch
+    // rather than a silent black sphere. History fields can only be
+    // written by one stage per tick, so the clamp folds in here.
+    set u = clamp(raw, -2, 2)
   }
-}
-
-stage clampSafe "Clamp to safe envelope" {
-  reads u
-  writes u
-  // If the user pushes speed past the CFL bound the integrator
-  // diverges; this clamp keeps NaN from poisoning the GPU buffer
-  // and makes the explosion a visible saturation rather than a
-  // silent black sphere.
-  clamp u -2 2
 }
 `;
 
