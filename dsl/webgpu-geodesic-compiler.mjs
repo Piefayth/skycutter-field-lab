@@ -985,9 +985,18 @@ function emitReduction(node, ctx, statements) {
   // cell-centered reductions read multiple fields per neighbor in one
   // pass — `sum n in neighbors { u@n + v@n - u - v }` becomes
   // bindings = [{name: _n_u, field: u}, {name: _n_v, field: v}].
+  //
+  // Each binding's WGSL type matches the field's declared type, so
+  // a vec2 field surfaces as `vec2<f32>` per-neighbor and downstream
+  // member access (`heading@n.x` → `_n_heading.x`) compiles. Without
+  // the per-field type lookup the bound local was always emitted as
+  // `f32` and any vec2 field with a `.x`/`.y` access in the body
+  // produced "expected f32, got vec2" at WGSL parse time.
+  const fieldTypes = ctx.layout?.fieldTypes ?? {};
   statements.push(`    let ${neighborIdx}: u32 = u32(neighbors[cell * 6u + ${slot}]);`);
   for (const b of bindings) {
-    statements.push(`    let ${b.name}: f32 = f_${b.field}[${neighborIdx}];`);
+    const wgslType = wgslElemType(fieldTypes[b.field] ?? "f32");
+    statements.push(`    let ${b.name}: ${wgslType} = f_${b.field}[${neighborIdx}];`);
   }
   if (node.op === "sum") {
     statements.push(`    ${accName} = ${accName} + (${bodyWgsl});`);

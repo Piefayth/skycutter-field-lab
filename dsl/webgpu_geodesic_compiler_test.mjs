@@ -317,6 +317,38 @@ step {
     "vec2(...) call lowers to WGSL native constructor");
 });
 
+test("neighbor reduction over vec2 field component emits per-neighbor vec2 local", () => {
+  // Regression: emitReduction hardcoded the per-neighbor binding's
+  // WGSL type as f32, so a body like `mean n in neighbors {
+  // heading@n.x }` over a vec2 field produced
+  // `let _n_heading: f32 = f_heading[idx]` where `f_heading` is
+  // actually `array<vec2<f32>>` — WGSL parse error at member access.
+  const recipe = compileV2(`
+recipe "Vicsek"
+substrate geodesic frequency 16
+field heading: vec2
+
+step {
+  stage align "Align" {
+    reads heading
+    writes heading
+    cell {
+      let mx = mean n in neighbors { heading@n.x }
+      let my = mean n in neighbors { heading@n.y }
+      set heading = vec2(mx, my)
+    }
+  }
+}
+`);
+  const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
+  assert(pass.source.includes("let _n_heading: vec2<f32> = f_heading["),
+    "per-neighbor binding for a vec2 field must be typed as vec2<f32>");
+  assert(pass.source.includes("_n_heading.x"),
+    "WGSL must access .x on the typed local for the .x component reduction");
+  assert(pass.source.includes("_n_heading.y"),
+    "WGSL must access .y on the typed local for the .y component reduction");
+});
+
 test("gradient(scalarField) emits a per-field tangent-frame helper + stencil helpers", () => {
   const recipe = compileV2(`
 recipe "WindCell"
