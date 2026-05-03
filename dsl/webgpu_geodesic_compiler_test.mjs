@@ -436,6 +436,50 @@ step {
     "bool field writes through the same u32(round) cast");
 });
 
+test("bool expression assignment to integer storage lowers through 0/1 select", () => {
+  const recipe = compileV2(`
+recipe "Bool write"
+substrate geodesic frequency 16
+field state: u32
+field alive: bool
+
+step {
+  stage s "Threshold" {
+    reads state, alive
+    writes alive
+    cell {
+      set alive = state > 2
+    }
+  }
+}
+`);
+  const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
+  assert(pass.source.includes("outValue = select(0.0, 1.0, (v_state > 2.0));"),
+    "bool RHS assigned to bool/u32 storage should become an f32 0/1 value");
+});
+
+test("boolean toggle assignment to integer storage lowers through 0/1 select", () => {
+  const recipe = compileV2(`
+recipe "Bool toggle write"
+substrate geodesic frequency 16
+field alive: bool
+param enabled toggle default true label "ENABLED"
+
+step {
+  stage s "Toggle" {
+    reads alive
+    writes alive
+    cell {
+      set alive = enabled
+    }
+  }
+}
+`);
+  const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
+  assert(pass.source.includes("outValue = select(0.0, 1.0, (params.p_enabled != 0.0));"),
+    "boolean params assigned to bool/u32 storage should become f32 0/1 values");
+});
+
 test("MATH_FUNCTIONS registry drives all consumers (smoke)", async () => {
   // Each MATH_FUNCTIONS entry should self-validate: the WGSL emitter,
   // the JS init runtime, and the type checker all dispatch through
@@ -657,6 +701,31 @@ step {
     "slope must be bound as array<vec2<f32>>");
   assert(pass.source.includes("v_slope.x") && pass.source.includes("v_slope.y"),
     "@upstream args must reference the typed v_slope local");
+});
+
+test("@upstream inside when body still emits upstream helper", () => {
+  const recipe = compileV2(`
+recipe "Conditional upstream"
+substrate geodesic frequency 16
+field u: f32
+field wind: vec2
+
+step {
+  stage s {
+    reads u, wind
+    writes u
+    cell {
+      when u > 0 {
+        set u = u@upstream(wind.x, wind.y, dt)
+      }
+    }
+  }
+}
+`);
+  const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
+  assert(pass.source.includes("fn _upstream_u("), "conditional upstream read must emit helper function");
+  assert(pass.source.includes("_upstream_u(cell, v_wind.x, v_wind.y, params.dt)"),
+    "conditional body should call the emitted upstream helper");
 });
 
 test("validator rejects unknown identifier in @upstream coord arguments", () => {

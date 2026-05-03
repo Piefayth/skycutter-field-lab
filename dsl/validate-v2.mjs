@@ -40,6 +40,7 @@ export function validateV2(schema) {
   validateExplicitPreviousReads(schema);
   validateImportsOnSchema(schema);
   validateInitExpressions(schema);
+  validateUpstreamCoordArgs(schema);
   validateRenderDecls(schema);
   // Type checking runs last: it relies on identifier resolution
   // (declared fields, params, etc.) being well-formed, which the
@@ -47,6 +48,65 @@ export function validateV2(schema) {
   // wrong-shape errors that used to surface only at WGSL emit time
   // with cryptic shader compile messages.
   typecheckV2(schema);
+}
+
+// =============================================================================
+// Coordinate-query composition rules
+// =============================================================================
+
+function validateUpstreamCoordArgs(schema) {
+  for (const stage of schema.stages ?? []) {
+    for (const stmt of stage.body?.statements ?? []) {
+      if (stmt.type !== "cell") continue;
+      for (const action of stmt.actions ?? []) {
+        walkUpstreamExpr(action, `stage "${stage.id}"`);
+      }
+    }
+  }
+  for (const metric of schema.metrics ?? []) {
+    if (metric.body) walkUpstreamExpr(metric.body, `metric "${metric.id}"`);
+    if (metric.predicate) walkUpstreamExpr(metric.predicate, `metric "${metric.id}" where`);
+  }
+}
+
+function walkUpstreamExpr(ast, label) {
+  if (!ast || typeof ast !== "object") return;
+  if (ast.type === "CoordRead" && ast.coord?.kind === "upstream") {
+    const coordLabel = `${label}: ${ast.field}@upstream`;
+    rejectStencilInUpstreamArg(ast.coord.velX, coordLabel, "velX");
+    rejectStencilInUpstreamArg(ast.coord.velY, coordLabel, "velY");
+    rejectStencilInUpstreamArg(ast.coord.dt, coordLabel, "dt");
+  }
+  for (const value of Object.values(ast)) {
+    if (Array.isArray(value)) {
+      for (const child of value) walkUpstreamExpr(child, label);
+    } else if (value && typeof value === "object") {
+      walkUpstreamExpr(value, label);
+    }
+  }
+}
+
+function rejectStencilInUpstreamArg(ast, label, argName) {
+  if (!ast || typeof ast !== "object") return;
+  if (ast.type === "NeighborReduce") {
+    throw new Error(`${label}: ${argName} cannot contain a neighbor reduction; compute it into a field first, then read that field here`);
+  }
+  if (ast.type === "CoordRead") {
+    throw new Error(`${label}: ${argName} cannot contain a coordinate read; compute nested sampling into a field first, then read that field here`);
+  }
+  if (ast.type === "Call" && ast.callee?.type === "Identifier") {
+    const name = ast.callee.name;
+    if (name === "gradient" || name === "divergence") {
+      throw new Error(`${label}: ${argName} cannot contain ${name}(...); compute it into a field first, then read that field here`);
+    }
+  }
+  for (const value of Object.values(ast)) {
+    if (Array.isArray(value)) {
+      for (const child of value) rejectStencilInUpstreamArg(child, label, argName);
+    } else if (value && typeof value === "object") {
+      rejectStencilInUpstreamArg(value, label, argName);
+    }
+  }
 }
 
 // =============================================================================

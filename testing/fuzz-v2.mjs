@@ -28,11 +28,10 @@
 //   - The first field is always `f32` to guarantee something
 //     scalar-shaped to compute against (metrics, views).
 //   - Scope is intentionally narrower than the full grammar — `@prev`
-//     and `@upstream` are deliberately excluded (their cross-stage
-//     constraints — single-writer-per-step, reads-before-writes —
-//     are tangled enough that enforcing them in the generator
-//     reproduces the validator's complexity). Targeted strategies
-//     for those constructs are worth their own subgenerator.
+//     is still narrower than the full grammar, but it deliberately
+//     touches the v2-heavy surfaces that have had bugs historically:
+//     `@prev`, `@upstream`, vec2 stencil helpers, derived fields,
+//     stamps, and expr views.
 // =============================================================================
 
 import { compileV2 } from "../dsl/compile-v2.mjs";
@@ -78,6 +77,16 @@ function genNumericLeaf(rng) {
   return round(rng() * 4 - 1).toString();
 }
 
+function genSimpleScalarLeaf(ctx, scope) {
+  const leaves = [
+    ...scope.scalarReads,
+    ...ctx.params.map(p => p.name),
+    ...ctx.consts.map(c => c.name),
+  ];
+  if (leaves.length === 0 || maybe(ctx.rng, 0.35)) return genNumericLeaf(ctx.rng);
+  return pick(ctx.rng, leaves);
+}
+
 const MATH_FUNCS_1 = ["sin", "cos", "exp", "abs", "sqrt", "wrapAngle"];
 const MATH_FUNCS_2 = ["pow", "atan2", "min", "max"];
 const BIN_OPS = ["+", "-", "*", "/"];
@@ -95,6 +104,7 @@ class FuzzCtx {
     this.params = [];     // [{ name }]
     this.consts = [];     // [{ name, value }]
     this.palettes = [];
+    this.derivedField = null;
   }
 
   scalarFields() { return this.fields.filter(f => f.type === "f32"); }
@@ -191,6 +201,15 @@ function genCellExpr(ctx, scope, depth = 0) {
   // validator rejects).
   if (choice < 0.85 && scope.allowPrev && scope.prevAllowedFields.length > 0) {
     return pick(r, scope.prevAllowedFields) + "@prev";
+  }
+  // Semi-Lagrangian upstream sample. Keep it out of predicate-only
+  // contexts so failures point at @upstream lowering, not at "stencil
+  // expression used where only a simple predicate was expected".
+  if (choice < 0.89 && !scope.disallowReductions && scope.scalarReads.length > 0) {
+    const field = pick(r, scope.scalarReads);
+    const vx = scope.vec2Reads.length > 0 ? `${pick(r, scope.vec2Reads)}.x` : genSimpleScalarLeaf(ctx, scope);
+    const vy = scope.vec2Reads.length > 0 ? `${pick(r, scope.vec2Reads)}.y` : genSimpleScalarLeaf(ctx, scope);
+    return `${field}@upstream(${vx}, ${vy}, dt)`;
   }
   // f@n — only inside a neighbor reduction; the validator rejects
   // @n as out of scope outside one.
@@ -317,6 +336,21 @@ function genStage(ctx, name, { allowPrev = false } = {}) {
     const f = pick(r, allFields);
     if (!writes.includes(f.name)) writes.push(f.name);
   }
+  // If this recipe has a derived field, force the first stage to
+  // write it. The validator requires every derived field to have a
+  // stage writer, while scenarios/stamps must leave it alone.
+  if (name === "stg0" && ctx.derivedField && !writes.includes(ctx.derivedField.name)) {
+    if (writes.length < Math.min(2, allFields.length)) writes.push(ctx.derivedField.name);
+    else writes[writes.length - 1] = ctx.derivedField.name;
+  }
+  // Bias the first stage toward touching vec2 fields when the recipe
+  // has them. Vec2/stencil bugs are disproportionately expensive, and
+  // purely random write selection leaves gradient/divergence cold.
+  const vec2Candidate = allFields.find(f => f.type === "vec2");
+  if (name === "stg0" && vec2Candidate && maybe(r, 0.55) && !writes.includes(vec2Candidate.name)) {
+    if (writes.length < Math.min(2, allFields.length)) writes.push(vec2Candidate.name);
+    else writes[0] = vec2Candidate.name;
+  }
   // Reads: writes + maybe one extra (mixed types are fine)
   const reads = [...writes];
   if (allFields.length > writes.length && maybe(r, 0.5)) {
@@ -359,7 +393,9 @@ function genStage(ctx, name, { allowPrev = false } = {}) {
     const wType = fieldType(w);
     const verb = maybe(r, 0.5) && reads.includes(w) ? "add" : "set";
     if (wType === "vec2") {
-      const expr = genVec2Expr(ctx, scope);
+      const expr = scope.scalarReads.length > 0 && maybe(r, 0.35)
+        ? `gradient(${pick(r, scope.scalarReads)})`
+        : genVec2Expr(ctx, scope);
       // vec2 fields use vec2-shaped writes — `add v = vec2(...) * dt`
       // broadcasts dt across both components.
       if (verb === "add") {
@@ -395,6 +431,7 @@ function genInitBody(ctx) {
   const lines = [];
   // Initialize every declared field.
   for (const f of ctx.fields) {
+    if (f.derived) continue;
     const choice = r();
     if (f.type === "vec2") {
       const vx = round(r() * 2 - 1, 2);
@@ -446,12 +483,20 @@ export function generateRecipe(seed) {
   // Fields. First is always f32 (so we always have something scalar).
   ctx.fields.push({ name: "f0", type: "f32" });
   lines.push(`field f0: f32`);
-  const moreFields = intIn(r, 0, 2);
+  const moreFields = intIn(r, 1, 3);
   for (let i = 0; i < moreFields; i++) {
     const name = `f${i + 1}`;
-    const type = maybe(r, 0.85) ? "f32" : "vec2";
-    ctx.fields.push({ name, type });
-    lines.push(`field ${name}: ${type}`);
+    const type = maybe(r, 0.65) ? "f32" : "vec2";
+    const field = { name, type, derived: false };
+    ctx.fields.push(field);
+  }
+  const derivedCandidates = ctx.fields.filter((f) => f.name !== "f0" && f.type === "f32");
+  if (derivedCandidates.length > 0 && maybe(r, 0.35)) {
+    ctx.derivedField = pick(r, derivedCandidates);
+    ctx.derivedField.derived = true;
+  }
+  for (const field of ctx.fields.slice(1)) {
+    lines.push(`field ${field.name}: ${field.type}${field.derived ? " derived" : ""}`);
   }
   lines.push("");
 
@@ -533,22 +578,33 @@ export function generateRecipe(seed) {
   }
   lines.push("");
 
-  // Views (always 1 ramp; sometimes 1 wheel; never expr — strict
-  // expr-body validation is its own surface that needs targeted
-  // coverage rather than getting incidentally fuzzed here).
+  // Views. Always one ramp, sometimes inline stops / wheel / expr.
+  // Expr view bodies use the legal render-time subset only: fields,
+  // params, consts, length(vec2), scalar math, and root red/green/blue
+  // assignments.
   const palette = "P0";
   ctx.palettes.push({ name: palette });
   const f0 = ctx.fields.find(f => f.type === "f32");
   lines.push("views {");
-  lines.push(`  palette ${palette} {`);
-  lines.push(`    stop 0 color [${intIn(r, 0, 60)}, ${intIn(r, 0, 60)}, ${intIn(r, 0, 60)}]`);
-  if (maybe(r, 0.4)) {
-    lines.push(`    stop 0.5 color [${intIn(r, 80, 200)}, ${intIn(r, 80, 200)}, ${intIn(r, 80, 200)}]`);
+  const inlineRampStops = maybe(r, 0.30);
+  if (!inlineRampStops) {
+    lines.push(`  palette ${palette} {`);
+    lines.push(`    stop 0 color [${intIn(r, 0, 60)}, ${intIn(r, 0, 60)}, ${intIn(r, 0, 60)}]`);
+    if (maybe(r, 0.4)) {
+      lines.push(`    stop 0.5 color [${intIn(r, 80, 200)}, ${intIn(r, 80, 200)}, ${intIn(r, 80, 200)}]`);
+    }
+    lines.push(`    stop 1 color [${intIn(r, 200, 255)}, ${intIn(r, 200, 255)}, ${intIn(r, 200, 255)}]`);
+    lines.push(`  }`);
   }
-  lines.push(`    stop 1 color [${intIn(r, 200, 255)}, ${intIn(r, 200, 255)}, ${intIn(r, 200, 255)}]`);
-  lines.push(`  }`);
   lines.push(`  view v0 "Field" {`);
-  lines.push(`    color ramp ${f0.name} range [-2, 2] palette ${palette}`);
+  if (inlineRampStops) {
+    lines.push(`    color ramp ${f0.name} range [-2, 2] stops {`);
+    lines.push(`      stop 0 color [${intIn(r, 0, 60)}, ${intIn(r, 0, 60)}, ${intIn(r, 0, 60)}]`);
+    lines.push(`      stop 1 color [${intIn(r, 200, 255)}, ${intIn(r, 200, 255)}, ${intIn(r, 200, 255)}]`);
+    lines.push(`    }`);
+  } else {
+    lines.push(`    color ramp ${f0.name} range [-2, 2] palette ${palette}`);
+  }
   lines.push(`  }`);
   if (maybe(r, 0.4) && ctx.scalarFields().length > 1) {
     const other = ctx.scalarFields().find(f => f.name !== f0.name);
@@ -558,8 +614,37 @@ export function generateRecipe(seed) {
       lines.push(`  }`);
     }
   }
+  if (maybe(r, 0.35)) {
+    const v = ctx.vec2Fields()[0];
+    lines.push(`  view vExpr "Composite" {`);
+    lines.push(`    color expr {`);
+    if (v) {
+      lines.push(`      let mag = clamp(length(${v.name}), 0, 1)`);
+      lines.push(`      set red = clamp(${f0.name}, 0, 1) * 255`);
+      lines.push(`      set green = mag * 255`);
+      lines.push(`      set blue = abs(${f0.name}) * 80`);
+    } else {
+      lines.push(`      let lit = clamp(${f0.name}, 0, 1)`);
+      lines.push(`      set red = lit * 255`);
+      lines.push(`      set green = sin(lit * PI) * 120 + 80`);
+      lines.push(`      set blue = abs(${f0.name}) * 80`);
+    }
+    lines.push(`    }`);
+    lines.push(`  }`);
+  }
   lines.push("}");
   lines.push("");
+
+  // Stamps — exercise brush-scoped init action validation. Target f0
+  // specifically because it is guaranteed scalar and non-derived.
+  if (maybe(r, 0.45)) {
+    lines.push("stamps {");
+    lines.push(`  stamp tap "Tap" {`);
+    lines.push(`    spot f0 at brush.pos, radius=brush.r, amount=${round(0.2 + r() * 0.8, 2)}`);
+    lines.push(`  }`);
+    lines.push("}");
+    lines.push("");
+  }
 
   // Scenarios — at least one
   lines.push("scenarios {");
@@ -569,6 +654,7 @@ export function generateRecipe(seed) {
   if (maybe(r, 0.5)) {
     lines.push(`  scenario blank "Blank" {`);
     for (const f of ctx.fields) {
+      if (f.derived) continue;
       const z = f.type === "vec2" ? "vec2(0, 0)" : "0";
       lines.push(`    set ${f.name} = ${z}`);
     }

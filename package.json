@@ -6,7 +6,13 @@
   "description": "Geodesic-sphere simulation lab — v2 DSL, WebGPU compute pipeline, recipes corpus.",
   "scripts": {
     "test": "node --test",
-    "fuzz": "node testing/fuzz-v2.mjs"
+    "fuzz": "node testing/fuzz-v2.mjs",
+    "fuzz:wgsl": "node testing/fuzz-v2.mjs --wgsl",
+    "fuzz:execute": "node testing/fuzz-v2.mjs --execute",
+    "fuzz:targeted": "node testing/targeted-fuzz-v2.mjs --wgsl",
+    "fuzz:targeted:execute": "node testing/targeted-fuzz-v2.mjs --execute",
+    "fuzz:negative": "node testing/negative-fuzz-v2.mjs",
+    "fuzz:mutational": "node testing/mutational-fuzz-v2.mjs"
   },
   "devDependencies": {
     "webgpu": "^0.3.8"

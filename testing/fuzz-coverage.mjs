@@ -16,9 +16,14 @@ import test from "node:test";
 import { runFuzz } from "./fuzz-v2.mjs";
 import { runNegativeFuzz } from "./negative-fuzz-v2.mjs";
 import { runMutationalFuzz } from "./mutational-fuzz-v2.mjs";
+import { runTargetedFuzz } from "./targeted-fuzz-v2.mjs";
 
 test("generative fuzz 500 seeds — happy-path coverage", async () => {
   await runFuzz({ count: 500, seedStart: 1, wgsl: true, log: () => {} });
+});
+
+test("targeted fuzz 100 seeds — high-risk v2 feature shapes", async () => {
+  await runTargetedFuzz({ count: 100, seedStart: 1, wgsl: true, log: () => {} });
 });
 
 test("negative fuzz 500 seeds — validator rejection branches", () => {

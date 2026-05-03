@@ -123,6 +123,18 @@ const MUTATIONS = [
     },
   },
   {
+    name: "nested-stencil-upstream",
+    description: "put a neighbor reduction inside @upstream velX — unsupported nested stencil lowering",
+    apply: (dsl) => {
+      const m = /([A-Za-z_][A-Za-z0-9_]*)@upstream\(([^()\n{}]*),\s*([^()\n{}]*),\s*([^()\n{}]*)\)/.exec(dsl);
+      if (!m) return null;
+      const field = m[1];
+      const replacement = `${field}@upstream(mean n in neighbors { ${field}@n - ${field} }, ${m[3]}, ${m[4]})`;
+      const mutated = dsl.slice(0, m.index) + replacement + dsl.slice(m.index + m[0].length);
+      return { mutated, expected: /upstream.*neighbor reduction|neighbor reduction.*upstream|compute it into a field/i };
+    },
+  },
+  {
     name: "duplicate-field",
     description: "declare the same field twice — name-uniqueness violation",
     apply: (dsl) => {

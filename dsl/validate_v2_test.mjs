@@ -1488,3 +1488,28 @@ step {
 }
 `);
 });
+
+test("@upstream coord args reject nested stencil expressions", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+step {
+  stage flow { reads u; writes u; cell {
+    set u = u@upstream(mean n in neighbors { u@n - u }, 0, dt)
+  } }
+}
+`), "velX cannot contain a neighbor reduction");
+
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+field slope: vec2
+step {
+  stage flow { reads u, slope; writes u; cell {
+    set u = u@upstream(divergence(slope), 0, dt)
+  } }
+}
+`), "velX cannot contain divergence");
+});

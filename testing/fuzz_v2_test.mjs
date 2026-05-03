@@ -7,6 +7,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { generateRecipe, runFuzz } from "./fuzz-v2.mjs";
+import { bucketKey, featureVectorFromSource } from "./fuzz-features-v2.mjs";
 
 test("fuzzer: generateRecipe returns a v2-shaped DSL string", () => {
   const dsl = generateRecipe(42);
@@ -40,4 +41,68 @@ test("fuzzer: small batch — log compile-failure stats without failing the suit
   // Test passes regardless — the generator is allowed to surface bugs,
   // and re-fixing them isn't this test's job.
   assert.ok(true);
+});
+
+test("fuzzer features: extracted from v2 AST, not source regexes", () => {
+  const dsl = `recipe "Features"
+substrate geodesic frequency 16
+field u: f32
+field state: u32
+field alive: bool
+field wind: vec2
+field d: f32 derived
+
+step {
+  stage s {
+    reads u, wind
+    writes u, d
+    cell {
+      let g = gradient(u)
+      when u > 0 and not false {
+        set d = divergence(wind)
+      }
+      set u = u@upstream(wind.x, wind.y, dt) + (u@prev > 0 ? 1 : 0)
+    }
+  }
+}
+
+metric active = count cells where u > 0
+
+views {
+  view custom "Custom" {
+    color expr {
+      set red = length(wind)
+      set green = 0
+      set blue = 0
+    }
+  }
+}
+
+stamps {
+  stamp tap "Tap" {
+    spot u at brush.pos, radius=brush.r, amount=1
+    ellipse wind at lon=0, lat=0, rx=0.2, ry=0.1, amount=vec2(1, 0), angle=0
+  }
+}
+
+scenarios {
+  scenario init "Init" {
+    region u at lonMin=-1, lonMax=1, latMin=-0.5, latMax=0.5, amount=1
+    for each cell {
+      set u = sin(lon)
+      set state = abs(cellRand(3) * 4)
+      set alive = state > 1
+    }
+  }
+}`;
+  const vec = featureVectorFromSource(dsl);
+  for (const name of [
+    "vec2Field", "u32Field", "boolField", "derivedField", "gradient", "divergence", "prevRead",
+    "upstreamRead", "ternary", "when", "countWhere", "memberDotXY",
+    "lengthCall", "logicalAnd", "logicalNot", "exprView", "stamp",
+    "ellipseAction", "regionAction", "scenarioEachCell",
+  ]) {
+    assert.ok(vec[name] > 0, `expected ${name} to be present`);
+  }
+  assert.ok(bucketKey(vec).includes("upstreamRead:1"));
 });

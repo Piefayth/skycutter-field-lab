@@ -408,6 +408,7 @@ function compileCellShader({ stage, field, reads, prevReads = [], actions, layou
     layout,
     usedGradients: new Set(),
     usedDivergences: new Set(),
+    usedUpstreams: new Set(),
   };
   const body = compileActions(actions, ctx);
   // Tangent-frame stencil helpers are emitted only when the body uses
@@ -900,25 +901,53 @@ function compileActions(actions, ctx) {
       if (action.field === ctx.target) {
         const lifted = liftReductions(action.expr, ctx);
         out.push(...lifted.statements);
-        out.push(`outValue = outValue + ${compileExpr(lifted.expr, ctx)};`);
+        out.push(`outValue = outValue + ${compileAssignmentExpr(lifted.expr, ctx)};`);
       }
     } else if (action.type === "set") {
       if (action.field === ctx.target) {
         const lifted = liftReductions(action.expr, ctx);
         out.push(...lifted.statements);
-        out.push(`outValue = ${compileExpr(lifted.expr, ctx)};`);
+        out.push(`outValue = ${compileAssignmentExpr(lifted.expr, ctx)};`);
       }
     } else if (action.type === "when") {
       const lifted = liftReductions(action.condition, ctx);
       out.push(...lifted.statements);
       out.push(`if (${compileExpr(lifted.expr, ctx)}) {`);
-      out.push(indent(compileActions(action.actions ?? [], { ...ctx, locals: new Set(ctx.locals) }), 2));
+      const childCtx = { ...ctx, locals: new Set(ctx.locals) };
+      out.push(indent(compileActions(action.actions ?? [], childCtx), 2));
+      if (childCtx.usedStencilInline) ctx.usedStencilInline = true;
       out.push("}");
     } else {
       throw new Error(`Unsupported WebGPU geodesic cell action: ${action.type}`);
     }
   }
   return out.join("\n");
+}
+
+function compileAssignmentExpr(expr, ctx) {
+  const compiled = compileExpr(expr, ctx);
+  const fieldType = ctx.layout?.fieldTypes?.[ctx.target] ?? "f32";
+  if ((fieldType === "u32" || fieldType === "bool") && expressionProducesBool(expr, ctx)) {
+    return `select(0.0, 1.0, ${compiled})`;
+  }
+  return compiled;
+}
+
+function expressionProducesBool(expr, ctx) {
+  if (!expr || typeof expr !== "object") return false;
+  if (expr.type === "Identifier") {
+    if (expr.name === "true" || expr.name === "false") return true;
+    const paramDecl = ctx.layout?.parameters?.find((item) => item.name === expr.name);
+    return paramDecl?.type === "boolean";
+  }
+  if (expr.type === "Unary") return expr.op === "!" || expr.op === "not";
+  if (expr.type === "Binary") {
+    return ["==", "!=", "<", "<=", ">", ">=", "&&", "||", "and", "or"].includes(expr.op);
+  }
+  if (expr.type === "Conditional") {
+    return expressionProducesBool(expr.consequent, ctx) && expressionProducesBool(expr.alternate, ctx);
+  }
+  return false;
 }
 
 // Lift `NeighborReduce` nodes out of an expression — they can't compile
