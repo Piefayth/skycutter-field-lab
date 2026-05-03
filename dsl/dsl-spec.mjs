@@ -137,12 +137,9 @@ export const MATH_FUNCTIONS = [
     target: "c.clamp",
     arity: [3],
     importNamespace: "core",
-    // `clamp` has TWO surface forms — function and stage primitive. The
-    // signature reflects both; the parser disambiguates via `(`-lookahead.
-    signature: "clamp(x, lo, hi)     (function form)\nclamp FIELD LO HI    (primitive form)",
-    doc: "Two surface forms. As a function (parens, in any expression): returns x clamped to [lo, hi]. As a stage primitive (no parens, top-level in stage body): clamps FIELD into [LO, HI] in one pass.",
-    example: "let y = clamp(x, 0, 1)   # function\nclamp moisture 0 1.4    # primitive",
-    alsoPrimitive: true,  // `PIPELINE_PRIMITIVES` doesn't list clamp again — this flag carries the dual form.
+    signature: "clamp(x, lo, hi)",
+    doc: "Returns x clamped to [lo, hi]. Use inside any expression — `set field = clamp(field, 0, 1)` is the v2 idiom (the v1 stage-primitive form is gone).",
+    example: "let y = clamp(x, 0, 1)\nset moisture = clamp(moisture, 0, 1.4)",
   },
   {
     name: "cellNoise",
@@ -719,9 +716,6 @@ const DUAL_USE_NAMES = new Set([
       seen.set(item.name, group);
     }
   }
-  // `clamp` deliberately appears in MATH_FUNCTIONS with `alsoPrimitive: true`,
-  // not in PIPELINE_PRIMITIVES, so the check still finds a single canonical
-  // entry.
   track("MATH_FUNCTIONS", MATH_FUNCTIONS);
   track("STENCIL_HELPERS", STENCIL_HELPERS);
   track("CLOCK_BUILTINS", CLOCK_BUILTINS);
@@ -760,12 +754,6 @@ export const RESERVED_NAMES = new Set([
 // All symbols flat, with an attached `kind` matching the visual catalog's
 // taxonomy. Consumers downstream (visual/dsl-symbols.mjs) use this to
 // build the rich Symbol entries the editor surfaces.
-//
-// Math fns with `alsoPrimitive: true` (currently only `clamp`) are
-// emitted twice — once with kind "mathFn" (so they're suggested in
-// expression contexts) and once with kind "primVerb" (so they're
-// suggested at stage-header level). Both records share the same name
-// and doc; the docs window happily files them under both categories.
 export function allDslSymbolsFlat() {
   const out = [];
   const push = (group, kind, items, extra = {}) => {
@@ -779,14 +767,6 @@ export function allDslSymbolsFlat() {
   push("GEO_CONSTANTS",      "mathConst",     GEO_CONSTANTS);
   push("STAMP_EXTRAS",       "builtin",       STAMP_EXTRAS);
   push("PIPELINE_PRIMITIVES","primVerb",      PIPELINE_PRIMITIVES);
-  // Dual-form math fns also surface as primitives at the stage-header
-  // level. Emitted via the PIPELINE_PRIMITIVES group so the catalog's
-  // category mapping files them under "Pipeline primitives".
-  push(
-    "PIPELINE_PRIMITIVES",
-    "primVerb",
-    MATH_FUNCTIONS.filter((m) => m.alsoPrimitive),
-  );
   push("STAGE_BLOCKS",       "controlKw",     STAGE_BLOCKS);
   push("INIT_VERBS",         "initVerb",      INIT_VERBS);
   push("ACTION_VERBS",       "actionVerb",    ACTION_VERBS);

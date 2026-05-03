@@ -55,10 +55,12 @@ const PARAM_MODIFIER_NAMES = new Set([
 ]);
 
 // Convert a spec entry → catalog symbol. The `importLine` formats the
-// `use` directive (or null when the symbol is always in scope).
+// v2 `import` directive (or null when the symbol is always in scope).
+// The legacy v1 form `use NAMESPACE NAME` is gone in v2 — imports are
+// flat `import name1, name2` lines.
 function specToSymbol(spec) {
   const importLine = spec.importNamespace
-    ? `use ${spec.importNamespace} ${spec.name}`
+    ? `import ${spec.name}`
     : null;
   let category = CATEGORY_BY_GROUP[spec.group] ?? "Other";
   if (spec.group === "DECL_DIRECTIVES" && RECIPE_IDENTITY_NAMES.has(spec.name)) {
@@ -72,6 +74,12 @@ function specToSymbol(spec) {
     kind: spec.kind,
     category,
     importLine,
+    // Original spec namespace ("core" / "geo" / "clock" / …) — kept for
+    // category grouping in docs and as a "this symbol is importable"
+    // sentinel for autocomplete's auto-import path. v2 imports are flat
+    // (`import name1, name2`); the namespace is no longer surface syntax
+    // but still useful as metadata.
+    importNamespace: spec.importNamespace ?? null,
     signature: spec.signature ?? null,
     doc: spec.doc ?? "",
     example: spec.example ?? null,

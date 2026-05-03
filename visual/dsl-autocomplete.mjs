@@ -33,28 +33,15 @@ import { extractDslNames } from "../dsl/introspect.mjs";
 // Catalog buckets — precomputed once so context-filtered lookups are cheap.
 // ---------------------------------------------------------------------------
 
-// `use NAMESPACE` line: extract the namespace from the symbol's importLine.
-// importLine looks like "use sim diffuse" / "use core sin" / "use geo lon" —
-// the first word after `use` is always the namespace.
+// V2 imports are flat (`import name1, name2`) — there is no surface
+// namespace anymore. The legacy `importNamespace` accessor is kept ONLY
+// as a "this symbol comes from a namespaced builtin and therefore needs
+// importing" sentinel; the value (when present) still classifies the
+// symbol's origin module for docs grouping. Reads `sym.importNamespace`
+// directly — no importLine regex parsing.
 function importNamespace(sym) {
-  if (!sym.importLine) return null;
-  const m = /^\s*use\s+(\w+)/.exec(sym.importLine);
-  return m ? m[1] : null;
+  return sym.importNamespace ?? null;
 }
-
-// All distinct namespaces the catalog references — used for the
-// `use NAMESPACE` completion when the cursor is right after `use `.
-const ALL_NAMESPACES = [...new Set(
-  DSL_SYMBOLS.map(importNamespace).filter(Boolean),
-)].sort();
-
-const NAMESPACE_DOC = {
-  sim: "Stage primitives + per-cell control flow (cell/event/each, wind, advect, diffuse, clamp, ...)",
-  core: "Math + neighbor helpers (sin, cos, hypot, smoothstep, cellNoise, neighborMax, ...)",
-  init: "Init verbs for presets and stamps (fill, spot, ellipse, region, copy, eachCell)",
-  geo: "Geodesic position builtins (lon, lat, x, y, u, v, px, py, pz, i, PI, TAU, E, N)",
-  clock: "Time builtins (dt, frame)",
-};
 
 const TOP_LEVEL_KINDS = new Set([
   "declKeyword", "blockKeyword", "gridKeyword",
