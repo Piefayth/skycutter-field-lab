@@ -93,6 +93,12 @@
       "summary": "SmoothLife-style continuous cellular automaton using topological disk/ring reductions. disk(2) estimates local mass; ring(3) estimates the outer annulus. A dogfood recipe for graph-distance neighborhoods, not a faithful metric-kernel SmoothLife."
     },
     {
+      "id": "lenia-lite",
+      "name": "Lenia-lite topological (example)",
+      "path": "recipes/lenia-lite.mjs",
+      "summary": "Continuous cellular automaton inspired by Lenia. A three-shell topological kernel mixes neighbors, ring(2), and ring(3); a Gaussian growth curve nudges each cell up or down. A dogfood recipe for graph-distance kernels, not full metric-kernel Lenia."
+    },
+    {
       "id": "gierer-meinhardt",
       "name": "Gierer-Meinhardt (example)",
       "path": "recipes/gierer-meinhardt.mjs",
