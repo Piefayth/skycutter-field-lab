@@ -317,6 +317,32 @@ step {
     "vec2(...) call lowers to WGSL native constructor");
 });
 
+test("MATH_FUNCTIONS registry drives all consumers (smoke)", async () => {
+  // Each MATH_FUNCTIONS entry should self-validate: the WGSL emitter,
+  // the JS init runtime, and the type checker all dispatch through
+  // the registry. If a consumer is missing a wgsl/js callback for an
+  // entry that needs one, this catches the gap.
+  const { MATH_FUNCTIONS } = await import("./dsl-spec.mjs");
+  for (const fn of MATH_FUNCTIONS) {
+    assert(typeof fn.name === "string", "every math fn needs a name");
+    assert(Array.isArray(fn.arity) && fn.arity.length > 0,
+      `${fn.name}: arity must be a non-empty array`);
+    assert(typeof fn.returnType === "string",
+      `${fn.name}: returnType must be set (got ${fn.returnType})`);
+    assert(Array.isArray(fn.argTypes),
+      `${fn.name}: argTypes must be set`);
+    // wgsl + js callbacks. gradient/divergence are intentionally null
+    // (compiler-side specials emit helper-fn calls; init runtime
+    // rejects them via the init-subset validator).
+    if (fn.name !== "gradient" && fn.name !== "divergence") {
+      assert(typeof fn.wgsl === "function",
+        `${fn.name}: wgsl callback missing — adding a math fn now means ONE entry in dsl-spec.mjs`);
+      assert(typeof fn.js === "function",
+        `${fn.name}: js callback missing`);
+    }
+  }
+});
+
 test("vec2 sum reduction emits vec2 accumulator + zero literal", () => {
   // `sum n in neighbors { wind@n }` over a vec2 field produces a
   // vec2-typed accumulator: `var nr_0: vec2<f32> = vec2<f32>(0.0, 0.0)`,

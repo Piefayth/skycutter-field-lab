@@ -6,7 +6,13 @@
 // is expressed as a per-cell expression body — the parser rejects v1's
 // `wind`/`advect`/`diffuse`/`clamp`/`normalize` statement forms and the
 // `each`/`event` stage shapes with redirect messages.
+//
+// Math-fn dispatch routes through the unified MATH_FUNCTIONS registry
+// in dsl-spec.mjs — adding a new math fn means adding one entry there;
+// the compiler picks it up via the `wgsl` callback in compileCall.
 // =============================================================================
+
+import { MATH_FUNCTIONS } from "./dsl-spec.mjs";
 
 export function compileWebGpuGeodesicPipeline(dsl = {}) {
   const stages = (dsl.stages ?? []).map((stage) => ({
@@ -1222,42 +1228,37 @@ function compileBinary(ast, ctx) {
   return `(${left} ${ast.op} ${right})`;
 }
 
+// Math-fn registry → name lookup. Built once at module load so per-call
+// dispatch is a single Map.get rather than an array scan over
+// MATH_FUNCTIONS. Adding a new fn = one entry in dsl-spec.MATH_FUNCTIONS;
+// no edit here.
+const MATH_BY_NAME = new Map(MATH_FUNCTIONS.map((fn) => [fn.name, fn]));
+
 function compileCall(ast, ctx) {
   if (ast.callee.type !== "Identifier") throw new Error("Unsupported WebGPU geodesic call target");
+  const name = ast.callee.name;
   // Special case: prev(IDENT) reads from the field's history binding,
   // not its current-tick read variable. Intercepted before generic
   // arg compilation — otherwise the inner Identifier would lower to
-  // the current-tick read (the bug the agent's review caught).
-  if (ast.callee.name === "prev") {
+  // the current-tick read.
+  if (name === "prev") {
     const arg = ast.args[0];
     if (arg?.type !== "Identifier") {
       throw new Error("prev requires a bare field identifier");
     }
     return `f_${arg.name}_prev[cell]`;
   }
-  const args = ast.args.map((arg) => compileExpr(arg, ctx));
-  // Vector constructors. `vec2(x, y)` lowers to the WGSL constructor;
-  // future `vec3(x, y, z)` extends similarly. Catches a common authoring
-  // case before the generic math-fn path (which would error: vec2 is
-  // not in MATH_FUNCTIONS).
-  if (ast.callee.name === "vec2") {
-    if (args.length !== 2) {
-      throw new Error(`vec2(x, y) takes exactly 2 args; got ${args.length}`);
-    }
-    return `vec2<f32>(${args.join(", ")})`;
-  }
-  // Tangent-frame differential operators. The argument is a bare field
-  // identifier; the compiler emits a per-(field) helper function in
-  // the shader prelude (see compileCellShader's stencilHelperSource).
-  // The helper computes the operator over the cell's neighbors using
-  // the position / east-basis helpers also emitted in the prelude.
-  if (ast.callee.name === "gradient" || ast.callee.name === "divergence") {
+  // Tangent-frame differential operators. The argument must be a bare
+  // field identifier; the compiler emits a per-(field) helper function
+  // in the shader prelude (see emitStencilHelpers). Routed before
+  // generic dispatch because the registry's `wgsl` is null for these.
+  if (name === "gradient" || name === "divergence") {
     const arg = ast.args[0];
     if (arg?.type !== "Identifier") {
-      throw new Error(`${ast.callee.name} requires a bare field identifier`);
+      throw new Error(`${name} requires a bare field identifier`);
     }
     const fieldName = arg.name;
-    if (ast.callee.name === "gradient") {
+    if (name === "gradient") {
       ctx.usedGradients ??= new Set();
       ctx.usedGradients.add(fieldName);
       return `_gradient_${fieldName}(cell)`;
@@ -1266,43 +1267,17 @@ function compileCall(ast, ctx) {
     ctx.usedDivergences.add(fieldName);
     return `_divergence_${fieldName}(cell)`;
   }
-  switch (ast.callee.name) {
-    case "cellNoise": {
-      // 1-arg: natural sphere scale. 2-arg: scale-multiplied sphere coords.
-      const scale = args.length >= 2 ? args[1] : null;
-      const coords = scale
-        ? `(vec3<f32>(px, py, pz) * (${scale}))`
-        : `vec3<f32>(px, py, pz)`;
-      return `spatialNoise(${coords}, ${args[0]})`;
+  // Generic math-fn dispatch via the registry. Everything else flows
+  // through here, including new fns added later — no switch update.
+  const args = ast.args.map((arg) => compileExpr(arg, ctx));
+  const fn = MATH_BY_NAME.get(name);
+  if (fn?.wgsl) {
+    if (fn.arity && !fn.arity.includes(args.length)) {
+      throw new Error(`${name} expects ${fn.arity.join(" or ")} args; got ${args.length}`);
     }
-    case "cellRand":
-      // Pure per-cell hash on (cell index, seed). No spatial coherence.
-      return `hashNoise(f32(i), ${args[0]})`;
-    case "wrapAngle":
-      // atan2(sin x, cos x) collapses any input range to [-π, π] without
-      // a floor / mod sign-handling dance.
-      return `atan2(sin(${args[0]}), cos(${args[0]}))`;
-    case "max":
-    case "min":
-    case "abs":
-    case "sin":
-    case "asin":
-    case "cos":
-    case "atan2":
-    case "exp":
-    case "sqrt":
-    case "pow":
-    case "smoothstep":
-    case "clamp":
-    case "length":
-      // WGSL `length` is polymorphic: scalars return abs, vectors
-      // return magnitude. Both work, so emit identically.
-      return `${ast.callee.name}(${args.join(", ")})`;
-    case "hypot":
-      return `length(vec2<f32>(${args.join(", ")}))`;
-    default:
-      throw new Error(`Unsupported WebGPU geodesic function: ${ast.callee.name}`);
+    return fn.wgsl(args);
   }
+  throw new Error(`Unsupported WebGPU geodesic function: ${name}`);
 }
 
 function wgslNumber(value) {

@@ -1,5 +1,6 @@
 import { TAU, clamp, hashNoise, smoothstep, spatialNoise } from "../kernel/kernel.mjs";
 import { evalExpression } from "../dsl/expression-runtime.mjs";
+import { MATH_FUNCTIONS } from "../dsl/dsl-spec.mjs";
 
 // Number of components per cell for FIELD in STATE. f32 fields hold one
 // scalar per cell; vec2 fields hold two. Derived from the typed-array
@@ -268,45 +269,27 @@ function evalInitIdentifier(name, state, cell) {
   throw new Error(`unknown init identifier ${name}`);
 }
 
+// Registry-backed math-fn dispatch. Each MATH_FUNCTIONS entry's `js`
+// callback evaluates the call here; helpers (clamp / smoothstep /
+// hashNoise / spatialNoise / makeVec2 / isVec2) are passed in so the
+// callback doesn't need to import them — adding a new fn touches one
+// dsl-spec.mjs entry, no edit here.
+const INIT_HELPERS = {
+  clamp, smoothstep, spatialNoise, hashNoise, makeVec2, isVec2,
+};
+const MATH_BY_NAME = new Map(MATH_FUNCTIONS.map((fn) => [fn.name, fn]));
+
 function evalInitCall(name, args, cell) {
-  if (name === "clamp") return clamp(args[0], args[1], args[2]);
-  if (name === "smoothstep") return smoothstep(args[0], args[1], args[2]);
-  if (name === "max") return Math.max(...args);
-  if (name === "min") return Math.min(...args);
-  if (name === "abs") return Math.abs(args[0]);
-  if (name === "hypot") return Math.hypot(...args);
-  if (name === "sin") return Math.sin(args[0]);
-  if (name === "asin") return Math.asin(args[0]);
-  if (name === "cos") return Math.cos(args[0]);
-  if (name === "atan2") return Math.atan2(args[0], args[1]);
-  if (name === "exp") return Math.exp(args[0]);
-  if (name === "sqrt") return Math.sqrt(args[0]);
-  if (name === "pow") return Math.pow(args[0], args[1]);
-  if (name === "vec2") {
-    if (args.length !== 2) throw new Error(`vec2(x, y) takes exactly 2 args; got ${args.length}`);
-    return makeVec2(args[0], args[1]);
+  const fn = MATH_BY_NAME.get(name);
+  if (!fn) throw new Error(`unknown init function ${name ?? "call"}`);
+  if (!fn.js) {
+    // gradient / divergence / future stencil-only ops — no JS analogue.
+    throw new Error(`${name}(...) only works inside a stage cell, not in scenario / stamp init`);
   }
-  if (name === "length") {
-    const v = args[0];
-    if (isVec2(v)) return Math.hypot(v.x, v.y);
-    return Math.abs(Number(v));
+  if (fn.arity && !fn.arity.includes(args.length)) {
+    throw new Error(`${name} expects ${fn.arity.join(" or ")} args; got ${args.length}`);
   }
-  if (name === "cellNoise") {
-    const seed = args[0] ?? 0;
-    const scale = args.length >= 2 ? args[1] : 1;
-    // Cell context: use the cell's unit-sphere position scaled by `scale`.
-    // No cell context (top-level preset spot args): sample at origin —
-    // the resulting value is stable per (seed, scale) but identical across
-    // any "cells" that would have been involved, which matches the
-    // randomize-by-seed pattern presets typically reach for.
-    const px = (cell?.px ?? 0) * scale;
-    const py = (cell?.py ?? 0) * scale;
-    const pz = (cell?.pz ?? 0) * scale;
-    return spatialNoise(px, py, pz, seed);
-  }
-  if (name === "cellRand") return hashNoise(cell?.i ?? 0, args[0] ?? 0);
-  if (name === "wrapAngle") return Math.atan2(Math.sin(args[0]), Math.cos(args[0]));
-  throw new Error(`unknown init function ${name ?? "call"}`);
+  return fn.js(args, cell, INIT_HELPERS);
 }
 
 function geodesicAuthorCoords(grid, cell) {

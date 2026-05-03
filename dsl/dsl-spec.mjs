@@ -37,16 +37,46 @@
 // =============================================================================
 
 // ---------------------------------------------------------------------------
-// Math functions usable in any expression. `target` is the runtime callee
-// (`c.foo` for our compiled context, `Math.foo` for things we route
-// straight to the host). `arity` lists allowed argument counts.
+// Math functions usable in any expression.
+//
+// Each entry is a one-stop registration that drives every consumer:
+//   - dsl-spec metadata (signature / doc / example for the docs window)
+//   - typecheck-v2: argTypes + returnType for type-shape checking
+//   - WGSL compiler: `wgsl(args)` returns the WGSL call expression
+//   - JS init runtime: `js(args, cell?)` evaluates the call at recipe-
+//     scenario-time on the host. Some fns (gradient, divergence) have
+//     no JS analogue and `js` is null — they're rejected upstream by
+//     the init-context validator.
+//
+// arity is the array of allowed argument counts (`[1, 2]` means the fn
+// is fine with either count). target is the legacy v1 EXPR_FUNC_TARGETS
+// string ("c.foo" for the compiled cell context, "Math.foo" for the
+// host) — kept for the v1 emitter that compile-v2 still routes
+// through; new consumers prefer `wgsl` / `js`.
+//
+// Adding a new fn: drop one entry in this list. Don't touch
+// typecheck-v2, the WGSL switch, or dsl-init-runtime.
 // ---------------------------------------------------------------------------
+
+const SCALAR1 = ["f32"];
+const SCALAR2 = ["f32", "f32"];
+const SCALAR3 = ["f32", "f32", "f32"];
+
+// Generic "emit a passthrough WGSL call" — works for everything WGSL
+// has builtin under the same name. atan2, sin, cos, exp, sqrt, pow,
+// max, min, abs, smoothstep, clamp, length all fall through this.
+function passthrough(name) {
+  return (args) => `${name}(${args.join(", ")})`;
+}
 
 export const MATH_FUNCTIONS = [
   {
     name: "max",
     target: "c.max",
     arity: [1, 2],
+    argTypes: SCALAR2,    returnType: "f32",
+    wgsl: passthrough("max"),
+    js: (args) => Math.max(...args),
     importNamespace: "core",
     signature: "max(a, b)",
     doc: "Returns the larger of two values.",
@@ -55,6 +85,9 @@ export const MATH_FUNCTIONS = [
     name: "min",
     target: "c.min",
     arity: [1, 2],
+    argTypes: SCALAR2,    returnType: "f32",
+    wgsl: passthrough("min"),
+    js: (args) => Math.min(...args),
     importNamespace: "core",
     signature: "min(a, b)",
     doc: "Returns the smaller of two values.",
@@ -63,6 +96,9 @@ export const MATH_FUNCTIONS = [
     name: "abs",
     target: "c.abs",
     arity: [1],
+    argTypes: SCALAR1,    returnType: "f32",
+    wgsl: passthrough("abs"),
+    js: (args) => Math.abs(args[0]),
     importNamespace: "core",
     signature: "abs(x)",
     doc: "Absolute value.",
@@ -71,6 +107,10 @@ export const MATH_FUNCTIONS = [
     name: "hypot",
     target: "Math.hypot",
     arity: [2],
+    argTypes: SCALAR2,    returnType: "f32",
+    // WGSL has no hypot; emit length(vec2(x, y)).
+    wgsl: (args) => `length(vec2<f32>(${args[0]}, ${args[1]}))`,
+    js: (args) => Math.hypot(...args),
     importNamespace: "core",
     signature: "hypot(x, y)",
     doc: "Vector magnitude — `sqrt(x² + y²)`. Used for wind magnitude, distance computations.",
@@ -79,6 +119,9 @@ export const MATH_FUNCTIONS = [
     name: "sin",
     target: "c.sin",
     arity: [1],
+    argTypes: SCALAR1,    returnType: "f32",
+    wgsl: passthrough("sin"),
+    js: (args) => Math.sin(args[0]),
     importNamespace: "core",
     signature: "sin(x)",
     doc: "Sine. Argument in radians.",
@@ -87,6 +130,9 @@ export const MATH_FUNCTIONS = [
     name: "asin",
     target: "Math.asin",
     arity: [1],
+    argTypes: SCALAR1,    returnType: "f32",
+    wgsl: passthrough("asin"),
+    js: (args) => Math.asin(args[0]),
     importNamespace: "core",
     signature: "asin(x)",
     doc: "Arcsine. Returns radians in [-π/2, π/2].",
@@ -95,6 +141,9 @@ export const MATH_FUNCTIONS = [
     name: "cos",
     target: "c.cos",
     arity: [1],
+    argTypes: SCALAR1,    returnType: "f32",
+    wgsl: passthrough("cos"),
+    js: (args) => Math.cos(args[0]),
     importNamespace: "core",
     signature: "cos(x)",
     doc: "Cosine. Argument in radians.",
@@ -103,6 +152,9 @@ export const MATH_FUNCTIONS = [
     name: "atan2",
     target: "Math.atan2",
     arity: [2],
+    argTypes: SCALAR2,    returnType: "f32",
+    wgsl: passthrough("atan2"),
+    js: (args) => Math.atan2(args[0], args[1]),
     importNamespace: "core",
     signature: "atan2(y, x)",
     doc: "Two-argument arctangent — returns the angle of the vector (x, y) in [-π, π]. Note the y-first argument order (matches WGSL / C / JS). Use to convert vec2 components into a heading angle for phase-coloring or angle-based logic.",
@@ -112,6 +164,9 @@ export const MATH_FUNCTIONS = [
     name: "exp",
     target: "c.exp",
     arity: [1],
+    argTypes: SCALAR1,    returnType: "f32",
+    wgsl: passthrough("exp"),
+    js: (args) => Math.exp(args[0]),
     importNamespace: "core",
     signature: "exp(x)",
     doc: "e^x.",
@@ -120,6 +175,9 @@ export const MATH_FUNCTIONS = [
     name: "sqrt",
     target: "c.sqrt",
     arity: [1],
+    argTypes: SCALAR1,    returnType: "f32",
+    wgsl: passthrough("sqrt"),
+    js: (args) => Math.sqrt(args[0]),
     importNamespace: "core",
     signature: "sqrt(x)",
     doc: "Square root.",
@@ -128,6 +186,9 @@ export const MATH_FUNCTIONS = [
     name: "pow",
     target: "c.pow",
     arity: [2],
+    argTypes: SCALAR2,    returnType: "f32",
+    wgsl: passthrough("pow"),
+    js: (args) => Math.pow(args[0], args[1]),
     importNamespace: "core",
     signature: "pow(x, n)",
     doc: "x^n.",
@@ -136,6 +197,9 @@ export const MATH_FUNCTIONS = [
     name: "smoothstep",
     target: "c.smoothstep",
     arity: [3],
+    argTypes: SCALAR3,    returnType: "f32",
+    wgsl: passthrough("smoothstep"),
+    js: (args, cell, helpers) => helpers.smoothstep(args[0], args[1], args[2]),
     importNamespace: "core",
     signature: "smoothstep(edge0, edge1, x)",
     doc: "Smooth Hermite interpolation. Returns 0 if x ≤ edge0, 1 if x ≥ edge1, smooth S-curve in between.",
@@ -145,6 +209,9 @@ export const MATH_FUNCTIONS = [
     name: "clamp",
     target: "c.clamp",
     arity: [3],
+    argTypes: SCALAR3,    returnType: "f32",
+    wgsl: passthrough("clamp"),
+    js: (args, cell, helpers) => helpers.clamp(args[0], args[1], args[2]),
     importNamespace: "core",
     signature: "clamp(x, lo, hi)",
     doc: "Returns x clamped to [lo, hi]. Use inside any expression — `set field = clamp(field, 0, 1)` is the v2 idiom (the v1 stage-primitive form is gone).",
@@ -154,6 +221,20 @@ export const MATH_FUNCTIONS = [
     name: "cellNoise",
     target: "c.cellNoise",
     arity: [1, 2],
+    argTypes: ["f32", "f32"], returnType: "f32",
+    // Emits the spatial-noise call. The 1-arg form uses unit scale.
+    wgsl: (args) => {
+      if (args.length === 1) return `spatialNoise(vec3<f32>(px, py, pz), ${args[0]})`;
+      return `spatialNoise((vec3<f32>(px, py, pz) * (${args[1]})), ${args[0]})`;
+    },
+    js: (args, cell, helpers) => {
+      const seed = args[0] ?? 0;
+      const scale = args.length >= 2 ? args[1] : 1;
+      const px = (cell?.px ?? 0) * scale;
+      const py = (cell?.py ?? 0) * scale;
+      const pz = (cell?.pz ?? 0) * scale;
+      return helpers.spatialNoise(px, py, pz, seed);
+    },
     importNamespace: "core",
     signature: "cellNoise(seed) | cellNoise(seed, scale)",
     doc: "Spatially-coherent 3D noise sampled at the cell's unit-sphere position. Geometrically correct on a sphere — no pole distortion. `scale` controls spatial frequency (default 1; higher = finer texture). Returns [-1, 1]. In preset top-level (no cell context), falls back to a deterministic per-seed scalar — useful for randomizing spot positions. Use this when you want SMOOTHLY-VARYING noise (basins, terrain). For statistically independent per-cell values use `cellRand` instead.",
@@ -163,6 +244,9 @@ export const MATH_FUNCTIONS = [
     name: "cellRand",
     target: "c.cellRand",
     arity: [1],
+    argTypes: SCALAR1,    returnType: "f32",
+    wgsl: (args) => `hashNoise(f32(i), ${args[0]})`,
+    js: (args, cell, helpers) => helpers.hashNoise(cell?.i ?? 0, args[0] ?? 0),
     importNamespace: "core",
     signature: "cellRand(seed)",
     doc: "IID per-cell hash: each cell produces a statistically independent value from (cell index, seed). Returns [-1, 1]. Use for stochastic processes — heterogeneous parameters, Monte Carlo sampling, omega distributions in oscillator networks. Different from `cellNoise(seed)`, which is spatially correlated (neighbors tend to have similar values).",
@@ -172,18 +256,25 @@ export const MATH_FUNCTIONS = [
     name: "wrapAngle",
     target: "c.wrapAngle",
     arity: [1],
+    argTypes: SCALAR1,    returnType: "f32",
+    // atan2(sin x, cos x) collapses any input into [-π, π] without
+    // a floor / mod sign-handling dance.
+    wgsl: (args) => `atan2(sin(${args[0]}), cos(${args[0]}))`,
+    js: (args) => Math.atan2(Math.sin(args[0]), Math.cos(args[0])),
     importNamespace: "core",
     signature: "wrapAngle(x)",
     doc: "Wraps an angle (radians) into [-π, π]. Useful any time you accumulate phase that would otherwise grow unbounded — Kuramoto, XY model, active nematics, anywhere a `theta` keeps integrating `omega * dt`.",
     example: "set theta = wrapAngle(theta)",
   },
-  // Vector constructors. The compiler lowers these to WGSL native
-  // constructors; field types accept `vec2` declarations, expressions
-  // can build vec2 values, member access (`.x`, `.y`) reads components.
   {
     name: "vec2",
     target: null,        // Compile-time WGSL emit, no JS counterpart.
     arity: [2],
+    argTypes: SCALAR2,    returnType: "vec2",
+    wgsl: (args) => `vec2<f32>(${args[0]}, ${args[1]})`,
+    // The init runtime represents vec2 values as tagged objects so
+    // the expression-runtime arithmetic dispatch can detect them.
+    js: (args, cell, helpers) => helpers.makeVec2(args[0], args[1]),
     importNamespace: "core",
     signature: "vec2(x, y)",
     doc: "Constructs a vec2 value from two scalars. Pair with a `field name: vec2` declaration for vector-valued fields (wind components, slope direction, etc). Component access via `.x` / `.y`. WGSL-native arithmetic: vec2 + vec2, vec2 * scalar, etc.",
@@ -191,8 +282,17 @@ export const MATH_FUNCTIONS = [
   },
   {
     name: "length",
-    target: "Math.hypot", // JS-side fallback uses hypot for the scalar form.
+    target: "Math.hypot",
     arity: [1],
+    // length is polymorphic — accepts vec2 (returns magnitude) or
+    // scalar (returns abs). Type checker handles both via "any".
+    argTypes: ["any"],    returnType: "f32",
+    wgsl: passthrough("length"),
+    js: (args, cell, helpers) => {
+      const v = args[0];
+      if (helpers.isVec2(v)) return Math.hypot(v.x, v.y);
+      return Math.abs(Number(v));
+    },
     importNamespace: "core",
     signature: "length(v)",
     doc: "Vector magnitude. WGSL-native — works on vec2 / vec3. For scalars, use `abs`.",
@@ -203,11 +303,16 @@ export const MATH_FUNCTIONS = [
   // WGSL helpers — semantically the same as a neighbor reduction, but
   // specialized for vector calculus on the sphere. The argument MUST be
   // a bare field identifier (the compiler emits a per-(field, op)
-  // helper function).
+  // helper function). Init-context evaluation is impossible (needs the
+  // GPU neighbor topology); js is null and the init-subset validator
+  // rejects them.
   {
     name: "gradient",
     target: null,
     arity: [1],
+    argTypes: ["fieldId"], returnType: "vec2",
+    wgsl: null,           // Special path in compileCall — emits a helper-fn call.
+    js: null,
     importNamespace: "core",
     signature: "gradient(scalarField)",
     doc: "Tangent-frame gradient of a scalar field at the current cell, returned as `vec2(east, north)`. Computed from neighbor differences projected onto the local east/north basis. Use to express pressure-driven wind without a special primitive: `let grad = gradient(pressure); set wind = vec2(-grad.x, -grad.y) * strength`.",
@@ -217,6 +322,9 @@ export const MATH_FUNCTIONS = [
     name: "divergence",
     target: null,
     arity: [1],
+    argTypes: ["fieldId"], returnType: "f32",
+    wgsl: null,
+    js: null,
     importNamespace: "core",
     signature: "divergence(vec2Field)",
     doc: "Tangent-frame divergence of a vec2 field — sum of east/north partial derivatives along the local tangent basis. Returns a scalar. Use for things like vertical lift (negative divergence of horizontal wind).",

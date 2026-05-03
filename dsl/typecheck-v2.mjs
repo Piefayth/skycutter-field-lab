@@ -30,30 +30,25 @@
 // the type checker NEVER errors on its own ignorance. It only fires
 // when it has both source and target types and they don't match.
 
+import { MATH_FUNCTIONS } from "./dsl-spec.mjs";
+
 const KNOWN_TYPES = new Set(["f32", "vec2", "bool", "unknown"]);
+
+// Registry-backed math-fn dispatch. Each MATH_FUNCTIONS entry's
+// argTypes / returnType drives the per-call type check; adding a new
+// fn = one entry there, no edit here.
+const MATH_BY_NAME = new Map(MATH_FUNCTIONS.map((fn) => [fn.name, fn]));
 
 const F32_BUILTINS = new Set([
   "dt", "frame", "lon", "lat", "x", "y", "u", "v",
   "px", "py", "pz", "i", "N", "PI", "TAU", "r", "z",
 ]);
 
-// Math functions that return f32 from f32-only args. We only enumerate
-// the ones the type checker needs to disambiguate; anything not in this
-// list (or in VEC2_RETURNING_BUILTINS / SHAPE_SPECIAL_BUILTINS) gets
-// classified as "unknown" and falls through.
-const F32_RETURNING_BUILTINS = new Set([
-  "abs", "min", "max", "hypot", "sin", "cos", "asin", "atan2", "exp",
-  "sqrt", "pow", "smoothstep", "clamp", "cellNoise", "cellRand",
-  "wrapAngle",
-]);
-
-// length(vec2) → f32 — and additionally must check the arg is vec2.
-const LENGTH_BUILTIN = "length";
-// vec2(f32, f32) → vec2 — both args must be f32.
-const VEC2_CONSTRUCTOR = "vec2";
-// gradient(scalarFieldName) → vec2 — arg must be a scalar field identifier.
+// Domain-specific builtins with extra-typecheck validation. Their
+// signatures are in the registry; these constants are referenced by
+// the typeOfCall special-case branches that need to inspect the
+// declared type of the field-id argument.
 const GRADIENT_BUILTIN = "gradient";
-// divergence(vec2FieldName) → f32 — arg must be a vec2 field identifier.
 const DIVERGENCE_BUILTIN = "divergence";
 
 // =============================================================================
@@ -397,33 +392,10 @@ function typeOfCall(ast, locals, ctx, label) {
   const name = callee.name;
   const args = ast.args ?? [];
 
-  if (name === VEC2_CONSTRUCTOR) {
-    if (args.length !== 2) {
-      throwTypeError(`${label}: vec2(...) expects 2 arguments, got ${args.length}`);
-    }
-    for (let i = 0; i < args.length; i++) {
-      const t = typeOfExpr(args[i], locals, ctx, label);
-      if (t === "vec2") {
-        throwTypeError(`${label}: vec2(...) argument ${i + 1} must be a scalar, got vec2`);
-      }
-      if (t === "bool") {
-        throwTypeError(`${label}: vec2(...) argument ${i + 1} must be a scalar, got bool`);
-      }
-    }
-    return "vec2";
-  }
-
-  if (name === LENGTH_BUILTIN) {
-    if (args.length !== 1) {
-      throwTypeError(`${label}: length(...) expects 1 argument, got ${args.length}`);
-    }
-    const t = typeOfExpr(args[0], locals, ctx, label);
-    if (t !== "vec2" && t !== "unknown") {
-      throwTypeError(`${label}: length(...) expects a vec2, got ${t}`);
-    }
-    return "f32";
-  }
-
+  // Special cases that need extra-domain validation (the field-id'd
+  // ones inspect the field's declared type to reject gradient-on-vec2
+  // / divergence-on-scalar). These can't be expressed by argTypes
+  // alone since the parser sees an Identifier, not a type.
   if (name === GRADIENT_BUILTIN) {
     if (args.length !== 1 || args[0]?.type !== "Identifier") {
       throwTypeError(`${label}: gradient(field) expects a single field identifier`);
@@ -433,11 +405,8 @@ function typeOfCall(ast, locals, ctx, label) {
     if (ftype === "vec2") {
       throwTypeError(`${label}: gradient(${fname}) — gradient is only defined on scalar (f32) fields`);
     }
-    // ftype === undefined falls through (v1 validator handles unknown
-    // identifiers).
     return "vec2";
   }
-
   if (name === DIVERGENCE_BUILTIN) {
     if (args.length !== 1 || args[0]?.type !== "Identifier") {
       throwTypeError(`${label}: divergence(field) expects a single field identifier`);
@@ -450,20 +419,34 @@ function typeOfCall(ast, locals, ctx, label) {
     return "f32";
   }
 
-  if (F32_RETURNING_BUILTINS.has(name)) {
-    // Per-arg shape check: scalar fns reject vec2 args. Skip for
-    // `clamp` so its 1st arg can also be a vec2 (broadcast — but we
-    // don't currently emit that path; keep conservative and reject).
+  // Generic registry-backed dispatch. Each MATH_FUNCTIONS entry's
+  // argTypes / returnType drives the type check; future fns drop one
+  // entry in dsl-spec.mjs and flow through here automatically.
+  const fn = MATH_BY_NAME.get(name);
+  if (fn) {
+    if (fn.arity && !fn.arity.includes(args.length)) {
+      throwTypeError(`${label}: ${name}(...) expects ${fn.arity.join(" or ")} arguments, got ${args.length}`);
+    }
     for (let i = 0; i < args.length; i++) {
       const t = typeOfExpr(args[i], locals, ctx, label);
-      if (t === "vec2") {
-        throwTypeError(`${label}: ${name}(...) argument ${i + 1} must be a scalar, got vec2`);
+      // Match each arg against argTypes[i], with `argTypes` cycled
+      // when shorter than args (covers variadic-style fns where every
+      // arg has the same type, e.g. `min(a, b)` declared as ["f32",
+      // "f32"] but the parser sees `min(a)` too — registry's arity
+      // gates the count).
+      const expected = fn.argTypes?.[Math.min(i, fn.argTypes.length - 1)] ?? "any";
+      if (expected === "any") continue;
+      if (expected === "fieldId") {
+        if (args[i]?.type !== "Identifier") {
+          throwTypeError(`${label}: ${name}(...) argument ${i + 1} must be a bare field identifier`);
+        }
+        continue;
       }
-      if (t === "bool") {
-        throwTypeError(`${label}: ${name}(...) argument ${i + 1} must be a scalar, got bool`);
+      if (t !== expected && t !== "unknown") {
+        throwTypeError(`${label}: ${name}(...) argument ${i + 1} must be a ${expected}, got ${t}`);
       }
     }
-    return "f32";
+    return fn.returnType ?? "unknown";
   }
 
   // Unknown function — let the v1 validator's identifier check surface
