@@ -49,9 +49,14 @@ param rate       slider 1..100   step 1     default 30    label "RATE"
 param diffU      slider 0..4     step 0.05  default 0.55  label "DIFF U"
 param diffV      slider 0..4     step 0.05  default 0.30  label "DIFF V"
 param diffW      slider 0..4     step 0.05  default 0.10  label "DIFF W"
-param threshold  slider -0.3..0.5 step 0.01 default -0.05 label "THRESH"
+// threshold's interesting territory is the negative half — positive
+// values quench the dynamics to the homogeneous fixed point
+// (verified via wgsl-harness audit). Slider was -0.3..0.5; trimmed.
+param threshold  slider -0.3..0.1 step 0.01 default -0.05 label "THRESH"
 param drive      slider 0..0.2   step 0.001 default 0.025 label "DRIVE"
-param eps1Mul    slider 0.1..5   step 0.05  default 1.0   label "EPS1·"
+// eps1Mul slider was 0.1..5 but past ~1.5 the autocatalyst can't
+// keep pace and all three species collapse to a uniform fixed point.
+param eps1Mul    slider 0.1..2   step 0.05  default 1.0   label "EPS1·"
 param eps2Mul    slider 0.1..5   step 0.05  default 1.0   label "EPS2·"
 param wCoupling  slider 0..2     step 0.05  default 0.55  label "W→U"
 param vDamping   slider 0..2     step 0.05  default 1.0   label "V→U"

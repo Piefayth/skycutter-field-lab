@@ -58,7 +58,12 @@ field T: f32                     // dimensionless undercooling
 field flux: vec2 derived         // ε(θ)²·∇p — written by stage, read by divergence
 
 param simRateHz   slider 0..360 step 1     default 60   label "SIM RATE"
-param rate        slider 1..40  step 1     default 4    label "RATE"
+// rate slider tops out at 10 because the phase-field equation is stiff
+// (τ ≪ 1, latent heat couples back into T, anisotropic flux is
+// nonlinear in ∇p). At rate ≳ 12 the explicit integrator blows T to
+// ±1e27 within a few hundred ticks. Default 4 has dt_eff/τ ≈ 0.67,
+// already aggressive but stable.
+param rate        slider 1..10  step 1     default 4    label "RATE"
 param tau         slider 0.01..0.2 step 0.005 default 0.05 label "τ (PHASE)"
 param ANIS_DELTA  slider 0..0.10 step 0.002 default 0.04 label "ANISOTROPY δ"
 param ANIS_J      slider 2..8   step 1     default 6    label "SYMMETRY j"

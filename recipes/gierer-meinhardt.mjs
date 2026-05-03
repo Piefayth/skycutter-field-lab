@@ -49,7 +49,9 @@ field h: f32
 
 param simRateHz slider 0..360  step 1     default 60    label "SIM RATE"
 param rate      slider 1..200  step 1     default 60    label "RATE"
-param rho       slider 0..0.1  step 0.001 default 0.01  label "ρ (PROD)"
+// rho was 0..0.1 but past ~0.025 both species saturate to the field
+// clamp at 8 within seconds (verified via wgsl-harness audit).
+param rho       slider 0..0.05 step 0.001 default 0.01  label "ρ (PROD)"
 param muA       slider 0..0.05 step 0.0005 default 0.01 label "μa (DECAY a)"
 param muH       slider 0..0.05 step 0.0005 default 0.02 label "μh (DECAY h)"
 param Da        slider 0..0.05 step 0.0005 default 0.005 label "Da (DIFF a)"
