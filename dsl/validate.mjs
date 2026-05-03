@@ -717,8 +717,15 @@ function validateCall(ast, visibleFields, locals, label, declaredParams, declare
 }
 
 function buildImportSets(imports) {
+  // V2 path: imports is `{ permitAll: true, ... }`. The v2 chain owns
+  // its own flat-import constraint (validate-v2.mjs), so the v1
+  // namespaced gating becomes a no-op. Pass the object through so
+  // side-channels (historyFields) and the permitAll sentinel survive.
+  if (imports && !Array.isArray(imports)) return imports;
+  // V1 path: imports is an array of { from, names } records. Build
+  // the namespaced-set shape requireImport expects.
   const sets = new Map();
-  for (const decl of imports) {
+  for (const decl of imports ?? []) {
     if (!sets.has(decl.from)) sets.set(decl.from, new Set());
     for (const name of decl.names ?? []) sets.get(decl.from).add(name);
   }
@@ -727,7 +734,10 @@ function buildImportSets(imports) {
 
 function requireImport(imports, from, name, label) {
   if (!imports) return;
-  if (imports.get(from)?.has(name)) return;
+  // V2 short-circuit: v2 enforces flat imports separately in
+  // validate-v2.mjs, so the v1 namespaced gating is bypassed here.
+  if (imports.permitAll) return;
+  if (imports.get?.(from)?.has(name)) return;
   throw new Error(`${label}: ${from}.${name} is not imported`);
 }
 

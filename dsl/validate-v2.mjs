@@ -37,7 +37,125 @@ export function validateV2(schema) {
   }
   validateMetrics(schema);
   validateExplicitPreviousReads(schema);
+  validateImportsOnSchema(schema);
 }
+
+// V2 import constraint. When the recipe declares no `import` line,
+// every builtin is in scope (importedNames is null). When it does
+// declare one, ONLY the listed names are accessible — using anything
+// else errors with `<namespace>.<name> is not imported`. The check
+// runs after the v1 shape validators so structural errors surface
+// first; this layer adds the import-restriction errors on top.
+//
+// Replaces v1's per-namespace requireImport gating (which compile-v2
+// no longer plumbs in for v2 recipes — see the permitAll sentinel
+// in compile-v2.mjs). Implements the same constraint via a single
+// flat-list lookup, which matches v2's user-facing import shape.
+function validateImportsOnSchema(schema) {
+  const imports = schema.importedNames;
+  if (!imports) return;
+  // Every imported name must be a recognized builtin. Catches typos
+  // ("import xin") at the recipe-load boundary, not later when the
+  // walker happens to find usage of the misspelled name.
+  for (const name of imports) {
+    if (!BUILTIN_NAMESPACE.has(name)) {
+      throw new Error(
+        `v2 import "${name}" is not a recognized builtin — drop it or check the spelling`,
+      );
+    }
+  }
+  const allowed = new Set(imports);
+  // Names that shadow builtin identifiers — recipe-declared fields,
+  // params, consts. A field named `u` shadows the geo-builtin `u`
+  // (alias for projection x), so the walker must NOT flag `u` as a
+  // missing import in expressions. Mirrors the WGSL compiler's
+  // resolution-order: field/param/const wins, then builtin.
+  const shadowed = new Set();
+  for (const decl of schema.fields ?? []) shadowed.add(decl.name);
+  for (const decl of schema.parameters ?? []) shadowed.add(decl.name);
+  for (const decl of schema.constants ?? []) shadowed.add(decl.name);
+  for (const name of Object.keys(schema.planet ?? {})) shadowed.add(name);
+  const ctx = { allowed, shadowed };
+
+  for (const scenario of schema.presets ?? []) {
+    walkInitActionsForImports(scenario.actions ?? [], ctx, `scenario "${scenario.id}"`);
+  }
+  for (const stamp of schema.stamps ?? []) {
+    walkInitActionsForImports(stamp.actions ?? [], ctx, `stamp "${stamp.id}"`);
+  }
+  for (const stage of schema.stages ?? []) {
+    for (const stmt of stage.body?.statements ?? []) {
+      if (stmt.type === "cell") {
+        for (const action of stmt.actions ?? []) {
+          walkActionForImports(action, ctx, `stage "${stage.id}" cell`);
+        }
+        continue;
+      }
+      if (stmt.type === "advect" && stmt.dt) {
+        walkExprForImports(stmt.dt, ctx, `stage "${stage.id}" advect dt`);
+      }
+      if (stmt.type === "wind" && stmt.strength) {
+        walkExprForImports(stmt.strength, ctx, `stage "${stage.id}" wind strength`);
+      }
+    }
+  }
+  // Metric body + predicate get richer identifier resolution in
+  // validateMetricIdentifiers (which knows about scenario/stamp/stage
+  // bindings too); the import check there covers the same cases.
+}
+
+function walkActionForImports(action, ctx, label) {
+  if (!action) return;
+  if (action.expr) walkExprForImports(action.expr, ctx, label);
+  if (action.condition) walkExprForImports(action.condition, ctx, label);
+  if (action.actions) for (const a of action.actions) walkActionForImports(a, ctx, label);
+}
+
+function walkInitActionsForImports(actions, ctx, label) {
+  for (const action of actions) {
+    if (!action) continue;
+    for (const key of ["lon", "lat", "radius", "amount", "value", "rx", "ry", "angle",
+                       "lonMin", "lonMax", "latMin", "latMax", "expr", "condition"]) {
+      if (action[key]) walkExprForImports(action[key], ctx, label);
+    }
+    if (action.actions) walkInitActionsForImports(action.actions, ctx, label);
+  }
+}
+
+function walkExprForImports(ast, ctx, label) {
+  if (!ast || typeof ast !== "object") return;
+  const { allowed, shadowed } = ctx;
+  if (ast.type === "Identifier" && BUILTIN_NAMESPACE.has(ast.name) && !shadowed.has(ast.name)) {
+    if (!allowed.has(ast.name)) {
+      const ns = BUILTIN_NAMESPACE.get(ast.name);
+      throw new Error(`${label}: ${ns}.${ast.name} is not imported`);
+    }
+  }
+  if (ast.type === "Call" && ast.callee?.type === "Identifier") {
+    const fnName = ast.callee.name;
+    if (BUILTIN_NAMESPACE.has(fnName) && !shadowed.has(fnName) && !allowed.has(fnName)) {
+      const ns = BUILTIN_NAMESPACE.get(fnName);
+      throw new Error(`${label}: ${ns}.${fnName} is not imported`);
+    }
+  }
+  if (ast.type === "NeighborReduce" && !allowed.has("neighbor")) {
+    throw new Error(`${label}: core.neighbor is not imported`);
+  }
+  if (ast.type === "CoordRead" && ast.coord?.kind === "prev" && !allowed.has("prev")) {
+    throw new Error(`${label}: clock.prev is not imported`);
+  }
+  for (const k of Object.keys(ast)) {
+    const v = ast[k];
+    if (Array.isArray(v)) v.forEach((c) => walkExprForImports(c, ctx, label));
+    else if (v && typeof v === "object") walkExprForImports(v, ctx, label);
+  }
+}
+
+// BUILTIN_NAMESPACE is declared further down — its IIFE references
+// METRIC_BUILTIN_NAMESPACE which is initialized later in this file. The
+// reference resolution happens at function-call time (TDZ for IIFE
+// at top would crash); placing the IIFE after METRIC_BUILTIN_NAMESPACE
+// keeps both available without circular import.
 
 // Per V2-SPEC.md "Stage I/O": history depth is inferred from `@prev`
 // usage by default, but a stage can also declare explicitly via
@@ -273,6 +391,23 @@ const METRIC_BUILTIN_NAMESPACE = new Map([
   ["px", "geo"], ["py", "geo"], ["pz", "geo"], ["i", "geo"],
 ]);
 const METRIC_BUILTIN_IDENTIFIERS = new Set(METRIC_BUILTIN_NAMESPACE.keys());
+
+// Flat lookup: builtin name → namespace, used by walkExprForImports
+// for the "<namespace>.<name> is not imported" error message. Covers
+// every callable + identifier-shape builtin v2 expressions can
+// reference. Declared here (not at the top) because its IIFE merges
+// in entries from METRIC_BUILTIN_NAMESPACE which is declared just
+// above.
+const BUILTIN_NAMESPACE = (() => {
+  const map = new Map();
+  for (const m of MATH_FUNCTIONS) map.set(m.name, "core");
+  for (const s of STENCIL_HELPERS) map.set(s.name, "core");
+  for (const h of CLOCK_HELPERS) map.set(h.name, "clock");
+  for (const [name, ns] of METRIC_BUILTIN_NAMESPACE.entries()) {
+    if (ns) map.set(name, ns);
+  }
+  return map;
+})();
 
 function metricImportError(name, namespace, label) {
   if (!namespace) return null;

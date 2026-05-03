@@ -463,22 +463,39 @@ Still TODO — partially-enforced or not yet:
 ## Compiler architecture
 
 The v2 surface produces v2 AST nodes that flow through to the WGSL
-compiler unchanged. Some v1 AST shapes (NeighborReduce, stage cell
-actions) are reused as-is — they predate v2 but model the same
-concepts. The compile path is:
+compiler unchanged. Some AST shapes (NeighborReduce, stage cell
+actions) are reused from the original implementation — they predate
+v2 but model the same concepts. The compile path:
 
 - `parse-v2.mjs` produces a v2 AST: CoordRead nodes for `field@coord`,
   NeighborReduce nodes carrying a `coord` binding name, plus the
   shared cell-action types (`set`, `add`, `let`, `when`).
-- `compile-v2.mjs` runs validators (v1 layer for shared shape rules,
-  v2 layer for v2-specific rules) and emits a recipe object the
-  runtime + WGSL compiler consume.
+- `validate-v2.mjs` owns ALL v2-specific semantics: flat-import
+  constraint (replacing v1's namespaced `use sim cell` gating),
+  derived-field rules, metric expression validation,
+  explicit-previous-reads consistency.
+- `validate.mjs` (originally v1) provides shape validators reused as
+  utility code: `validateNameUniqueness`, `validatePresets`,
+  `validateStamps`, `validateStages` check structural rules
+  (reads/writes wiring, history-field single-writer-per-step) that
+  apply equally in v2. The v1 namespaced import gating is bypassed
+  via a `permitAll` sentinel on `schema.imports` — v2 doesn't need
+  the `use NS name` machinery.
 - `webgpu-geodesic-compiler.mjs`'s `compileExpr` dispatches on
-  `CoordRead.coord.kind` directly — no Call-based lowering. New coord
-  kinds extend by adding cases here.
+  `CoordRead.coord.kind` directly. New coord kinds extend by adding
+  cases here.
 - The metric kernel pipeline (per-cell pass + workgroup tree-reduce)
   lives in `webgpu-geodesic-compiler.mjs` (`compileWebGpuMetric`,
   `metricReduceShader`) and `visual/webgpu-metric-runtime.mjs`.
+
+What's NOT in v2's path anymore:
+- v1 namespaced imports (`use sim cell`, `use core sin`). The user
+  writes flat `import sin, cos, neighbor`; the v2 validator enforces
+  it; the v1 validator's namespace gating is short-circuited.
+- v1 INIT_VERBS / PIPELINE_PRIMITIVES catalog routing through to v1
+  imports. Compile-v2 no longer translates v2 imports into the v1
+  namespaced shape — there's no `buildV1ImportsFromV2` /
+  `NAMESPACE_BY_NAME` / `V2_AUTO_INIT` / `V2_MAXIMAL_IMPORTS`.
 
 Concrete shapes:
 - v2 `u@prev` → `CoordRead { field: "u", coord: { kind: "prev" } }`.

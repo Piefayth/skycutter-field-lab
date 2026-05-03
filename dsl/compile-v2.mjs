@@ -1,14 +1,25 @@
 // Field Lab DSL v2 compiler facade.
 //
-// Pipeline: parse v2 syntax → lower to v1 schema shape → run v1 validators →
-// emit the same `{ nodes, edges, dsl }` object that compileDsl() returns.
-// The existing webgpu-geodesic-compiler and runtime consume this unchanged.
+// Pipeline:
+//   1. parse-v2 produces a v2 AST (CoordRead, NeighborReduce with
+//      coord binding, scenario / stamp / metric, etc.)
+//   2. validateV2 owns ALL v2-specific semantics — flat import
+//      constraints, derived-field rules, metric expression
+//      validation, explicit-previous-reads, etc.
+//   3. The v1 validator functions (validateNameUniqueness /
+//      validatePresets / validateStamps / validateStages) are reused
+//      as shape validators only. Their namespaced import gating is
+//      bypassed via a `permitAll` sentinel — v2 doesn't need v1's
+//      `use sim cell` machinery.
+//   4. webgpu-geodesic-compiler emits WGSL directly from the v2 AST
+//      (CoordRead is a first-class node; NeighborReduce.coord drives
+//      binding derivation in emitReduction).
 //
-// v2 is import-free; v1's validators expect import metadata to gate primitive
-// usage. To bridge: we synthesize a maximal imports list covering every
-// primitive + builtin so the v1 import checks always pass. v2's own
-// restrictions (one cell per stage, derived field rules, metric grammar) are
-// enforced by the v2 parser itself plus the dedicated v2 validator.
+// The remaining v1 dependency is the shape-validator code path. That
+// reuse is acceptable because those validators check structural rules
+// (reads/writes wiring, name uniqueness, history-field
+// single-writer-per-step) that are the same in v1 and v2. The v1
+// import-namespace concept doesn't escape this module.
 
 import { parseV2 } from "./parse-v2.mjs";
 import {
@@ -21,98 +32,17 @@ import {
   validateStamps,
 } from "./validate.mjs";
 import { validateV2 } from "./validate-v2.mjs";
-import {
-  CLOCK_BUILTINS,
-  CLOCK_HELPERS,
-  GEO_BUILTINS,
-  GEO_CONSTANTS,
-  INIT_VERBS,
-  MATH_FUNCTIONS,
-  PIPELINE_PRIMITIVES,
-  STAGE_BLOCKS,
-  STENCIL_HELPERS,
-  STAMP_EXTRAS,
-} from "./dsl-spec.mjs";
-
-// Auto-imported v1 namespaces / names that v2 syntax doesn't expose
-// directly but that the v1 validator still checks against under the
-// hood. The user never imports these; they're internal routing.
-//
-// `fill` and `eachCell` aren't in v2's INIT_VERBS catalog (the user
-// writes `set f = 0` and `for each cell { ... }`), but the parser
-// lowers those to v1-shape `fill` / `eachCell` actions for the v1
-// validator. Hardcoded here rather than derived from INIT_VERBS so
-// the user-facing catalog can stay clean.
-const V2_AUTO_SIM = ["cell"];
-const V2_AUTO_INIT = ["fill", "spot", "ellipse", "region", "eachCell"];
-
-// The maximal builtin list, used when a recipe declares no `import`
-// lines. Mirrors the union of every v1 namespace's allowed names.
-const V2_MAXIMAL_IMPORTS = [
-  { from: "init",  names: V2_AUTO_INIT },
-  { from: "sim",   names: [...PIPELINE_PRIMITIVES.map((p) => p.name), ...STAGE_BLOCKS.map((b) => b.name)] },
-  { from: "clock", names: [...CLOCK_BUILTINS.map((b) => b.name), ...CLOCK_HELPERS.map((b) => b.name)] },
-  { from: "geo",   names: [...GEO_BUILTINS.map((b) => b.name), ...GEO_CONSTANTS.map((b) => b.name)] },
-  { from: "core",  names: [...MATH_FUNCTIONS.map((m) => m.name), ...STENCIL_HELPERS.map((s) => s.name)] },
-];
-
-// Lookup table: builtin name → v1 namespace. Lets us route v2's flat
-// import list (e.g. `import sin, cos, neighbor, prev`) into the v1
-// validator's namespaced shape.
-const NAMESPACE_BY_NAME = (() => {
-  const map = new Map();
-  for (const m of MATH_FUNCTIONS) map.set(m.name, "core");
-  for (const s of STENCIL_HELPERS) map.set(s.name, "core");
-  for (const b of CLOCK_BUILTINS) map.set(b.name, "clock");
-  for (const b of CLOCK_HELPERS) map.set(b.name, "clock");
-  for (const b of GEO_BUILTINS) map.set(b.name, "geo");
-  for (const c of GEO_CONSTANTS) map.set(c.name, "geo");
-  for (const e of STAMP_EXTRAS) map.set(e.name, "geo"); // brush radius `r`
-  for (const p of PIPELINE_PRIMITIVES) map.set(p.name, "sim");
-  for (const b of STAGE_BLOCKS) map.set(b.name, "sim");
-  for (const v of INIT_VERBS) map.set(v.name, "init");
-  return map;
-})();
-
-// Build v1-shape imports from a flat list of v2 import names. Every
-// listed name is looked up in NAMESPACE_BY_NAME — unknown names are an
-// error (the recipe imported something that isn't a real builtin). The
-// v2 auto-imports (cell, fill, spot, etc.) are appended unconditionally
-// since they're not user-facing in v2 syntax but the v1 validator still
-// gates on them.
-function buildV1ImportsFromV2(importedNames) {
-  if (!importedNames || importedNames.length === 0) {
-    return V2_MAXIMAL_IMPORTS;
-  }
-  const byNs = new Map();
-  function add(ns, name) {
-    if (!byNs.has(ns)) byNs.set(ns, new Set());
-    byNs.get(ns).add(name);
-  }
-  for (const name of importedNames) {
-    const ns = NAMESPACE_BY_NAME.get(name);
-    if (!ns) {
-      throw new Error(
-        `v2 import "${name}" is not a recognized builtin — drop it or check the spelling`,
-      );
-    }
-    add(ns, name);
-  }
-  // Auto-add the v1 stage-block / init-verb names so v1's validator
-  // doesn't complain about their use. Recipe authors don't import
-  // these in v2; they're always available.
-  for (const name of V2_AUTO_SIM) add("sim", name);
-  for (const name of V2_AUTO_INIT) add("init", name);
-  return [...byNs.entries()].map(([from, names]) => ({ from, names: [...names] }));
-}
 
 export function compileV2(source) {
   const schema = parseV2(source);
-  // Translate v2's flat `importedNames` (or null = no imports declared)
-  // into v1's namespaced shape that the v1 validator gates on. When the
-  // recipe declared explicit imports, only those names are allowed; the
-  // v1 validator's requireImport() will reject anything else.
-  schema.imports = buildV1ImportsFromV2(schema.importedNames);
+  // V2 doesn't use v1's namespaced `use NS name` import gating. The
+  // permitAll sentinel tells v1's requireImport to short-circuit; the
+  // v2 validator (validateV2 below) owns the actual flat-import
+  // constraint check. The historyFields side-channel still piggybacks
+  // on this object — validateStages writes it for the validateCall /
+  // validateCoordRead branches that need to know which fields have
+  // @prev usage anywhere in the recipe.
+  schema.imports = { permitAll: true };
 
   const presets = schema.presets;
   const stamps = schema.stamps;
