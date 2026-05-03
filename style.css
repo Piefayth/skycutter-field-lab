@@ -2234,16 +2234,27 @@ input[type="range"]::-moz-range-thumb {
   max-height: 100%;
 }
 
+/* The accordion has four sections in DOM order: pipeline, view,
+   stamp, preset. Exactly one is open at a time; the open row gets
+   `minmax(0, 1fr)` so it grows to fill the available pane height,
+   the other three collapse to `auto` (just the summary bar).
+   These templates must include one row per section — adding one
+   without updating these rules drops back to the grid default
+   and the active editor stops filling the pane. */
 .pg-dsl-stack[data-active="pipeline"] {
-  grid-template-rows: minmax(0, 1fr) auto auto;
+  grid-template-rows: minmax(0, 1fr) auto auto auto;
+}
+
+.pg-dsl-stack[data-active="view"] {
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
 }
 
 .pg-dsl-stack[data-active="stamp"] {
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
 }
 
 .pg-dsl-stack[data-active="preset"] {
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr);
 }
 
 .pg-dsl-section {
