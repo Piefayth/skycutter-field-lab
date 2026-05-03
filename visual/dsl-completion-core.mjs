@@ -1,4 +1,4 @@
-import { cursorContextForAst, parseDslAst } from "../dsl/ast-v2.mjs";
+import { cursorContextForAst, lineIndentDepth, parseDslAst } from "../dsl/ast-v2.mjs";
 import { DSL_SYMBOLS } from "./dsl-symbols.mjs";
 
 const TOP_LEVEL_KINDS = new Set([
@@ -74,6 +74,22 @@ export function completionOptionsForSource(source, pos, prefix = "") {
   return buildOptions(source, ctx, mode, prefix);
 }
 
+export function blankStructuralOptionsForSource(source, pos, { indentUnit = "  " } = {}) {
+  source = String(source ?? "");
+  const line = lineAt(source, pos);
+  const before = source.slice(line.from, pos);
+  const after = source.slice(pos, line.to);
+  if (before.trim() !== "" || after.trim() !== "") return [];
+
+  const ast = parseDslAst(source);
+  const depth = lineIndentDepth(ast, source, line.from);
+  const canonicalIndent = indentUnit.repeat(depth);
+  if (before !== canonicalIndent) return [];
+
+  const options = completionOptionsForSource(source, pos, "");
+  return options.length > 1 ? options : [];
+}
+
 export function detectContextForSource(source, pos) {
   source = String(source ?? "");
   const lineStart = source.lastIndexOf("\n", Math.max(0, pos - 1)) + 1;
@@ -86,6 +102,13 @@ export function detectContextForSource(source, pos) {
     ast,
     cursor,
   };
+}
+
+function lineAt(source, pos) {
+  const from = source.lastIndexOf("\n", Math.max(0, pos - 1)) + 1;
+  const next = source.indexOf("\n", pos);
+  const to = next < 0 ? source.length : next;
+  return { from, to };
 }
 
 export function classifyContext(ctx) {

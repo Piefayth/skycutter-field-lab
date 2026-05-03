@@ -1,4 +1,7 @@
-import { completionOptionsForSource } from "./dsl-completion-core.mjs";
+import {
+  blankStructuralOptionsForSource,
+  completionOptionsForSource,
+} from "./dsl-completion-core.mjs";
 
 function test(name, fn) {
   try {
@@ -68,6 +71,20 @@ step {
 test("cell body offers only cell action words for a bare prefix", () => {
   assertEq(labels(SOURCE, "@@"), ["let", "set", "add", "when"]);
   assertEq(labels(SOURCE, "@@", "s"), ["set"]);
+});
+
+test("blank structural popup only opens at canonical indentation", () => {
+  const pos = SOURCE.indexOf("@@");
+  const clean = SOURCE.replace("@@", "");
+  assertEq(blankStructuralOptionsForSource(clean, pos).map((option) => option.label), ["let", "set", "add", "when"]);
+
+  const underIndented = clean.replace("      \n    }\n  }\n}", "    \n    }\n  }\n}");
+  const underIndentedPos = underIndented.indexOf("    \n    }\n  }\n}");
+  assertEq(blankStructuralOptionsForSource(underIndented, underIndentedPos + 4).map((option) => option.label), []);
+
+  const overIndented = clean.replace("      \n    }\n  }\n}", "        \n    }\n  }\n}");
+  const overIndentedPos = overIndented.indexOf("        \n    }\n  }\n}");
+  assertEq(blankStructuralOptionsForSource(overIndented, overIndentedPos + 8).map((option) => option.label), []);
 });
 
 test("set target position offers declared fields", () => {

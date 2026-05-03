@@ -27,6 +27,7 @@ import {
 import { StateField, StateEffect, Prec } from "@codemirror/state";
 
 import {
+  blankStructuralOptionsForSource,
   chooseImportInsertPoint,
   completionOptionsForSource,
   importedAlready,
@@ -212,14 +213,7 @@ function shouldOpenBlankStructuralMenu(view) {
   if (cursorIsMidWord(view.state, pos)) return false;
   if (wordBefore(view.state, pos)) return false;
 
-  const line = view.state.doc.lineAt(pos);
-  const before = line.text.slice(0, pos - line.from);
-  const after = line.text.slice(pos - line.from);
-  if (activeLineSegment(before).trim() !== "") return false;
-  if (after.trim() !== "") return false;
-
-  const options = completionOptionsForSource(view.state.doc.toString(), pos, "");
-  return options.length > 1;
+  return blankStructuralOptionsForSource(view.state.doc.toString(), pos).length > 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -283,13 +277,6 @@ function cursorIsMidWord(state, pos) {
   if (pos >= state.doc.length) return false;
   const next = state.doc.sliceString(pos, pos + 1);
   return /[A-Za-z0-9_$]/.test(next);
-}
-
-function activeLineSegment(line) {
-  const brace = line.lastIndexOf("{");
-  const semi = line.lastIndexOf(";");
-  const cut = Math.max(brace, semi);
-  return cut >= 0 ? line.slice(cut + 1) : line;
 }
 
 // Pure function: given a state, return the ghost record (or null).
