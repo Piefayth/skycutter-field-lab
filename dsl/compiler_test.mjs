@@ -65,26 +65,32 @@ stage seed "Seed" {
 });
 
 test("shared DSL introspection extracts editor-visible names", () => {
+  // Introspection now reads v2 syntax (extractDslNames uses parseV2).
+  // The set of names extracted is the same as the v1 era — just with
+  // the new declaration shape: substrate / typed fields / no `source`
+  // construct (sources are regular fields in v2 first cut) / no `use`.
   const names = extractDslNames(`
 recipe "Names"
-planet radius 1
-const gain 0.5
-field pressure, cloud
-source heatSource
-param enabled boolean default true
-use sim cell
+substrate geodesic frequency 16
 
-stage tick "Tick" {
-  reads pressure, heatSource
-  writes pressure
-  cell {
-    add pressure = heatSource * gain
+const gain = 0.5
+field pressure: f32
+field cloud: f32
+field heatSource: f32
+param enabled toggle default true
+
+step {
+  stage tick "Tick" {
+    reads pressure, heatSource
+    writes pressure
+    cell {
+      add pressure = heatSource * gain
+    }
   }
 }
 `);
-  assertDeep(names.fields, ["pressure", "cloud"], "fields");
-  assertDeep(names.sources, ["heatSource"], "sources");
-  assertDeep(names.immutables, ["enabled", "gain", "radius"], "immutables");
+  assertDeep(names.fields, ["pressure", "cloud", "heatSource"], "fields");
+  assertDeep(names.immutables, ["enabled", "gain"], "immutables");
 });
 
 test("block parser ignores DSL keywords in strings and comments", () => {

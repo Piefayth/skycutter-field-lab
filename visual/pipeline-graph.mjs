@@ -52,7 +52,7 @@ import {
 } from "./pipeline-graph-ports.mjs";
 import { drawFieldPreview, isElementOnScreen, PREVIEW_SIZE, previewResolutionForGrid } from "./pipeline-previews.mjs";
 import { showToast } from "./toast.mjs";
-import { diagnoseDsl } from "../dsl/compiler.mjs";
+import { diagnoseV2 as diagnoseDsl } from "../dsl/compile-v2.mjs";
 
 const NODE_W = 280;
 const NODE_H = 86;       // base; nodeHeight grows with port count

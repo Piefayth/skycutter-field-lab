@@ -1,10 +1,14 @@
 // Lightweight DSL metadata extraction for editor/UI surfaces.
 
-import { parseTopLevelDeclarations } from "./parse.mjs";
+import { parseV2 } from "./parse-v2.mjs";
 
 export function extractDslNames(source) {
   try {
-    const schema = parseTopLevelDeclarations(String(source ?? ""));
+    // parseV2 throws on incomplete recipes (no recipe/substrate/stage),
+    // which is exactly what the editor shows mid-edit. Wrap in try/catch
+    // and fall back to empty-name stubs so autocomplete doesn't crash
+    // while the user is typing.
+    const schema = parseV2(String(source ?? ""));
     const fieldNames = (schema.fields ?? [])
       .filter((decl) => decl?.kind !== "source")
       .map((decl) => decl?.name)
