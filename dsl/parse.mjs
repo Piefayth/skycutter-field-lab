@@ -173,6 +173,16 @@ function parseFieldDirective(line, keyword, kind) {
     if (!Number.isFinite(history) || history < 1) {
       throw new Error(`Invalid history count: ${line}`);
     }
+    // Runtime only allocates one prev buffer (3-buffer rotation:
+    // {prev, current, next}). N-deep history would need N+2 buffers
+    // and an N-step rotation; until that lands, accepting `history 2`
+    // and silently behaving like `history 1` is a worse contract than
+    // refusing it.
+    if (history > 1) {
+      throw new Error(
+        `history ${history} is not yet supported (only \`history 1\` is implemented): ${line}`,
+      );
+    }
   }
   const names = body
     .split(",")

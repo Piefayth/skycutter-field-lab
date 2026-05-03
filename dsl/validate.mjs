@@ -217,6 +217,44 @@ export function validateStages(stages, schema = {}) {
       }
     }
   }
+  // Every history field must have exactly one writer. Without one, the
+  // pipeline runtime still rotates indices each tick — `next` (which is
+  // uninitialized scratch) becomes `current` after the first tick,
+  // poisoning the field with garbage. Catch it here rather than letting
+  // the user see uninitialized GPU memory render to screen.
+  for (const fieldName of imports.historyFields.keys()) {
+    if (!historyWriters.has(fieldName)) {
+      throw new Error(
+        `history field "${fieldName}" has no writing stage — declare a stage that ` +
+        `writes ${fieldName} via cell { set ${fieldName} = ... } or drop the \`history\` ` +
+        `modifier. Without a writer, the {prev, current, next} rotation cycles ` +
+        `uninitialized scratch into current after the first tick.`,
+      );
+    }
+  }
+  // History-field reads outside the writer stage break ordering: stages
+  // BEFORE the writer correctly see u_N (the current view), but stages
+  // AFTER the writer would expect u_{N+1} (just-written) and instead
+  // get u_N (because the rotation only happens at end-of-tick — the
+  // newly-written value sits in `next` until then, invisible to other
+  // stages reading the bare identifier). Restrict reads to the writer's
+  // stage and stages declared before it.
+  const stageIndex = new Map(stages.map((stage, idx) => [stage.id, idx]));
+  for (const stage of stages) {
+    for (const field of stage.reads ?? []) {
+      if (!imports.historyFields.has(field)) continue;
+      const writerStage = historyWriters.get(field);
+      if (!writerStage) continue; // already errored above
+      if (stageIndex.get(stage.id) > stageIndex.get(writerStage)) {
+        throw new Error(
+          `${stage.id}: reads history field "${field}" after its writer "${writerStage}" — ` +
+          `the new value sits in the rotation's "next" slot until end of tick, so this ` +
+          `read sees the OLD value (pre-write). Move the read to a stage at-or-before ` +
+          `"${writerStage}", or fold the dependent computation into "${writerStage}".`,
+        );
+      }
+    }
+  }
   const availableDeclaredFields = new Set();
   for (const stage of stages) {
     if (ids.has(stage.id)) throw new Error(`Duplicate stage id: ${stage.id}`);

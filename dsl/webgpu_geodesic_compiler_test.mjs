@@ -403,6 +403,121 @@ source w history 1
   assert(threw && threw.includes("history is only valid on"), `expected source-rejection error; got: ${threw}`);
 });
 
+test("parser rejects history > 1", () => {
+  let threw = null;
+  try {
+    compileDsl(`
+recipe "Hist"
+use sim cell
+use clock dt, frame, prev
+use geo px, py, pz
+field u history 2
+
+stage step "Step" {
+  reads u
+  writes u
+  cell {
+    add u = (u - prev(u)) * dt
+  }
+}
+`);
+  } catch (error) {
+    threw = error.message;
+  }
+  assert(
+    threw && threw.includes("not yet supported"),
+    `expected history>1 rejection; got: ${threw}`,
+  );
+});
+
+test("validator rejects history field with no writer", () => {
+  let threw = null;
+  try {
+    compileDsl(`
+recipe "Hist"
+use sim cell
+use clock dt, frame, prev
+use geo px, py, pz
+field u history 1
+
+stage observe "Observe" {
+  reads u
+  writes u
+  cell {
+    set u = u
+  }
+}
+`);
+  } catch (error) {
+    threw = error.message;
+  }
+  // Sanity: this one DOES have a writer, should NOT throw.
+  assert(threw === null, `expected no error for present writer; got: ${threw}`);
+
+  // Now the actual no-writer case.
+  threw = null;
+  try {
+    compileDsl(`
+recipe "Hist"
+use sim cell
+use clock dt, frame, prev
+use geo px, py, pz
+field u history 1
+field v
+
+stage step "Step" {
+  reads u, v
+  writes v
+  cell {
+    set v = prev(u)
+  }
+}
+`);
+  } catch (error) {
+    threw = error.message;
+  }
+  assert(
+    threw && threw.includes("no writing stage"),
+    `expected no-writer error; got: ${threw}`,
+  );
+});
+
+test("validator rejects read of history field after its writer", () => {
+  let threw = null;
+  try {
+    compileDsl(`
+recipe "Hist"
+use sim cell
+use clock dt, frame, prev
+use geo px, py, pz
+field u history 1
+field v
+
+stage step "Step" {
+  reads u
+  writes u
+  cell {
+    set u = u + prev(u)
+  }
+}
+
+stage echo "Echo" {
+  reads u, v
+  writes v
+  cell {
+    set v = u
+  }
+}
+`);
+  } catch (error) {
+    threw = error.message;
+  }
+  assert(
+    threw && threw.includes("after its writer"),
+    `expected post-writer-read error; got: ${threw}`,
+  );
+});
+
 test("validator rejects history field written by multiple stages", () => {
   let threw = null;
   try {
