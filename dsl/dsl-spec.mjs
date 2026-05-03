@@ -850,6 +850,47 @@ const DUAL_USE_NAMES = new Set([
 // Convenience helpers for consumers.
 // ---------------------------------------------------------------------------
 
+// WGSL reserved keywords that would collide if used as a bare local /
+// field / param name in a recipe. The cell-shader compiler emits
+// author-named locals directly into WGSL (a `let foo = ...` in the
+// DSL becomes `let foo = ...` in WGSL), so a name collision produces
+// an inscrutable "name `X` is a reserved keyword" error from the
+// WGSL parser. Reserving them at recipe-load time turns the failure
+// into a clear DSL-level rejection.
+//
+// Sources:
+//   - Hard-reserved tokens (WGSL spec §2.6 Reserved words): the long
+//     list of identifiers carved out for future-spec use.
+//   - Type keywords (bool, f32, vec2, ...): used in `field x: TYPE`
+//     declarations and the WGSL constructor calls.
+//   - Control-flow keywords (if, else, for, while, ...): WGSL syntax.
+//   - Address-space / declaration keywords (var, let, const, fn, ...).
+//
+// Attribute names like `align` / `binding` / `group` / `location` are
+// NOT included — they're predeclared enumerants only special inside
+// `@attribute(...)` position. WGSL accepts them as plain identifier
+// names, so the Vicsek recipe's `align` field compiles fine.
+const WGSL_RESERVED_WORDS = [
+  // Declaration / module-scope
+  "alias", "const", "fn", "let", "override", "requires", "struct", "var",
+  // Control flow
+  "break", "case", "continue", "continuing", "default", "discard",
+  "else", "for", "if", "loop", "return", "switch", "while",
+  // Address spaces / access modes
+  "function", "private", "push_constant", "read", "read_write", "storage",
+  "uniform", "workgroup", "write",
+  // Scalar / vector / matrix types
+  "bool", "f16", "f32", "i32", "u32", "vec2", "vec3", "vec4",
+  "mat2x2", "mat2x3", "mat2x4", "mat3x2", "mat3x3", "mat3x4",
+  "mat4x2", "mat4x3", "mat4x4",
+  // Other type keywords
+  "array", "atomic", "ptr", "sampler", "sampler_comparison", "texture_external",
+  // The specific `target` reservation that triggered this list —
+  // hits when recipe authors reach for it as the loop-variable name
+  // ("next state" in cyclic CAs, "destination value" in updates, etc.)
+  "target",
+];
+
 // Names reserved across the whole DSL — anything a recipe author cannot
 // declare without breaking semantics. Driven by the spec so adding a
 // math fn or stencil helper automatically reserves its name.
@@ -858,6 +899,7 @@ export const RESERVED_NAMES = new Set([
   ...MATH_FUNCTIONS.map((s) => s.name),
   ...STENCIL_HELPERS.map((s) => s.name),
   ...CLOCK_HELPERS.map((s) => s.name),
+  ...WGSL_RESERVED_WORDS,
 ]);
 
 // All symbols flat, with an attached `kind` matching the visual catalog's

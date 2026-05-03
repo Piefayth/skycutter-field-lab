@@ -699,6 +699,47 @@ step {
 // evaluator; some cell-stage grammar constructs aren't implemented there).
 // -----------------------------------------------------------------------------
 
+test("local name collides with WGSL reserved word", () => {
+  // The WGSL emit drops the local's name straight into the shader,
+  // so a name like `target` (which is a WGSL reserved word) blew up
+  // with "name `target` is a reserved keyword" at GPU pipeline
+  // creation. Now caught at recipe load with the standard
+  // builtin-collision error.
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field state: u32
+step {
+  stage s "S" {
+    reads state
+    writes state
+    cell {
+      let target = state + 1
+      set state = target
+    }
+  }
+}
+`), "shadows a builtin/reserved identifier");
+});
+
+test("local name collides with WGSL type keyword", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+step {
+  stage s "S" {
+    reads u
+    writes u
+    cell {
+      let f32 = u
+      set u = f32
+    }
+  }
+}
+`), "shadows a builtin/reserved identifier");
+});
+
 test("type-check rejects let-local inside gradient(...) arg", () => {
   // gradient(local) silently produced wrong WGSL (the local
   // resolved to its cell-uniform value at every neighbor in the

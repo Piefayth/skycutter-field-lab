@@ -151,17 +151,18 @@ step {
     reads state
     writes state, changed
     cell {
-      // Target state = (state + 1) mod numStates. WGSL's % works
-      // on f32 too; the cell body sees state as f32 (cast on read)
-      // and produces an f32 target the WGSL emit casts back to u32
-      // on writeback.
-      let target = (state + 1) % numStates
+      // Next state in the cycle = (state + 1) mod numStates. WGSL's
+      // % works on f32 too; the cell body sees state as f32 (cast
+      // on read) and produces an f32 nextState the WGSL emit casts
+      // back to u32 on writeback. (\`target\` would be a friendlier
+      // name but it's a WGSL reserved keyword.)
+      let nextState = (state + 1) % numStates
       // Count neighbors at the target state. state@n surfaces as
       // f32; equality compares as f32 == f32 which is exact for
       // the small integer values we're dealing with.
-      let triggers = sum n in neighbors { (state@n == target) ? 1 : 0 }
+      let triggers = sum n in neighbors { (state@n == nextState) ? 1 : 0 }
       let advance = triggers >= threshold
-      set state = advance ? target : state
+      set state = advance ? nextState : state
       // Diagnostic — was this cell rotated this tick? Drives the
       // ACTIVE metric so the regime indicator reflects "is the
       // pattern still settling".
