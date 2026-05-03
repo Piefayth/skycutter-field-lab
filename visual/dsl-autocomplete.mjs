@@ -19,7 +19,7 @@
 // =============================================================================
 
 import {
-  autocompletion, completionKeymap, acceptCompletion, snippetCompletion,
+  autocompletion, completionKeymap, acceptCompletion,
 } from "@codemirror/autocomplete";
 import {
   keymap, Decoration, WidgetType, EditorView,
@@ -359,8 +359,8 @@ function keywordOption(label, detail = undefined, boost = 20) {
 }
 
 function structuralOption(label, detail = undefined, boost = 30, template = null) {
-  const base = { label, type: "keyword", detail, boost };
-  return template ? { ...snippetCompletion(template, base), boost } : base;
+  void template;
+  return { label, type: "keyword", detail, boost };
 }
 
 function optionsFromNames(names, role) {
@@ -416,22 +416,6 @@ function filterOptions(options, prefix) {
     out.push(option);
   }
   return out;
-}
-
-function innermostBlock(ctx, keyword) {
-  for (let i = (ctx.cursor?.stack?.length ?? 0) - 1; i >= 0; i--) {
-    const block = ctx.cursor.stack[i];
-    if (!keyword || block.keyword === keyword) return block;
-  }
-  return null;
-}
-
-function blockHasStatement(block, keyword) {
-  return (block?.statements ?? []).some((stmt) => stmt.keyword === keyword);
-}
-
-function blockHasChild(block, keyword) {
-  return (block?.children ?? []).some((child) => child.keyword === keyword);
 }
 
 function lineWithoutPrefix(ctx) {
@@ -536,20 +520,10 @@ function optionsForGrammarPosition(ctx, mode, prefix) {
   if (mode.mode === "stageBody") {
     if (/^\s*(reads|writes)\s+[\w\s,]*$/.test(line)) return structural(fieldsFromAst(ctx));
     if (/^\s*[A-Za-z_]*$/.test(trimmed)) {
-      const stage = innermostBlock(ctx, "stage");
-      const hasReads = blockHasStatement(stage, "reads");
-      const hasWrites = blockHasStatement(stage, "writes");
-      const hasCell = blockHasStatement(stage, "cell") || blockHasChild(stage, "cell");
-      const missing = [];
-      if (!hasReads) missing.push(structuralOption("reads", "reads field1, field2", 30, "reads ${field}"));
-      if (hasReads && !hasWrites) missing.push(structuralOption("writes", "writes field1, field2", 30, "writes ${field}"));
-      if (hasReads && hasWrites && !hasCell) {
-        missing.push(structuralOption("cell", "cell { ... }", 30, "cell {\n  ${}\n}"));
-      }
-      if (missing.length > 0) return structural(missing);
       return structural([
-        structuralOption("reads", "reads field1, field2", -5, "reads ${field}"),
-        structuralOption("writes", "writes field1, field2", -5, "writes ${field}"),
+        structuralOption("reads", "reads field1, field2"),
+        structuralOption("writes", "writes field1, field2"),
+        structuralOption("cell", "cell { ... }"),
       ]);
     }
   }
@@ -984,39 +958,6 @@ function acceptGhost(view) {
   return true;
 }
 
-function activeSegmentBeforeCursor(state, pos) {
-  const line = state.doc.lineAt(pos);
-  const text = state.doc.sliceString(line.from, pos);
-  return activeLineSegment(text.replace(/\/\/.*$/, ""));
-}
-
-// Tab at a blank structural position should do the obvious thing even when the
-// user has not typed a prefix yet. This is intentionally narrow: it only fires
-// when the current line segment is whitespace, and only when the grammar context
-// has exactly one snippet/keyword to offer.
-function acceptUniqueStructural(view) {
-  const sel = view.state.selection.main;
-  if (!sel.empty) return false;
-  const pos = sel.head;
-  if (cursorIsMidWord(view.state, pos)) return false;
-  if (activeSegmentBeforeCursor(view.state, pos).trim() !== "") return false;
-
-  const ctx = detectContext(view.state, pos);
-  const mode = classifyContext(ctx);
-  const options = buildOptions(view.state, ctx, mode, "");
-  if (options.length !== 1) return false;
-  const completion = options[0];
-  if (typeof completion.apply === "function") {
-    completion.apply(view, completion, pos, pos);
-  } else {
-    view.dispatch({
-      changes: { from: pos, to: pos, insert: completion.label },
-      selection: { anchor: pos + completion.label.length },
-    });
-  }
-  return true;
-}
-
 // Esc handler: dismiss the ghost without inserting.
 function dismissGhost(view) {
   const ghost = view.state.field(ghostField, false);
@@ -1052,7 +993,6 @@ export function dslAutocomplete() {
     Prec.high(keymap.of([
       { key: "Tab", run: acceptGhost },
       { key: "Tab", run: acceptCompletion },
-      { key: "Tab", run: acceptUniqueStructural },
       { key: "Escape", run: dismissGhost },
       ...completionKeymap,
     ])),
