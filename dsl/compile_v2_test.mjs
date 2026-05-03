@@ -158,3 +158,24 @@ step {
   assertEq(source.slice(error.from, error.to), "nope", "diagnostic should target expression reference");
   assert(error.line > 8, "diagnostic should not point at the field declaration");
 });
+
+test("diagnoseV2 targets the action field for assignment type errors", () => {
+  const source = `
+recipe "Bad"
+substrate geodesic frequency 16
+field u: f32
+field wind: vec2
+step {
+  stage broken {
+    reads wind
+    writes u
+    cell { set u = wind }
+  }
+}`;
+  const result = diagnoseV2(source);
+  assert(!result.ok, "expected diagnostic failure");
+  const [error] = result.errors;
+  assert(error.message.includes("type mismatch"), `expected type mismatch, got ${error.message}`);
+  assertEq(source.slice(error.from, error.to), "u", "diagnostic should target assignment field");
+  assert(error.line > 8, "diagnostic should not point at the field declaration");
+});

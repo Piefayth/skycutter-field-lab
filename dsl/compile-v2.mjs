@@ -186,6 +186,13 @@ function locateDiagnosticRange(source, message, cst = null) {
     if (index >= 0) return spanWordOrLine(source, index, snippet.length);
   }
 
+  const assignmentMatch = /\bstage "([^"]+)"\s+(set|add)\s+([A-Za-z_][A-Za-z0-9_]*)/.exec(message);
+  if (assignmentMatch) {
+    const [, stageName, action, field] = assignmentMatch;
+    const range = findStageActionTarget(cst, source, stageName, action, field);
+    if (range) return range;
+  }
+
   const candidates = [
     /unknown identifier "([^"]+)"/,
     /unknown identifier ([A-Za-z_][A-Za-z0-9_]*)/,
@@ -239,6 +246,27 @@ function findTokenInCst(cst, token) {
   const symbol = (cst.symbols ?? []).find((sym) => sym.name === token);
   if (symbol) return { from: symbol.from, to: symbol.to };
   return null;
+}
+
+function findStageActionTarget(cst, source, stageName, action, field) {
+  if (!cst || !stageName || !action || !field) return null;
+  const stage = (cst.blocks ?? []).find((block) => {
+    if (block.keyword !== "stage") return false;
+    if (block.id === stageName) return true;
+    const header = source.slice(block.headerFrom, block.headerTo);
+    return /"([^"]*)"/.exec(header)?.[1] === stageName;
+  });
+  if (!stage) return null;
+  const stmt = (cst.statements ?? [])
+    .filter((candidate) =>
+      candidate.keyword === action
+      && candidate.parts?.target?.name === field
+      && candidate.from >= stage.bodyFrom
+      && candidate.to <= stage.bodyTo
+    )
+    .sort((a, b) => a.from - b.from)[0];
+  const target = stmt?.parts?.target;
+  return target ? { from: target.from, to: target.to } : null;
 }
 
 function findNamedBlockOrDecl(source, id) {
