@@ -45,7 +45,14 @@ export function splitPipelineDsl(source) {
     ...extractTopLevelBlockRanges(source, "scenario"),
     ...extractTopLevelBlockRanges(source, "preset"),
   ];
-  const ranges = [...stampRanges, ...presetRanges].sort((a, b) => a.from - b.from);
+  // Render-config slice — palette + view blocks. Overlays are
+  // one-line declarations (no braces) so they don't match the
+  // block extractor; they stay in the main pipeline section.
+  const viewRanges = [
+    ...extractTopLevelBlockRanges(source, "palette"),
+    ...extractTopLevelBlockRanges(source, "view"),
+  ];
+  const ranges = [...stampRanges, ...presetRanges, ...viewRanges].sort((a, b) => a.from - b.from);
   let main = source ?? "";
   for (const range of [...ranges].sort((a, b) => b.from - a.from)) {
     main = `${main.slice(0, range.from)}\n${main.slice(range.to)}`;
@@ -58,6 +65,7 @@ export function splitPipelineDsl(source) {
     // it ripples into setSection lookups. Conceptually this slice
     // holds the recipe's scenarios.
     presets: presetRanges.sort((a, b) => a.from - b.from).map((range) => range.text.trim()).join("\n\n"),
+    views: viewRanges.sort((a, b) => a.from - b.from).map((range) => range.text.trim()).join("\n\n"),
   };
 }
 

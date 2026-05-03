@@ -2040,12 +2040,68 @@ input[type="range"]::-moz-range-thumb {
 
 .pg-root {
   display: grid;
-  grid-template-rows: minmax(0, 1.25fr) minmax(0, 1fr);
+  /* Three rows: dsl pane, drag handle, graph wrap. The dsl row
+     uses `--pg-dsl-h`; default fallback is `1.25fr`, which together
+     with the trailing `1fr` reproduces the original ratio. As soon
+     as the user drags, the JS rewrites the variable to a pixel
+     value and the layout becomes pixel-anchored. */
+  grid-template-rows: minmax(96px, var(--pg-dsl-h, 1.25fr)) auto minmax(140px, 1fr);
   gap: 0;
   flex: 1;
   height: 100%;
   min-height: 0;
   overflow: hidden;
+}
+
+.pg-resize-handle {
+  position: relative;
+  height: 6px;
+  background: var(--ink-900);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  cursor: row-resize;
+  touch-action: none;
+  user-select: none;
+  transition: background 120ms ease;
+}
+
+/* Expand the hit area without changing visual height. */
+.pg-resize-handle::before {
+  content: "";
+  position: absolute;
+  inset: -4px 0;
+}
+
+/* Phosphor-trace center bar to advertise interactivity. */
+.pg-resize-handle::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 36px;
+  height: 1px;
+  transform: translate(-50%, -50%);
+  background: var(--bone-mute);
+  opacity: 0.6;
+}
+
+.pg-resize-handle:hover {
+  background: color-mix(in srgb, var(--signal-trace) 18%, var(--ink-900));
+}
+
+.pg-resize-handle:hover::after {
+  background: var(--signal-trace);
+  opacity: 1;
+}
+
+.pg-resize-handle--dragging,
+.pg-resize-handle--dragging:hover {
+  background: color-mix(in srgb, var(--signal-trace) 28%, var(--ink-900));
+}
+
+.pg-resize-handle--dragging::after {
+  background: var(--signal-trace);
+  opacity: 1;
 }
 
 .pg-dsl-pane {

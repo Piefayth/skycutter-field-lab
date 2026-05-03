@@ -103,7 +103,10 @@ export function mountPipelineGraph(rootEl, api) {
   // tag stays "preset" because downstream code (split keys, count
   // bindings, dom selectors) keys off that string.
   const presetDslSection = makeDslEditorSection("scenarios", "preset");
-  dslStack.append(pipelineDslSection.root, stampDslSection.root, presetDslSection.root);
+  // Render-config slice — palette + view blocks live here. Section
+  // count is total decl count (palettes + views).
+  const viewDslSection = makeDslEditorSection("views", "view");
+  dslStack.append(pipelineDslSection.root, viewDslSection.root, stampDslSection.root, presetDslSection.root);
 
   const dslButtons = document.createElement("div");
   dslButtons.className = "pg-dsl-pane__buttons";
@@ -120,12 +123,26 @@ export function mountPipelineGraph(rootEl, api) {
 
   const dslCmHost = pipelineDslSection.editorHost;
   const dslEditor = pipelineDslSection.editor;
-  const dslSections = [pipelineDslSection, stampDslSection, presetDslSection];
+  const dslSections = [pipelineDslSection, viewDslSection, stampDslSection, presetDslSection];
   setupDslAccordion();
+
+  // Draggable handle between the DSL pane and the graph. The
+  // handle slot is a fixed-height grid row; the dsl row gets a
+  // CSS variable that defaults to 1.25fr (the original ratio) and
+  // becomes a pixel value the moment the user drags. Persisted
+  // across reloads in localStorage.
+  const resizeHandle = document.createElement("div");
+  resizeHandle.className = "pg-resize-handle";
+  resizeHandle.setAttribute("role", "separator");
+  resizeHandle.setAttribute("aria-orientation", "horizontal");
+  resizeHandle.title = "Drag to resize";
+  rootEl.appendChild(resizeHandle);
 
   const graphWrap = document.createElement("div");
   graphWrap.className = "pg-graph-wrap";
   rootEl.appendChild(graphWrap);
+
+  setupDslPaneResize();
 
   // Viewport-sized graticule. It is not part of the transformed graph
   // scene because zooming out can make the scene smaller than the
@@ -290,6 +307,67 @@ export function mountPipelineGraph(rootEl, api) {
     requestAnimationFrame(() => active?.editor.refreshLayout?.());
   }
 
+  function setupDslPaneResize() {
+    const STORAGE_KEY = "fieldlab.pipelineGraph.dslHeightPx";
+    const MIN_DSL = 96;
+    const MIN_GRAPH = 140;
+
+    try {
+      const saved = parseFloat(localStorage.getItem(STORAGE_KEY) ?? "");
+      if (Number.isFinite(saved) && saved > 0) {
+        rootEl.style.setProperty("--pg-dsl-h", `${saved}px`);
+      }
+    } catch (_) { /* localStorage may be unavailable in sandboxes */ }
+
+    let drag = null;
+
+    resizeHandle.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      const rootRect = rootEl.getBoundingClientRect();
+      const dslRect = dslPane.getBoundingClientRect();
+      drag = {
+        pointerId: event.pointerId,
+        startY: event.clientY,
+        startDslHeight: dslRect.height,
+        rootHeight: rootRect.height,
+        handleHeight: resizeHandle.offsetHeight || 6,
+      };
+      resizeHandle.setPointerCapture(event.pointerId);
+      resizeHandle.classList.add("pg-resize-handle--dragging");
+      event.preventDefault();
+    });
+
+    resizeHandle.addEventListener("pointermove", (event) => {
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      const dy = event.clientY - drag.startY;
+      const max = Math.max(MIN_DSL, drag.rootHeight - MIN_GRAPH - drag.handleHeight);
+      const next = Math.max(MIN_DSL, Math.min(max, drag.startDslHeight + dy));
+      rootEl.style.setProperty("--pg-dsl-h", `${next}px`);
+      scheduleWireReroute();
+    });
+
+    function endDrag(event) {
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      try { resizeHandle.releasePointerCapture(event.pointerId); } catch (_) { /* */ }
+      resizeHandle.classList.remove("pg-resize-handle--dragging");
+      drag = null;
+      try {
+        const px = parseFloat(rootEl.style.getPropertyValue("--pg-dsl-h"));
+        if (Number.isFinite(px)) localStorage.setItem(STORAGE_KEY, String(px));
+      } catch (_) { /* */ }
+    }
+
+    resizeHandle.addEventListener("pointerup", endDrag);
+    resizeHandle.addEventListener("pointercancel", endDrag);
+
+    // Double-click resets to the original ratio split.
+    resizeHandle.addEventListener("dblclick", () => {
+      rootEl.style.removeProperty("--pg-dsl-h");
+      try { localStorage.removeItem(STORAGE_KEY); } catch (_) { /* */ }
+      scheduleWireReroute();
+    });
+  }
+
   function refreshPipelineDsl() {
     const source = api.getPipelineDsl?.();
     const hasSource = typeof source === "string";
@@ -369,6 +447,7 @@ export function mountPipelineGraph(rootEl, api) {
     const split = splitPipelineDsl(source);
     refreshDslFieldNames(split);
     dslEditor.setSource(split.main);
+    viewDslSection.editor.setSource(split.views ?? "");
     stampDslSection.editor.setSource(split.stamps);
     presetDslSection.editor.setSource(split.presets);
     updateDslExtractCounts();
@@ -376,7 +455,7 @@ export function mountPipelineGraph(rootEl, api) {
 
   function refreshDslFieldNames(split = null) {
     const source = split
-      ? `${split.main}\n${split.stamps}\n${split.presets}`
+      ? `${split.main}\n${split.views ?? ""}\n${split.stamps}\n${split.presets}`
       : composePipelineDsl();
     const names = extractDslFieldNames(source);
     const sources = extractDslSourceNames(source);
@@ -390,8 +469,13 @@ export function mountPipelineGraph(rootEl, api) {
   }
 
   function composePipelineDslWithOffsets() {
+    // Order matters for human readability of saved/exported DSL but
+    // not for the parser (top-level decls are order-agnostic).
+    // Render config (palettes + views) is grouped right after the
+    // main pipeline body; stamps/scenarios trail.
     const rawParts = [
       { kind: "pipeline", editor: dslEditor, source: dslEditor.getSource() },
+      { kind: "view", editor: viewDslSection.editor, source: viewDslSection.editor.getSource() },
       { kind: "stamps", editor: stampDslSection.editor, source: stampDslSection.editor.getSource() },
       { kind: "presets", editor: presetDslSection.editor, source: presetDslSection.editor.getSource() },
     ].filter((part) => part.source.trim().length > 0);
@@ -444,6 +528,12 @@ export function mountPipelineGraph(rootEl, api) {
     const scenarioCount = extractTopLevelBlocks(presetDslSection.editor.getSource(), "scenario").length;
     const presetCount = extractTopLevelBlocks(presetDslSection.editor.getSource(), "preset").length;
     presetDslSection.count.textContent = `${scenarioCount + presetCount}`;
+    // Views badge counts palettes + views together — both live in
+    // this slice and both contribute to the recipe's render config.
+    const viewSrc = viewDslSection.editor.getSource();
+    const paletteCount = extractTopLevelBlocks(viewSrc, "palette").length;
+    const viewCount = extractTopLevelBlocks(viewSrc, "view").length;
+    viewDslSection.count.textContent = `${paletteCount + viewCount}`;
   }
 
   dslApplyBtn.addEventListener("click", applyPipelineDsl);
