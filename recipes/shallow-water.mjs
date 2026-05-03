@@ -92,7 +92,7 @@ param gravity   slider 0..0.5    step 0.005   default 0.05  label "GRAVITY g"
 param friction  slider 0..0.5    step 0.005   default 0.02  label "FRICTION"
 param hMin      slider 0.05..1   step 0.01    default 0.1   label "MIN DEPTH"
 param dyeFade   slider 0..0.05   step 0.0005  default 0.005 label "DYE FADE"
-param flowScale slider 0..0.05   step 0.0005  default 0.005 label "DYE FLOW"
+param flowScale slider 0..0.75   step 0.005   default 0.075 label "DYE FLOW"
 param simRateHz slider 0..360    step 1       default 60    label "SIM RATE"
 param rate      slider 1..200    step 1       default 80    label "RATE"
 
@@ -218,12 +218,12 @@ step {
     reads dye, m, h
     writes dye
     cell {
-      // Velocity = m / h. The flowScale factor compensates for the
-      // internal *15 calibration in the @upstream WGSL helper (which
-      // was tuned for v1-era recipes that fed it dt-on-the-order-of-
-      // 0.001). Without it the effective walk is velocity*20 sphere
-      // radians per tick — the dye samples from random points across
-      // the planet and averages to a uniform color.
+      // Velocity = m / h. flowScale multiplies the per-tick walk
+      // distance — with the field's typical |m|/h around 0.5–3 at
+      // wave fronts, flowScale=0.075 yields walks of ~0.04–0.2
+      // sphere-radians per tick, which reads as the dye visibly
+      // streaming along the wave fronts without smearing across the
+      // hemisphere in one frame.
       let invH = 1.0 / max(h, hMin)
       let vx = m.x * invH
       let vy = m.y * invH

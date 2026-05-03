@@ -764,10 +764,11 @@ fn _upstream_${fieldName}(cell: u32, velX: f32, velY: f32, dt: f32) -> f32 {
   let north = normalize(cross(p, east));
   let velocity = east * velX + north * velY;
   // Walk backward along velocity, project back to the unit sphere.
-  // The 15.0 factor matches the legacy advect kernel's tuning so
-  // velocity*dt magnitudes feel the same to recipe authors who
-  // ported from \`advect\`.
-  let back = normalize(p - velocity * dt * 15.0);
+  // \`velocity * dt\` is the walk distance in sphere-radians: with
+  // velocity in (sphere-radians per simulation second) and dt in
+  // simulation seconds, one tick of unit-magnitude velocity moves
+  // the sample point one sphere-radian along the tangent direction.
+  let back = normalize(p - velocity * dt);
   // Inverse-distance² weighting over self + neighbors. Same shape
   // as the legacy ADVECT_WGSL kernel.
   var weightSum = 0.0;

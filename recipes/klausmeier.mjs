@@ -125,7 +125,7 @@ step {
     reads w, slope
     writes w
     cell {
-      set w = w@upstream(slope.x, slope.y, flowSpeed * dt * rate * 0.001)
+      set w = w@upstream(slope.x, slope.y, flowSpeed * dt * rate * 0.015)
     }
   }
 
