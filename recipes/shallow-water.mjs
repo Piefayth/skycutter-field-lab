@@ -79,7 +79,12 @@ recipe "Shallow water (sphere)"
 summary "Depth-averaged fluid on a sphere — gradient(h) drives momentum, divergence(m) drives continuity, dye rides @upstream of the velocity. Drop a height bulge with the BULGE stamp and watch the wave race around the planet, hit the antipode, and refocus. Paint colored dye with PAINT DYE to see the otherwise-invisible flow lines."
 recommendedPreset bulge
 
-substrate geodesic frequency 48
+// Frequency 32 (~6k cells) is the sweet spot: visibly resolved
+// detail without CFL strangling the explicit integrator. Each cell is
+// ≈0.02 sphere-radians, which sets the upper bound on the per-tick
+// effective-dt times the fastest wave speed. Doubling to 64 looks
+// crisper but cuts the stable parameter range to a thin sliver.
+substrate geodesic frequency 32
 
 field h: f32                  // water column height
 field m: vec2                 // depth-integrated horizontal momentum
@@ -88,20 +93,37 @@ field dh: f32 derived         // h - 1 (signed anomaly for rendering)
 field speed: f32 derived      // length(m) for rendering
 field divM: f32 derived       // divergence(m) — diagnostic only
 
-param gravity   slider 0..0.5    step 0.005   default 0.05  label "GRAVITY g"
-param friction  slider 0..0.5    step 0.005   default 0.02  label "FRICTION"
-param hMin      slider 0.05..1   step 0.01    default 0.1   label "MIN DEPTH"
-param dyeFade   slider 0..0.05   step 0.0005  default 0.005 label "DYE FADE"
-param flowScale slider 0..0.75   step 0.005   default 0.075 label "DYE FLOW"
-param simRateHz slider 0..360    step 1       default 60    label "SIM RATE"
-param rate      slider 1..200    step 1       default 80    label "RATE"
+// CFL: the explicit forward-Euler step requires
+// effective-dt · sqrt(g · h_max) < cell-size. With cell≈0.02 at
+// frequency 32, default g=0.002, h peaking around 3 at the bulge,
+// the wave speed c reaches ~0.077 sphere-radians/sec. The
+// effective-dt at default rate=12 is (1/60)·12 = 0.2 sim-seconds,
+// giving CFL margin ≈ 1.3. Tight but stable. Crank g much past
+// 0.005 or rate past 20 and the integrator blows to NaN within a
+// tick (visible as the entire screen going black/transparent).
+//
+// flowScale separately sets the dye's per-tick walk distance — at
+// the default 0.3, the wave-front velocity ~0.09 produces walks of
+// ~0.005 sphere-radians per tick (≈0.25 cells), which reads as
+// dye visibly streaming along the wave fronts. Push it to ~1.0 for
+// dramatic streaks at the cost of @upstream sampling accuracy
+// (walks > 1 cell start sampling from cells that aren't really
+// upstream).
+param gravity   slider 0..0.02    step 0.0002  default 0.002  label "GRAVITY g"
+param friction  slider 0..0.05    step 0.0005  default 0.005  label "FRICTION"
+param viscosity slider 0..0.5     step 0.005   default 0.15   label "VISCOSITY"
+param hMin      slider 0.05..1    step 0.01    default 0.1    label "MIN DEPTH"
+param dyeFade   slider 0..0.05    step 0.0005  default 0.003  label "DYE FADE"
+param flowScale slider 0..1       step 0.01    default 0.3    label "DYE FLOW"
+param simRateHz slider 0..360     step 1       default 60     label "SIM RATE"
+param rate      slider 1..40      step 1       default 12     label "RATE"
 
 stamp bulge "Bulge (drop wave)" {
-  spot h at brush.pos, radius=brush.r, amount=1.0
+  spot h at brush.pos, radius=brush.r, amount=1.5
 }
 
 stamp dimple "Dimple (suck wave)" {
-  spot h at brush.pos, radius=brush.r, amount=-0.5
+  spot h at brush.pos, radius=brush.r, amount=-0.6
 }
 
 stamp paintDye "Paint dye" {
@@ -113,16 +135,18 @@ stamp clearDye "Erase dye" {
 }
 
 scenario bulge "Single bulge at the equator" {
-  // Pre-paint dye stripes so the flow is visible from the first
-  // tick — without this the user has to hand-paint dye AND wait for
-  // the wave to reach it before the flow shows up. Stripes get
-  // stretched and folded along the wavefronts as it propagates.
+  // Pre-paint zonal dye stripes so the flow is visible from the
+  // first tick — the stripes get stretched and folded along the
+  // wavefronts as the bulge releases. A bigger amplitude (h goes
+  // from 1 to 3 at center) gives more potential energy and a wave
+  // that propagates with substantial momentum, otherwise the dye
+  // motion is too subtle to see at default tuning.
   set h = 1
   set m = vec2(0, 0)
   for each cell {
-    set dye = sin(lat * 12) * 0.5 + 0.5
+    set dye = sin(lat * 8) * 0.5 + 0.5
   }
-  spot h at lon=0, lat=0, radius=0.2, amount=1.2
+  spot h at lon=0, lat=0, radius=0.25, amount=2
 }
 
 scenario tsunami "Tsunami line source" {
@@ -131,30 +155,31 @@ scenario tsunami "Tsunami line source" {
   set h = 1
   set m = vec2(0, 0)
   set dye = 0
-  ellipse h at lon=-1.2, lat=0, rx=0.12, ry=0.7, amount=1.5, angle=0
+  ellipse h at lon=-1.2, lat=0, rx=0.15, ry=0.8, amount=2.5, angle=0
 }
 
 scenario stripes "Painted dye stripes" {
-  // Pre-paint zonal dye stripes; bulges then drag them into the flow
-  // pattern. Use BULGE stamp on top to see the dye stretch.
+  // Pre-paint zonal dye stripes; the BULGE stamp then drops a wave
+  // and the stripes show its propagation pattern. Quietest of the
+  // scenarios — water is at rest until you click.
   set h = 1
   set m = vec2(0, 0)
   for each cell {
-    set dye = sin(lat * 8) * 0.5 + 0.5
+    set dye = sin(lat * 6) * 0.5 + 0.5
   }
 }
 
 scenario dipole "Bulge + dimple dipole" {
   // Asymmetric initial condition — drives a circulating flow rather
-  // than a symmetric expanding ring. The dye stripes make the rotation
-  // visible.
+  // than a symmetric expanding ring. The longitudinal dye stripes
+  // make the rotation visible.
   set h = 1
   set m = vec2(0, 0)
   for each cell {
-    set dye = sin(lon * 6) * 0.5 + 0.5
+    set dye = sin(lon * 4) * 0.5 + 0.5
   }
-  spot h at lon=-0.4, lat=0, radius=0.18, amount=0.9
-  spot h at lon=0.4,  lat=0, radius=0.18, amount=-0.5
+  spot h at lon=-0.4, lat=0, radius=0.2, amount=1.5
+  spot h at lon=0.4,  lat=0, radius=0.2, amount=-0.7
 }
 
 step {
@@ -200,7 +225,29 @@ step {
     }
   }
 
-  // Stage 3 — Tracer advection.
+  // Stage 3 — Viscosity (height smoothing).
+  //
+  // Forward-Euler integration of a hyperbolic system on a coarse
+  // mesh has a numerical instability at the cell-scale frequency
+  // that no amount of dt-tuning fully suppresses. A single tick of
+  // Laplacian smoothing per stage damps that mode without damping
+  // the long-wavelength wave physics we actually want to see — the
+  // standard trick from CFD on irregular meshes.
+  //
+  // Mass is preserved: the Laplacian is sum(h@n - h)/count, which
+  // averages to zero over the mesh. The clamp on the per-tick
+  // factor mirrors klausmeier's diffusion stage — it stops the
+  // smoother from over-stepping (and going negative) when
+  // viscosity * dt * rate exceeds the diffusion-stability bound.
+  stage viscosityStep "Viscosity (height smoothing)" {
+    reads h
+    writes h
+    cell {
+      add h = (mean n in neighbors { h@n } - h) * clamp(viscosity * dt * rate, 0, 0.24)
+    }
+  }
+
+  // Stage 4 — Tracer advection.
   //
   // ∂dye/∂t + u·∇dye = 0     where u = m / h
   //
@@ -231,7 +278,7 @@ step {
     }
   }
 
-  // Stage 4 — Diagnostics.
+  // Stage 5 — Diagnostics.
   //
   // Pure rendering / metric helpers. None of these feed back into
   // the dynamics; they exist so the renderer can ramp |m| or color
