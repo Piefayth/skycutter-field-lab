@@ -45,19 +45,6 @@ substrate geodesic frequency 64
 field u: f32
 field v: f32
 
-palette U_RAMP {
-  stop 0 color [16, 14, 18]
-  stop 1 color [255, 220, 80]
-}
-
-palette V_RAMP {
-  stop 0 color [12, 18, 32]
-  stop 1 color [200, 90, 110]
-}
-
-view u "Membrane (u)"  { color ramp u range [0, 1]   palette U_RAMP }
-view v "Recovery (v)"  { color ramp v range [0, 2.5] palette V_RAMP }
-
 // CFL: the cubic excitation term has effective relaxation rate ~k.
 // Forward-Euler stability requires dt_eff·k < 2; defaults k=6, rate=10,
 // dt=1/60 give dt_eff·k = 10/60·6 = 1.0 — safely below the bound.
@@ -76,59 +63,6 @@ param eps0      slider 0..0.05 step 0.0005 default 0.002 label "ε₀"
 param mu1       slider 0..0.5  step 0.005 default 0.20  label "μ₁"
 param mu2       slider 0.05..1 step 0.01  default 0.30  label "μ₂"
 param diffusion slider 0..0.2  step 0.002 default 0.040 label "DIFF"
-
-stamp shock "Defibrillator pulse" {
-  spot u at brush.pos, radius=brush.r, amount=1
-}
-
-stamp pad "Refractory pad" {
-  spot v at brush.pos, radius=brush.r, amount=0.6
-}
-
-scenario reentry "Spiral rotor seed (broken plane wave)" {
-  // Thin north-south wavefront travelling east, with a half-domain
-  // refractory block immediately ahead in the northern hemisphere.
-  // The southern half of the front propagates into clean tissue;
-  // the northern half hits refractory tissue and dies. The torn
-  // front bends into the killed region as v decays there, forming
-  // a phase singularity at the boundary — that's the spiral tip.
-  //
-  // Filling a large region with u=1 doesn't work — every cell starts
-  // refractory-recovering simultaneously and the whole patch
-  // collapses before any wavefront can spread. The trick is to seed
-  // a *gradient*: u high on a thin strip, v already high in the
-  // tissue you want the wave to die in.
-  set u = 0
-  set v = 0
-  region u at lonMin=-0.4, lonMax=-0.2, latMin=-PI/2, latMax=PI/2, amount=1
-  region v at lonMin=-0.2, lonMax=0.6,  latMin=0,     latMax=PI/2, amount=1.0
-}
-
-scenario blank "Resting tissue" {
-  set u = 0
-  set v = 0
-}
-
-scenario front "Plane wave (no break)" {
-  // Clean north-south wavefront sweeping eastward — no spiral forms;
-  // the wave travels around the sphere and self-collides at the
-  // antipode. Same wavefront shape as REENTRY but without the
-  // refractory shadow that would tear it.
-  set u = 0
-  set v = 0
-  region u at lonMin=-0.4, lonMax=-0.2, latMin=-PI/2, latMax=PI/2, amount=1
-}
-
-scenario chaos "Random initial depolarization" {
-  // High-noise start — multiple rotors nucleate, drift, annihilate,
-  // and tile the sphere with a tangle of spirals. "Fibrillation"
-  // looks like this.
-  set v = 0
-  for each cell {
-    let r = cellRand(7)
-    set u = r * r
-  }
-}
 
 step {
   stage diffuseU "Diffuse u (the fast cardiac wave; v stays local)" {
@@ -171,6 +105,79 @@ metric active = count cells where u > 0.3
 // "ROTORS" — cells inside the wave's leading edge (intermediate u),
 // a rough proxy for rotor count.
 metric rotors = count cells where u > 0.15 and u < 0.4
+
+views {
+  palette U_RAMP {
+    stop 0 color [16, 14, 18]
+    stop 1 color [255, 220, 80]
+  }
+
+  palette V_RAMP {
+    stop 0 color [12, 18, 32]
+    stop 1 color [200, 90, 110]
+  }
+
+  view u "Membrane (u)"  { color ramp u range [0, 1]   palette U_RAMP }
+
+  view v "Recovery (v)"  { color ramp v range [0, 2.5] palette V_RAMP }
+}
+
+stamps {
+  stamp shock "Defibrillator pulse" {
+    spot u at brush.pos, radius=brush.r, amount=1
+  }
+
+  stamp pad "Refractory pad" {
+    spot v at brush.pos, radius=brush.r, amount=0.6
+  }
+}
+
+scenarios {
+  scenario reentry "Spiral rotor seed (broken plane wave)" {
+    // Thin north-south wavefront travelling east, with a half-domain
+    // refractory block immediately ahead in the northern hemisphere.
+    // The southern half of the front propagates into clean tissue;
+    // the northern half hits refractory tissue and dies. The torn
+    // front bends into the killed region as v decays there, forming
+    // a phase singularity at the boundary — that's the spiral tip.
+    //
+    // Filling a large region with u=1 doesn't work — every cell starts
+    // refractory-recovering simultaneously and the whole patch
+    // collapses before any wavefront can spread. The trick is to seed
+    // a *gradient*: u high on a thin strip, v already high in the
+    // tissue you want the wave to die in.
+    set u = 0
+    set v = 0
+    region u at lonMin=-0.4, lonMax=-0.2, latMin=-PI/2, latMax=PI/2, amount=1
+    region v at lonMin=-0.2, lonMax=0.6,  latMin=0,     latMax=PI/2, amount=1.0
+  }
+
+  scenario blank "Resting tissue" {
+    set u = 0
+    set v = 0
+  }
+
+  scenario front "Plane wave (no break)" {
+    // Clean north-south wavefront sweeping eastward — no spiral forms;
+    // the wave travels around the sphere and self-collides at the
+    // antipode. Same wavefront shape as REENTRY but without the
+    // refractory shadow that would tear it.
+    set u = 0
+    set v = 0
+    region u at lonMin=-0.4, lonMax=-0.2, latMin=-PI/2, latMax=PI/2, amount=1
+  }
+
+  scenario chaos "Random initial depolarization" {
+    // High-noise start — multiple rotors nucleate, drift, annihilate,
+    // and tile the sphere with a tangle of spirals. "Fibrillation"
+    // looks like this.
+    set v = 0
+    for each cell {
+      let r = cellRand(7)
+      set u = r * r
+    }
+  }
+}
 `;
 
 export const pipeline = compileV2(pipelineDsl);

@@ -49,19 +49,6 @@ substrate geodesic frequency 64
 field u: f32
 field v: f32
 
-palette U_RAMP {
-  stop 0 color [10, 16, 28]
-  stop 1 color [255, 220, 100]
-}
-
-palette V_RAMP {
-  stop 0 color [16, 22, 36]
-  stop 1 color [180, 100, 200]
-}
-
-view u "U (iodide)"   { color ramp u range [0, 5]  palette U_RAMP }
-view v "V (chlorite)" { color ramp v range [0, 10] palette V_RAMP }
-
 // CFL note — Lengyel-Epstein is genuinely a stiff model. The σ
 // stiffness creates a fast/slow split: the homogeneous fixed point
 // is Hopf-unstable when σ is *small* (the Turing condition needs
@@ -87,40 +74,6 @@ param b         slider 0..1   step 0.01 default 0.3  label "b"
 param sigma     slider 5..80  step 1    default 30   label "σ (STIFF)"
 param Du        slider 0..0.3 step 0.005 default 0.05 label "Du"
 param Dv        slider 0..4   step 0.05  default 3.0  label "Dv"
-
-stamp pulse "Pulse U" {
-  spot u at brush.pos, radius=brush.r, amount=2
-}
-
-scenario spots "Random near-steady seed" {
-  // Steady state at a=10: u* = a/5 = 2, v* = 1 + u*² = 5. Seed
-  // small noise around the fixed point; spatial Turing modes grow
-  // into hexagonal spots over 30-60 wall-seconds at default rate.
-  for each cell {
-    set u = 2.0 + cellNoise(11, 1.0) * 0.3
-    set v = 5.0 + cellNoise(13, 1.0) * 0.3
-  }
-}
-
-scenario steady "Homogeneous steady state" {
-  set u = 2.0
-  set v = 5.0
-}
-
-scenario stripes "Latitudinal pattern seed" {
-  // Pre-pattern sin(lat) in U; depending on (a, b) the system either
-  // heals into stripes or fragments into a spot lattice.
-  for each cell {
-    set u = 2.0 + sin(lat * 5) * 0.6
-    set v = 5.0
-  }
-}
-
-scenario singleSpot "One nucleation" {
-  set u = 2.0
-  set v = 5.0
-  spot u at lon=0, lat=0, radius=0.12, amount=2
-}
 
 step {
   stage diffuse "Diffuse u (slow) + v (fast)" {
@@ -158,6 +111,60 @@ step {
 metric meanU  = mean cells { u }
 metric meanV  = mean cells { v }
 metric active = count cells where u > 3
+
+views {
+  palette U_RAMP {
+    stop 0 color [10, 16, 28]
+    stop 1 color [255, 220, 100]
+  }
+
+  palette V_RAMP {
+    stop 0 color [16, 22, 36]
+    stop 1 color [180, 100, 200]
+  }
+
+  view u "U (iodide)"   { color ramp u range [0, 5]  palette U_RAMP }
+
+  view v "V (chlorite)" { color ramp v range [0, 10] palette V_RAMP }
+}
+
+stamps {
+  stamp pulse "Pulse U" {
+    spot u at brush.pos, radius=brush.r, amount=2
+  }
+}
+
+scenarios {
+  scenario spots "Random near-steady seed" {
+    // Steady state at a=10: u* = a/5 = 2, v* = 1 + u*² = 5. Seed
+    // small noise around the fixed point; spatial Turing modes grow
+    // into hexagonal spots over 30-60 wall-seconds at default rate.
+    for each cell {
+      set u = 2.0 + cellNoise(11, 1.0) * 0.3
+      set v = 5.0 + cellNoise(13, 1.0) * 0.3
+    }
+  }
+
+  scenario steady "Homogeneous steady state" {
+    set u = 2.0
+    set v = 5.0
+  }
+
+  scenario stripes "Latitudinal pattern seed" {
+    // Pre-pattern sin(lat) in U; depending on (a, b) the system either
+    // heals into stripes or fragments into a spot lattice.
+    for each cell {
+      set u = 2.0 + sin(lat * 5) * 0.6
+      set v = 5.0
+    }
+  }
+
+  scenario singleSpot "One nucleation" {
+    set u = 2.0
+    set v = 5.0
+    spot u at lon=0, lat=0, radius=0.12, amount=2
+  }
+}
 `;
 
 export const pipeline = compileV2(pipelineDsl);

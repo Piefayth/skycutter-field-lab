@@ -47,24 +47,6 @@ const rho0 = 0.0
 field a: f32
 field h: f32
 
-palette ACT {
-  stop 0 color [12, 22, 30]
-  stop 1 color [255, 230, 80]
-}
-
-palette INH {
-  stop 0 color [10, 14, 24]
-  stop 1 color [120, 200, 240]
-}
-
-view a "Activator (a)" {
-  color ramp a range [0, 4] palette ACT
-}
-
-view h "Inhibitor (h)" {
-  color ramp h range [0, 4] palette INH
-}
-
 param simRateHz slider 0..360  step 1     default 60    label "SIM RATE"
 param rate      slider 1..200  step 1     default 60    label "RATE"
 param rho       slider 0..0.1  step 0.001 default 0.01  label "ρ (PROD)"
@@ -72,45 +54,6 @@ param muA       slider 0..0.05 step 0.0005 default 0.01 label "μa (DECAY a)"
 param muH       slider 0..0.05 step 0.0005 default 0.02 label "μh (DECAY h)"
 param Da        slider 0..0.05 step 0.0005 default 0.005 label "Da (DIFF a)"
 param Dh        slider 0..0.5  step 0.005  default 0.20  label "Dh (DIFF h)"
-
-stamp pulseA "Pulse activator" {
-  spot a at brush.pos, radius=brush.r, amount=0.6
-}
-
-stamp dampH "Damp inhibitor" {
-  spot h at brush.pos, radius=brush.r, amount=-0.6
-}
-
-scenario spots "Random Turing seed" {
-  // Steady state at default params is a = h = μ_h/ρ = 2. Seed a tight
-  // Gaussian-flavored noise around it; the activator's lower diffusion
-  // amplifies whichever bumps survive the first few hundred ticks.
-  for each cell {
-    set a = 2 + cellNoise(11, 1.4) * 0.4
-    set h = 2 + cellNoise(13, 1.4) * 0.2
-  }
-}
-
-scenario stripes "Latitudinal stripe seed" {
-  // Pre-pattern a few latitude bands of high a; the activator-inhibitor
-  // dynamics either heal them into stripes (parameters near the stripe
-  // regime) or fragment them into spots (closer to the spot regime).
-  for each cell {
-    set a = 2 + sin(lat * 6) * 0.6
-    set h = 2 + sin(lat * 6) * 0.3
-  }
-}
-
-scenario singleSpot "One nucleation site" {
-  set a = 0.5
-  set h = 1.5
-  spot a at lon=0, lat=0, radius=0.12, amount=2
-}
-
-scenario blank "Empty" {
-  set a = 0
-  set h = 0
-}
 
 step {
   stage diffuse "Diffuse a (slow) + h (fast)" {
@@ -149,6 +92,69 @@ metric maxA  = max cells { a }
 // Cells where the activator has crossed roughly half-saturation —
 // at equilibrium under default params this is the visible spot count.
 metric peakArea = count cells where a > 3
+
+views {
+  palette ACT {
+    stop 0 color [12, 22, 30]
+    stop 1 color [255, 230, 80]
+  }
+
+  palette INH {
+    stop 0 color [10, 14, 24]
+    stop 1 color [120, 200, 240]
+  }
+
+  view a "Activator (a)" {
+    color ramp a range [0, 4] palette ACT
+  }
+
+  view h "Inhibitor (h)" {
+    color ramp h range [0, 4] palette INH
+  }
+}
+
+stamps {
+  stamp pulseA "Pulse activator" {
+    spot a at brush.pos, radius=brush.r, amount=0.6
+  }
+
+  stamp dampH "Damp inhibitor" {
+    spot h at brush.pos, radius=brush.r, amount=-0.6
+  }
+}
+
+scenarios {
+  scenario spots "Random Turing seed" {
+    // Steady state at default params is a = h = μ_h/ρ = 2. Seed a tight
+    // Gaussian-flavored noise around it; the activator's lower diffusion
+    // amplifies whichever bumps survive the first few hundred ticks.
+    for each cell {
+      set a = 2 + cellNoise(11, 1.4) * 0.4
+      set h = 2 + cellNoise(13, 1.4) * 0.2
+    }
+  }
+
+  scenario stripes "Latitudinal stripe seed" {
+    // Pre-pattern a few latitude bands of high a; the activator-inhibitor
+    // dynamics either heal them into stripes (parameters near the stripe
+    // regime) or fragment them into spots (closer to the spot regime).
+    for each cell {
+      set a = 2 + sin(lat * 6) * 0.6
+      set h = 2 + sin(lat * 6) * 0.3
+    }
+  }
+
+  scenario singleSpot "One nucleation site" {
+    set a = 0.5
+    set h = 1.5
+    spot a at lon=0, lat=0, radius=0.12, amount=2
+  }
+
+  scenario blank "Empty" {
+    set a = 0
+    set h = 0
+  }
+}
 `;
 
 export const pipeline = compileV2(pipelineDsl);

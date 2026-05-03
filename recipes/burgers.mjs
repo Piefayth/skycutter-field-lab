@@ -48,17 +48,6 @@ substrate geodesic frequency 64
 
 field u: f32
 
-palette WAVE {
-  stop 0    color [40, 90, 200]
-  stop 0.45 color [200, 220, 240]
-  stop 0.55 color [240, 220, 180]
-  stop 1    color [200, 50, 30]
-}
-
-view u "Amplitude (u)" {
-  color ramp u range [-1, 1] palette WAVE
-}
-
 param simRateHz slider 0..360 step 1     default 60   label "SIM RATE"
 param rate      slider 1..200 step 1     default 30   label "RATE"
 // Self-advection coupling. Physical Burgers has speed=1 (the field
@@ -68,47 +57,6 @@ param rate      slider 1..200 step 1     default 30   label "RATE"
 // per-tick walk distance comparable to the cell size.
 param speed     slider 0..2   step 0.05  default 1.0  label "SELF-ADVECT"
 param viscosity slider 0..0.4 step 0.005 default 0.04 label "VISCOSITY ν"
-
-stamp bump "Drop a bump" {
-  spot u at brush.pos, radius=brush.r, amount=0.8
-}
-
-stamp dimple "Drop a dimple" {
-  spot u at brush.pos, radius=brush.r, amount=-0.8
-}
-
-scenario bump "Single eastward bump" {
-  // One Gaussian-flavoured ridge west of the prime meridian. Its
-  // leading (east) edge has positive du/dx, so the ridge steepens
-  // there and softens on the trailing edge — within ~5 wall-seconds
-  // a clean shock front emerges.
-  set u = 0
-  spot u at lon=-1.2, lat=0, radius=0.22, amount=1
-}
-
-scenario sine "Sinusoidal initial profile" {
-  // A 2-wavelength sinusoid in longitude — every quarter-period
-  // becomes a shock candidate, so you get four quasi-stable fronts
-  // that drift and slowly merge.
-  set u = 0
-  for each cell {
-    set u = sin(lon * 2) * 0.6
-  }
-}
-
-scenario noise "Burgers turbulence" {
-  // Random initial profile — the canonical setup for studying
-  // shock-merging dynamics. Many small fronts collide and coalesce
-  // until just a handful of dominant shocks remain.
-  set u = 0
-  for each cell {
-    set u = cellNoise(11, 0.8) * 1.2
-  }
-}
-
-scenario blank "Flat" {
-  set u = 0
-}
 
 step {
   stage advect "Self-advection: shocks form here" {
@@ -148,6 +96,64 @@ metric troughU = min cells { u }
 // down as shocks dissipate; stays high in the noise scenario as long
 // as multiple fronts coexist.
 metric active  = count cells where abs(u) > 0.1
+
+views {
+  palette WAVE {
+    stop 0    color [40, 90, 200]
+    stop 0.45 color [200, 220, 240]
+    stop 0.55 color [240, 220, 180]
+    stop 1    color [200, 50, 30]
+  }
+
+  view u "Amplitude (u)" {
+    color ramp u range [-1, 1] palette WAVE
+  }
+}
+
+stamps {
+  stamp bump "Drop a bump" {
+    spot u at brush.pos, radius=brush.r, amount=0.8
+  }
+
+  stamp dimple "Drop a dimple" {
+    spot u at brush.pos, radius=brush.r, amount=-0.8
+  }
+}
+
+scenarios {
+  scenario bump "Single eastward bump" {
+    // One Gaussian-flavoured ridge west of the prime meridian. Its
+    // leading (east) edge has positive du/dx, so the ridge steepens
+    // there and softens on the trailing edge — within ~5 wall-seconds
+    // a clean shock front emerges.
+    set u = 0
+    spot u at lon=-1.2, lat=0, radius=0.22, amount=1
+  }
+
+  scenario sine "Sinusoidal initial profile" {
+    // A 2-wavelength sinusoid in longitude — every quarter-period
+    // becomes a shock candidate, so you get four quasi-stable fronts
+    // that drift and slowly merge.
+    set u = 0
+    for each cell {
+      set u = sin(lon * 2) * 0.6
+    }
+  }
+
+  scenario noise "Burgers turbulence" {
+    // Random initial profile — the canonical setup for studying
+    // shock-merging dynamics. Many small fronts collide and coalesce
+    // until just a handful of dominant shocks remain.
+    set u = 0
+    for each cell {
+      set u = cellNoise(11, 0.8) * 1.2
+    }
+  }
+
+  scenario blank "Flat" {
+    set u = 0
+  }
+}
 `;
 
 export const pipeline = compileV2(pipelineDsl);

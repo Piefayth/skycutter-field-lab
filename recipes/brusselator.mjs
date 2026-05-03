@@ -43,19 +43,6 @@ substrate geodesic frequency 64
 field u: f32
 field v: f32
 
-palette U_RAMP {
-  stop 0 color [12, 14, 24]
-  stop 1 color [240, 130, 60]
-}
-
-palette V_RAMP {
-  stop 0 color [16, 18, 30]
-  stop 1 color [110, 200, 230]
-}
-
-view u "U" { color ramp u range [0, 5] palette U_RAMP }
-view v "V" { color ramp v range [0, 6] palette V_RAMP }
-
 // CFL: at the (u*, v*) = (A, B/A) fixed point, the Jacobian's
 // eigenvalues are complex λ = -(1+A²-B)/2 ± i·√(A² - ((1+A²-B)/2)²).
 // Forward-Euler stability for complex λ is much tighter than the
@@ -79,35 +66,6 @@ param A         slider 0.5..4 step 0.05  default 2.0  label "A (FEED)"
 param B         slider 0..8   step 0.05  default 3.0  label "B (RATIO)"
 param Du        slider 0..0.2 step 0.005 default 0.04 label "Du"
 param Dv        slider 0..2   step 0.01  default 0.60 label "Dv"
-
-stamp pulseU "Pulse U" {
-  spot u at brush.pos, radius=brush.r, amount=0.5
-}
-
-stamp pulseV "Pulse V" {
-  spot v at brush.pos, radius=brush.r, amount=0.8
-}
-
-scenario stripes "Random near-steady seed" {
-  // Defaults sit in the Turing-unstable regime; tiny perturbations
-  // around (u*, v*) = (A, B/A) = (2, 1.5) grow into stripes/spots
-  // after a few hundred ticks.
-  for each cell {
-    set u = 2.0 + cellNoise(11, 1.0) * 0.15
-    set v = 1.5 + cellNoise(13, 1.0) * 0.10
-  }
-}
-
-scenario steady "Homogeneous steady state" {
-  set u = 2.0
-  set v = 1.5
-}
-
-scenario singleSpot "Single perturbation" {
-  set u = 2.0
-  set v = 1.5
-  spot u at lon=0, lat=0, radius=0.12, amount=0.6
-}
 
 step {
   stage diffuse "Diffuse u + v (D_v ≫ D_u drives Turing)" {
@@ -142,6 +100,55 @@ step {
 metric meanU = mean cells { u }
 metric meanV = mean cells { v }
 metric maxU  = max cells { u }
+
+views {
+  palette U_RAMP {
+    stop 0 color [12, 14, 24]
+    stop 1 color [240, 130, 60]
+  }
+
+  palette V_RAMP {
+    stop 0 color [16, 18, 30]
+    stop 1 color [110, 200, 230]
+  }
+
+  view u "U" { color ramp u range [0, 5] palette U_RAMP }
+
+  view v "V" { color ramp v range [0, 6] palette V_RAMP }
+}
+
+stamps {
+  stamp pulseU "Pulse U" {
+    spot u at brush.pos, radius=brush.r, amount=0.5
+  }
+
+  stamp pulseV "Pulse V" {
+    spot v at brush.pos, radius=brush.r, amount=0.8
+  }
+}
+
+scenarios {
+  scenario stripes "Random near-steady seed" {
+    // Defaults sit in the Turing-unstable regime; tiny perturbations
+    // around (u*, v*) = (A, B/A) = (2, 1.5) grow into stripes/spots
+    // after a few hundred ticks.
+    for each cell {
+      set u = 2.0 + cellNoise(11, 1.0) * 0.15
+      set v = 1.5 + cellNoise(13, 1.0) * 0.10
+    }
+  }
+
+  scenario steady "Homogeneous steady state" {
+    set u = 2.0
+    set v = 1.5
+  }
+
+  scenario singleSpot "Single perturbation" {
+    set u = 2.0
+    set v = 1.5
+    spot u at lon=0, lat=0, radius=0.12, amount=0.6
+  }
+}
 `;
 
 export const pipeline = compileV2(pipelineDsl);
