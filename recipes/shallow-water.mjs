@@ -37,15 +37,6 @@ import { compileV2 } from "../dsl/compile-v2.mjs";
 
 export const overlays = [];
 
-// hMin only matters when h drops near the floor (thin layer / drying
-// out scenarios); flowScale only changes the dye's spatial transport
-// pattern, not its total mean. Both are wired into the cell body but
-// the audit's global-stat window can't see their effect at default
-// settings.
-export const audit = {
-  allowedDeadParams: ["hMin", "flowScale"],
-};
-
 export const metrics = [
   { id: "mass",   label: "MASS",   source: "dsl:mass",   spark: true, precision: 3 },
   { id: "ke",     label: "KE",     source: "dsl:ke",     spark: true, precision: 4 },

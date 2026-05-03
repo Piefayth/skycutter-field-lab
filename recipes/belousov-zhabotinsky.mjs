@@ -14,14 +14,6 @@ import { compileV2 } from "../dsl/compile-v2.mjs";
 
 export const overlays = [];
 
-// diffW (slow inhibitor diffusion) is wired up but barely shifts the
-// global stats at the default scenario — w is the slowest field and
-// its diffusion only affects sphere-scale recovery patterns that
-// don't show in min/max/mean.
-export const audit = {
-  allowedDeadParams: ["diffW"],
-};
-
 export const metrics = [
   { id: "u", label: "U", source: "u", spark: true, precision: 3 },
   { id: "v", label: "V", source: "v", spark: true, precision: 3 },
@@ -58,8 +50,7 @@ param diffU      slider 0..4     step 0.05  default 0.55  label "DIFF U"
 param diffV      slider 0..4     step 0.05  default 0.30  label "DIFF V"
 param diffW      slider 0..4     step 0.05  default 0.10  label "DIFF W"
 // threshold's interesting territory is the negative half — positive
-// values quench the dynamics to the homogeneous fixed point
-// (verified via wgsl-harness audit). Slider was -0.3..0.5; trimmed.
+// values quench the dynamics to the homogeneous fixed point.
 param threshold  slider -0.3..0.1 step 0.01 default -0.05 label "THRESH"
 param drive      slider 0..0.2   step 0.001 default 0.025 label "DRIVE"
 // eps1Mul slider was 0.1..5 but past ~1.5 the autocatalyst can't

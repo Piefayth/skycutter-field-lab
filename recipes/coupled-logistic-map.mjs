@@ -32,15 +32,6 @@ import { compileV2 } from "../dsl/compile-v2.mjs";
 
 export const overlays = [];
 
-// The logistic map at r=3.8 has |Δx| ≈ 0.4 every iteration BY
-// CONSTRUCTION — that's deterministic chaos with no slow timescale.
-// We work around it with a low default simRateHz and the xAvg envelope
-// view; the raw x view is still expected to strobe and that's
-// declared up front rather than masked.
-export const audit = {
-  allowStrobe: true,
-};
-
 export const metrics = [
   { id: "meanX",  label: "MEAN x",  source: "dsl:meanX",  spark: true, precision: 3 },
   { id: "varX",   label: "VAR x",   source: "dsl:varX",   spark: true, precision: 3 },

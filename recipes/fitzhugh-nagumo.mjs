@@ -40,9 +40,8 @@ field u: f32
 field v: f32
 
 param simRateHz slider 0..360 step 1   default 60  label "SIM RATE"
-// diffusion slider was 0..4 but anything past ~2 over-smooths spikes
-// to the rest state (verified via wgsl-harness audit). Default 1.0
-// stays comfortably in the spike-and-recover regime.
+// Anything past diffusion ~2 over-smooths spikes to the rest state.
+// Default 1.0 stays comfortably in the spike-and-recover regime.
 param diffusion slider 0..2   step 0.05 default 1.0 label "DIFF"
 // rate slider was 1..100 but past ~50 the dynamics collapse to the
 // rest state (explicit-Euler stiffness on the cubic activator term).

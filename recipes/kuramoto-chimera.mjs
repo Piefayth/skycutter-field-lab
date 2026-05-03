@@ -16,13 +16,6 @@ import { compileV2 } from "../dsl/compile-v2.mjs";
 
 export const overlays = [];
 
-// cosTheta is mathematically bounded to [-1, 1] by the cos function;
-// pinning at those extremes is the codomain, not a clamp dynamics
-// saturation.
-export const audit = {
-  allowedClampPins: ["cosTheta"],
-};
-
 export const metrics = [
   // |R| ≈ ⟨cos θ⟩ as a cheap proxy for the Kuramoto order parameter.
   // Goes to 1 at full sync, ~0 in chaotic regime, intermediate when

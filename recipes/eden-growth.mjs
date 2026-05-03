@@ -53,12 +53,9 @@ field state: u32
 field frontF: u32 derived  // 1 if empty AND has an occupied neighbour
 
 // Growth probability per eligible empty cell per tick. Default 0.02
-// gives a visible front advancing at ~one cell per 50 ticks; cranking
-// it any higher swallows the sphere in a few wall-clock seconds and
-// you don't get to watch the front roughen. Slider was 0..0.5 but
-// audit-recipe sweeps showed everything past ~0.05 fully fills the
-// sphere within the audit window — every value above that becomes
-// indistinguishable.
+// gives a visible front advancing at ~one cell per 50 ticks; anything
+// past ~0.05 fills the sphere within seconds and you don't get to
+// watch the front roughen.
 param GROWTH      slider 0..0.05 step 0.001 default 0.02 label "g (GROWTH)"
 param simRateHz   slider 0..120  step 1     default 30   label "SIM RATE"
 

@@ -42,14 +42,6 @@ import { compileV2 } from "../dsl/compile-v2.mjs";
 
 export const overlays = [];
 
-// Each tick every cell that meets the threshold advances by one — that's
-// the entire dynamics. The phaseAngle projection cycles through the
-// color wheel by design; the visualization isn't strobing chaotically,
-// it's spiral-rotating, and that's exactly the point.
-export const audit = {
-  allowStrobe: true,
-};
-
 export const metrics = [
   { id: "active", label: "ACTIVE",   source: "dsl:active",  spark: true, precision: 0 },
   { id: "spirals", label: "SPIRALS", source: "dsl:spirals", mini: true, precision: 0 },

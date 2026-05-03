@@ -29,14 +29,6 @@ import { compileV2 } from "../dsl/compile-v2.mjs";
 
 export const overlays = [];
 
-// Greenberg-Hastings advances every cell through K phases each tick by
-// design — the front sweeps through ~half the cells per step, so the
-// stateNorm projection naturally has |Δ| ≈ 0.5 per tick. That's
-// rotating wave propagation, not visual noise.
-export const audit = {
-  allowStrobe: true,
-};
-
 export const metrics = [
   { id: "excited",    label: "EXCITED",    source: "dsl:excited",    spark: true, precision: 0 },
   { id: "refractory", label: "REFRACTORY", source: "dsl:refractory", spark: true, precision: 0 },
