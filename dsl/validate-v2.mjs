@@ -642,7 +642,9 @@ function ensureNoSideEffects(ast, label) {
   if (!ast || typeof ast !== "object") return;
   // Action types should never appear inside an expression AST, but if a
   // future grammar tweak lifts one in by accident this catches it.
-  if (ast.type === "set" || ast.type === "add" || ast.type === "emit"
+  // v2 doesn't have `emit` — the v1 event-emission action was retired
+  // when we collapsed events into metrics — so it isn't listed.
+  if (ast.type === "set" || ast.type === "add"
       || ast.type === "fill" || ast.type === "spot" || ast.type === "ellipse"
       || ast.type === "region" || ast.type === "eachCell") {
     throw new Error(`${label}: pure expressions only — found "${ast.type}"`);

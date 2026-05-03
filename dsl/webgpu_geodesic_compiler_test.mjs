@@ -317,6 +317,62 @@ step {
     "vec2(...) call lowers to WGSL native constructor");
 });
 
+test("u32 fields emit array<u32> bindings + f32 read/u32 write casts", () => {
+  // u32 storage shows up as `array<u32>` on the wire, but the cell
+  // body sees it as f32 (cast on read, cast on write). Same for the
+  // per-neighbor binding inside a reduction.
+  const recipe = compileV2(`
+recipe "Life"
+substrate geodesic frequency 16
+field state: u32
+
+step {
+  stage s "Conway-ish" {
+    reads state
+    writes state
+    cell {
+      let count = sum n in neighbors { state@n }
+      set state = count == 3 ? 1 : 0
+    }
+  }
+}
+`);
+  const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
+  assert(pass.source.includes("var<storage, read> f_state: array<u32>"),
+    "u32 field's read binding must be array<u32>");
+  assert(pass.source.includes("var<storage, read_write> outputField: array<u32>"),
+    "u32 field's output binding must be array<u32>");
+  assert(pass.source.includes("let v_state: f32 = f32(f_state[cell])"),
+    "u32 read into the cell body casts to f32");
+  assert(pass.source.includes("outputField[cell] = u32(round(outValue))"),
+    "f32 outValue casts back to u32 on write");
+  assert(pass.source.includes("let _n_state: f32 = f32(f_state[nr_0_n])"),
+    "per-neighbor binding for a u32 field also casts to f32");
+});
+
+test("bool fields emit array<u32> storage (sugared u32)", () => {
+  const recipe = compileV2(`
+recipe "Maze"
+substrate geodesic frequency 16
+field alive: bool
+
+step {
+  stage s "Maze-ish" {
+    reads alive
+    writes alive
+    cell {
+      set alive = alive
+    }
+  }
+}
+`);
+  const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
+  assert(pass.source.includes("var<storage, read> f_alive: array<u32>"),
+    "bool field shares u32 storage");
+  assert(pass.source.includes("outputField[cell] = u32(round(outValue))"),
+    "bool field writes through the same u32(round) cast");
+});
+
 test("MATH_FUNCTIONS registry drives all consumers (smoke)", async () => {
   // Each MATH_FUNCTIONS entry should self-validate: the WGSL emitter,
   // the JS init runtime, and the type checker all dispatch through

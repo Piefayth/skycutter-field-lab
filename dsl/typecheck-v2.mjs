@@ -75,12 +75,24 @@ export function typecheckV2(schema) {
 // Context
 // =============================================================================
 
+// Map a field's declared storage type to the type it surfaces with
+// inside expressions. u32 / bool fields are integer-stored on the wire
+// but cell-body arithmetic operates on the value as f32 (the WGSL
+// compiler emits `f32(...)` casts on read and `u32(round(...))` casts
+// on write). vec2 stays vec2; everything else f32.
+function expressionTypeOf(declaredType) {
+  if (declaredType === "vec2") return "vec2";
+  return "f32";
+}
+
 function buildContext(schema) {
+  // Preserve each field's *declared* type — checkFieldAssignment looks
+  // it up to know whether to allow a bool RHS (for u32/bool storage,
+  // bool is a natural source: `set alive = neighbors == 3`).
   const fieldTypes = new Map();
   for (const decl of schema.fields ?? []) {
     if (!decl?.name) continue;
-    const t = decl.type === "vec2" ? "vec2" : "f32";
-    fieldTypes.set(decl.name, t);
+    fieldTypes.set(decl.name, decl.type ?? "f32");
   }
   return { schema, fieldTypes };
 }
@@ -180,14 +192,21 @@ function typecheckActionList(actions, locals, ctx, label) {
 }
 
 function checkFieldAssignment(fieldName, expr, ctx, label, locals = new Map()) {
-  const fieldType = ctx.fieldTypes.get(fieldName);
-  if (!fieldType) {
+  const declaredType = ctx.fieldTypes.get(fieldName);
+  if (!declaredType) {
     // Field not declared — let the v1 validator surface that. Type
     // checker stays out of identifier resolution.
     return;
   }
+  const fieldType = expressionTypeOf(declaredType);
   const exprType = typeOfExpr(expr, locals, ctx, label);
   if (exprType === "unknown") return;
+  // Bool RHS is acceptable for integer-storage fields (u32 / bool).
+  // The WGSL emit casts to u32 on write, and bool→u32 is the natural
+  // mapping (`true` → 1, `false` → 0). For f32 fields we still
+  // require explicit ternary.
+  const integerStored = declaredType === "u32" || declaredType === "bool";
+  if (integerStored && exprType === "bool") return;
   if (exprType !== fieldType) {
     throwTypeError(
       `${label}: type mismatch — assigning ${exprType} to ${fieldType} field "${fieldName}". ` +
@@ -276,7 +295,8 @@ function typeOfExpr(ast, locals, ctx, label) {
           if (t === "bool") throwTypeError(`${argLabel}: ${name} must be a scalar, got bool`);
         }
       }
-      return ctx.fieldTypes.get(ast.field) ?? "unknown";
+      const declared = ctx.fieldTypes.get(ast.field);
+      return declared ? expressionTypeOf(declared) : "unknown";
     }
     default:
       return "unknown";
@@ -286,7 +306,10 @@ function typeOfExpr(ast, locals, ctx, label) {
 function typeOfIdentifier(name, locals, ctx) {
   if (name === "true" || name === "false") return "bool";
   if (locals.has(name)) return locals.get(name);
-  if (ctx.fieldTypes.has(name)) return ctx.fieldTypes.get(name);
+  // Field reads surface as the field's *expression* type — u32/bool
+  // fields carry as f32 inside expressions (the WGSL emit casts on
+  // read). vec2 fields stay vec2.
+  if (ctx.fieldTypes.has(name)) return expressionTypeOf(ctx.fieldTypes.get(name));
   if (F32_BUILTINS.has(name)) return "f32";
   const paramType = paramTypeOf(name, ctx);
   if (paramType) return paramType;
@@ -422,7 +445,10 @@ function typeOfCall(ast, locals, ctx, label) {
     }
     const fname = args[0].name;
     const ftype = ctx.fieldTypes.get(fname);
-    if (ftype === "f32") {
+    // Only vec2 fields have a meaningful divergence; integer-storage
+    // and scalar fields all reject. (ftype undefined falls through —
+    // the v1 validator catches "unknown identifier".)
+    if (ftype && ftype !== "vec2") {
       throwTypeError(`${label}: divergence(${fname}) — divergence is only defined on vec2 fields`);
     }
     return "f32";
@@ -471,11 +497,11 @@ function typeOfNeighborReduce(ast, locals, ctx, label) {
   // this branch.
   const innerLocals = new Map(locals);
   for (const binding of ast.bindings ?? []) {
-    const ftype = ctx.fieldTypes.get(binding.field);
-    if (ftype === "vec2") {
+    const declared = ctx.fieldTypes.get(binding.field);
+    if (declared === "vec2") {
       throwTypeError(`${bodyLabel}: binding "${binding.name}" is bound to vec2 field "${binding.field}" — v1-shape bindings only carry scalar values`);
     }
-    innerLocals.set(binding.name, ftype ?? "unknown");
+    innerLocals.set(binding.name, declared ? expressionTypeOf(declared) : "unknown");
   }
   const bodyType = typeOfExpr(ast.body, innerLocals, ctx, bodyLabel);
   if (bodyType === "bool") {

@@ -316,12 +316,45 @@ export function buildWebGpuGeodesicUniforms(layout, { dt = 0, frame = 0, cellCou
   return new Float32Array(values);
 }
 
-// Map field type → WGSL storage element type. Used by the cell shader
-// to emit `array<f32>` vs `array<vec2<f32>>` etc. for storage buffer
-// bindings, and to type the per-cell read locals.
+// Map field type → WGSL storage element type. Drives the storage
+// binding's `array<...>` shape and the per-cell read local's type.
+//
+// u32 and bool fields share Uint32 storage on both sides of the wire
+// (bool is DSL-level sugar — `true` reads as 1, `false` as 0). On
+// read into a per-cell expression we cast to f32 so the rest of the
+// arithmetic just works in f32 land; on write we cast back to u32 via
+// `u32(round(outValue))`. This keeps the type-system surface small
+// (everything in expressions is f32-or-vec2) while letting recipes
+// declare integer-storage fields for cellular automata, count
+// histories, state machines, etc.
 function wgslElemType(fieldType) {
   if (fieldType === "vec2") return "vec2<f32>";
+  if (fieldType === "u32" || fieldType === "bool") return "u32";
   return "f32";
+}
+
+// Per-cell read of a field. Integer-storage fields cast to f32 so the
+// downstream expression compiles in pure f32 / vec2 land.
+function wgslReadCell(fieldName, fieldType) {
+  if (fieldType === "u32" || fieldType === "bool") return `f32(f_${fieldName}[cell])`;
+  return `f_${fieldName}[cell]`;
+}
+
+// Per-cell read of a field at a neighbor / arbitrary index. Same
+// integer-cast as wgslReadCell, just at a different index.
+function wgslReadAt(fieldName, fieldType, indexExpr) {
+  if (fieldType === "u32" || fieldType === "bool") return `f32(f_${fieldName}[${indexExpr}])`;
+  return `f_${fieldName}[${indexExpr}]`;
+}
+
+// Per-cell write of a (possibly cast) f32 value into a field. For
+// integer-storage fields we round-and-cast so 0.49 doesn't write 0
+// when the user clearly meant "almost-1 means 1" — the round is the
+// same convention WGSL spec uses for f32→u32 on `select` results.
+// outValue is always f32 (or vec2<f32>) at the point we call this.
+function wgslWriteOutput(fieldType, valueExpr) {
+  if (fieldType === "u32" || fieldType === "bool") return `outputField[cell] = u32(round(${valueExpr}));`;
+  return `outputField[cell] = ${valueExpr};`;
 }
 
 function compileCellShader({ stage, field, reads, prevReads = [], actions, layout, needsNeighbors = false }) {
@@ -341,18 +374,27 @@ function compileCellShader({ stage, field, reads, prevReads = [], actions, layou
   const positionsBinding = outputBinding + 2;
   const neighborsBinding = outputBinding + 3;
   const neighborCountsBinding = outputBinding + 4;
-  // Per-cell read locals carry an explicit type annotation so vec2
-  // fields don't get implicitly inferred as f32 (which would silently
-  // collapse to the .x component on use).
-  const readValues = reads.map((name) =>
-    `  let ${readVar(name)}: ${wgslElemType(typeOf(name))} = f_${name}[cell];`,
-  );
+  // Per-cell read locals carry an explicit type annotation. vec2
+  // fields surface as `vec2<f32>` so member access (.x/.y) compiles.
+  // u32 / bool fields cast on read into f32 so the rest of the cell
+  // body operates in pure f32-or-vec2 land — wgslReadCell handles
+  // the cast.
+  const readValues = reads.map((name) => {
+    const t = typeOf(name);
+    // u32/bool fields read as f32; the cell body never sees the
+    // integer type, only its f32 representation.
+    const localType = (t === "u32" || t === "bool") ? "f32" : wgslElemType(t);
+    return `  let ${readVar(name)}: ${localType} = ${wgslReadCell(name, t)};`;
+  });
   const neighborBindings = needsNeighbors ? `
 @group(0) @binding(${neighborsBinding}) var<storage, read> neighbors: array<i32>;
 @group(0) @binding(${neighborCountsBinding}) var<storage, read> neighborCounts: array<u32>;
 ` : "";
   // Initial value for the per-cell `outValue` accumulator. For vec2
-  // fields not in reads, default to vec2<f32>(0.0, 0.0); for f32, 0.0.
+  // fields not in reads, default to vec2<f32>(0.0, 0.0); for f32 / u32
+  // / bool, 0.0. (Integer-storage fields use f32 outValue throughout
+  // the cell body — the cast happens on the final write to
+  // outputField, not in outValue itself.)
   const fieldType = typeOf(field);
   const zeroLiteral = fieldType === "vec2" ? "vec2<f32>(0.0, 0.0)" : "0.0";
   const initial = reads.includes(field) ? readVar(field) : zeroLiteral;
@@ -467,7 +509,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 ${readValues.join("\n")}
   var outValue = ${initial};
 ${indent(body, 2)}
-  outputField[cell] = outValue;
+  ${wgslWriteOutput(fieldType, "outValue")}
 }
 `.trim();
 }
@@ -1009,8 +1051,12 @@ function emitReduction(node, ctx, statements) {
   const fieldTypes = ctx.layout?.fieldTypes ?? {};
   statements.push(`    let ${neighborIdx}: u32 = u32(neighbors[cell * 6u + ${slot}]);`);
   for (const b of bindings) {
-    const wgslType = wgslElemType(fieldTypes[b.field] ?? "f32");
-    statements.push(`    let ${b.name}: ${wgslType} = f_${b.field}[${neighborIdx}];`);
+    const fieldType = fieldTypes[b.field] ?? "f32";
+    // Per-neighbor binding's local type — vec2 stays vec2<f32>, u32/
+    // bool cast to f32 (so the body's expression stays in f32 land
+    // even when the field is integer-stored).
+    const localType = (fieldType === "u32" || fieldType === "bool") ? "f32" : wgslElemType(fieldType);
+    statements.push(`    let ${b.name}: ${localType} = ${wgslReadAt(b.field, fieldType, neighborIdx)};`);
   }
   if (node.op === "sum") {
     statements.push(`    ${accName} = ${accName} + (${bodyWgsl});`);
@@ -1047,20 +1093,30 @@ function emitReduction(node, ctx, statements) {
 function inferReductionBodyType(ast, bindings, ctx) {
   if (!ast || typeof ast !== "object") return "f32";
   const fieldTypes = ctx.layout?.fieldTypes ?? {};
+  // Field's expression type — u32/bool fields surface as f32 in cell
+  // bodies (the WGSL compiler casts on read), so the reduction body's
+  // accumulator follows that f32 view rather than the declared
+  // storage type.
+  const exprFieldType = (name) => {
+    const t = fieldTypes[name];
+    if (t === "vec2") return "vec2";
+    return "f32";
+  };
   const bindingType = (name) => {
     const binding = bindings.find((b) => b.name === name);
     if (!binding) return null;
-    return fieldTypes[binding.field] ?? "f32";
+    return exprFieldType(binding.field);
   };
   switch (ast.type) {
     case "Number":
       return "f32";
     case "Identifier": {
-      // Per-neighbor binding (`_n_<field>`) — type matches the field.
+      // Per-neighbor binding (`_n_<field>`) — type matches the field
+      // (in expression-space, where u32/bool surface as f32).
       const fromBinding = bindingType(ast.name);
       if (fromBinding) return fromBinding;
       // Self-field reference inside the reduction body.
-      if (fieldTypes[ast.name]) return fieldTypes[ast.name];
+      if (fieldTypes[ast.name]) return exprFieldType(ast.name);
       return "f32";
     }
     case "Member":
@@ -1082,7 +1138,7 @@ function inferReductionBodyType(ast, bindings, ctx) {
       return "f32";
     }
     case "CoordRead":
-      return fieldTypes[ast.field] ?? "f32";
+      return exprFieldType(ast.field);
     default:
       return "f32";
   }
@@ -1117,9 +1173,15 @@ function compileExpr(ast, ctx) {
 // non-1 offset) extend by adding cases.
 function compileCoordRead(ast, ctx) {
   const coord = ast.coord;
+  const fieldTypes = ctx.layout?.fieldTypes ?? {};
+  const fieldType = fieldTypes[ast.field] ?? "f32";
+  // Integer-storage fields cast to f32 on read; vec2/f32 surface
+  // directly. wgslReadAt centralises the cast so a future bool/u32
+  // history field reads as f32 in the per-cell expression just like
+  // current-tick reads do.
   switch (coord.kind) {
     case "prev":
-      return `f_${ast.field}_prev[cell]`;
+      return wgslReadAt(`${ast.field}_prev`, fieldType, "cell");
     case "neighbor": {
       const resolver = ctx.coordReadResolver;
       const local = resolver?.(ast.field, coord.binding);
@@ -1246,7 +1308,9 @@ function compileCall(ast, ctx) {
     if (arg?.type !== "Identifier") {
       throw new Error("prev requires a bare field identifier");
     }
-    return `f_${arg.name}_prev[cell]`;
+    const fieldTypes = ctx.layout?.fieldTypes ?? {};
+    const fieldType = fieldTypes[arg.name] ?? "f32";
+    return wgslReadAt(`${arg.name}_prev`, fieldType, "cell");
   }
   // Tangent-frame differential operators. The argument must be a bare
   // field identifier; the compiler emits a per-(field) helper function

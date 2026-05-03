@@ -15,11 +15,21 @@ const PARAMS_BUFFER_SIZE = 4096;
 const FIELD_TYPE_BYTES = {
   f32: 4,
   vec2: 8,
+  u32: 4,    // integer-storage fields use one u32 per cell
+  bool: 4,   // bool sugars onto u32 storage (0 / 1)
 };
 function fieldTypeBytes(type) {
   const bytes = FIELD_TYPE_BYTES[type];
   if (!bytes) throw new Error(`unsupported field type "${type}"`);
   return bytes;
+}
+
+// JS-side typed-array constructor that matches the GPU storage layout.
+// Used by the upload (state.fields[…] → GPU) and readback (GPU →
+// state.fields[…]) paths so the wire format matches on both sides.
+function fieldTypedArrayCtor(type) {
+  if (type === "u32" || type === "bool") return Uint32Array;
+  return Float32Array;
 }
 
 export function webgpuSupported() {
@@ -231,14 +241,20 @@ export class WebGpuGeodesicRuntime {
 
   async readField(name, out) {
     const field = this.ensureField(name);
-    const components = field.bytes / 4 / this.cellCount; // 1 for f32, 2 for vec2
-    const totalFloats = this.cellCount * components;
-    if (!out) out = new Float32Array(totalFloats);
+    const type = field.type;
+    const components = field.bytes / 4 / this.cellCount; // 1 for f32 / u32 / bool, 2 for vec2
+    const totalElems = this.cellCount * components;
+    // Match the readback typed-array to the field's storage type so
+    // u32-stored fields (cellular automata, counts, state machines)
+    // round-trip correctly. Without this an integer field's GPU u32
+    // bits would be reinterpreted as Float32 (NaN garbage).
+    const Ctor = fieldTypedArrayCtor(type);
+    if (!out) out = new Ctor(totalElems);
     const encoder = this.device.createCommandEncoder();
     encoder.copyBufferToBuffer(this.currentBuffer(name), 0, this.readbackBuffer, 0, field.bytes);
     this.device.queue.submit([encoder.finish()]);
     await this.readbackBuffer.mapAsync(GPUMapMode.READ);
-    out.set(new Float32Array(this.readbackBuffer.getMappedRange(), 0, totalFloats));
+    out.set(new Ctor(this.readbackBuffer.getMappedRange(), 0, totalElems));
     this.readbackBuffer.unmap();
     return out;
   }

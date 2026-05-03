@@ -304,11 +304,11 @@ function parseField(ctx) {
   const name = readIdent(ctx, "field name");
   consumeChar(ctx, ":");
   const type = readIdent(ctx, "field type");
-  if (!["f32", "vec2", "vec3", "u32"].includes(type)) {
-    throw new Error(`v2 parse: unknown field type "${type}" (allowed: f32, vec2, vec3, u32)`);
+  if (!["f32", "vec2", "vec3", "u32", "bool"].includes(type)) {
+    throw new Error(`v2 parse: unknown field type "${type}" (allowed: f32, vec2, u32, bool)`);
   }
-  if (type === "vec3" || type === "u32") {
-    throw new Error(`v2 parse: field type "${type}" is reserved but not yet implemented; use f32 or vec2`);
+  if (type === "vec3") {
+    throw new Error(`v2 parse: field type "vec3" is reserved but not yet implemented; use f32 or vec2`);
   }
   // Optional `derived` annotation.
   skipInlineWs(ctx);
