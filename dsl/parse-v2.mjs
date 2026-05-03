@@ -511,12 +511,17 @@ function parseStage(ctx) {
   if (ctx.source[ctx.i] === "\"") name = readString(ctx);
   const body = readBracedBlock(ctx);
   // Stage body has: reads CLAUSE, writes CLAUSE, cell { ... }
-  // Optionally: `reads u previous` for explicit history declarations.
+  // Plus optional legacy primitives: advect / wind / diffuse / clamp /
+  // normalize (lowered to v1 primitive statement nodes the existing
+  // WGSL emitter handles). These are an escape hatch — long term,
+  // diffuse / clamp fold into cell expressions and advect / wind become
+  // coordinate queries (`u@(self - wind*dt)` and gradient stencils).
   const inner = makeCtx(body);
   const reads = [];
   const writes = [];
   const previousReads = new Set();
-  let cellBody = null;
+  const statements = [];
+  let cellSeen = false;
   while (true) {
     skipTrivia(inner);
     if (atEnd(inner)) break;
@@ -533,26 +538,110 @@ function parseStage(ctx) {
       const items = parseFieldList(inner);
       for (const item of items) writes.push(item.name);
     } else if (kw === "cell") {
-      if (cellBody !== null) throw new Error(`v2 parse: stage ${id}: only one cell { } block per stage`);
+      if (cellSeen) throw new Error(`v2 parse: stage ${id}: only one cell { } block per stage`);
+      cellSeen = true;
       consumeKeyword(inner, "cell");
-      cellBody = readBracedBlock(inner);
+      const cellBody = readBracedBlock(inner);
+      const cellActions = parseCellActions(cellBody, `stage ${id} cell`);
+      statements.push({ type: "cell", actions: cellActions });
+    } else if (kw === "advect" || kw === "wind" || kw === "diffuse" || kw === "clamp" || kw === "normalize") {
+      statements.push(parseLegacyPrimitive(inner, id));
     } else {
       throw new Error(`v2 parse: stage ${id}: unknown clause "${kw}"`);
     }
   }
-  if (cellBody === null) throw new Error(`v2 parse: stage ${id}: missing cell { } block`);
-  const cellActions = parseCellActions(cellBody, `stage ${id} cell`);
+  if (statements.length === 0) {
+    throw new Error(`v2 parse: stage ${id}: missing cell { } block (or legacy primitive)`);
+  }
   return {
     id,
     name,
     reads: dedupe(reads),
     writes: dedupe(writes),
     declares: [],
-    body: {
-      statements: [{ type: "cell", actions: cellActions }],
-    },
+    body: { statements },
     previousReads: [...previousReads],
   };
+}
+
+// Parse a legacy stage primitive: advect / wind / diffuse / clamp /
+// normalize. Same surface syntax as v1 — bridges to the existing v1
+// AST nodes the WGSL emitter knows how to handle. Will be retired
+// once v2 has coordinate-query advect (`u@(self - wind*dt)`) and
+// neighbor-derived wind primitives.
+function parseLegacyPrimitive(ctx, stageId) {
+  const kw = peekKeyword(ctx);
+  if (kw === "wind") {
+    consumeKeyword(ctx, "wind");
+    const pressure = readIdent(ctx, "wind pressure field");
+    consumeChar(ctx, "-"); consumeChar(ctx, ">");
+    const windU = readIdent(ctx, "wind windU field");
+    consumeChar(ctx, ",");
+    const windV = readIdent(ctx, "wind windV field");
+    skipInlineWs(ctx);
+    let lift = null;
+    if (ctx.source[ctx.i] === ",") {
+      ctx.i++;
+      lift = readIdent(ctx, "wind lift field");
+    }
+    consumeKeyword(ctx, "strength");
+    const strength = parseExpressionUntilLine(ctx);
+    return { type: "wind", pressure, windU, windV, lift, strength };
+  }
+  if (kw === "advect") {
+    consumeKeyword(ctx, "advect");
+    const field = readIdent(ctx, "advect field");
+    consumeKeyword(ctx, "by");
+    const windU = readIdent(ctx, "advect windU");
+    consumeChar(ctx, ",");
+    const windV = readIdent(ctx, "advect windV");
+    consumeKeyword(ctx, "dt");
+    const dt = parseExpressionUntilLine(ctx);
+    return { type: "advect", field, windU, windV, dt };
+  }
+  if (kw === "diffuse") {
+    consumeKeyword(ctx, "diffuse");
+    const field = readIdent(ctx, "diffuse field");
+    consumeKeyword(ctx, "amount");
+    const amount = parseExpressionUntilLine(ctx);
+    return { type: "diffuse", field, amount };
+  }
+  if (kw === "clamp") {
+    consumeKeyword(ctx, "clamp");
+    const field = readIdent(ctx, "clamp field");
+    // Two number expressions, space-separated, until end of line.
+    skipInlineWs(ctx);
+    const lo = parseExpressionUntilSpace(ctx);
+    skipInlineWs(ctx);
+    const hi = parseExpressionUntilLine(ctx);
+    return { type: "clamp", field, lo, hi };
+  }
+  if (kw === "normalize") {
+    consumeKeyword(ctx, "normalize");
+    const field = readIdent(ctx, "normalize field");
+    consumeKeyword(ctx, "damping");
+    const damping = parseExpressionUntilWhen(ctx);
+    consumeKeyword(ctx, "when");
+    const condition = parseExpressionUntilLine(ctx);
+    return { type: "normalize", field, damping, condition };
+  }
+  throw new Error(`v2 parse: stage ${stageId}: unknown legacy primitive "${kw}"`);
+}
+
+// Helpers for the legacy primitives' awkward cases.
+function parseExpressionUntilSpace(ctx) {
+  const text = readExpressionTextUntil(ctx, [" ", "\n", ";"]);
+  return parseExpressionFromString(text, "expression");
+}
+
+function parseExpressionUntilWhen(ctx) {
+  // Read until ` when ` (preceded by space) or end of line.
+  let s = "";
+  while (!atEnd(ctx) && ctx.source[ctx.i] !== "\n") {
+    if (/^\s+when\b/.test(ctx.source.slice(ctx.i))) break;
+    s += ctx.source[ctx.i++];
+  }
+  return parseExpressionFromString(s.trim(), "expression");
 }
 
 // Parse a comma-separated list of field references, optionally each tagged
@@ -698,13 +787,15 @@ function readUntilMatchingBrace(ctx) {
 // =============================================================================
 
 function parseExpressionUntilLine(ctx) {
-  // Read text up to end of line (or matching outer brace, depth-aware).
-  const text = readExpressionTextUntil(ctx, ["\n"]);
+  // Read text up to end of line, semicolon, or matching outer brace
+  // (depth-aware). Semicolon and newline are equivalent statement
+  // terminators inside cell / scenario / stamp bodies.
+  const text = readExpressionTextUntil(ctx, ["\n", ";"]);
   return parseExpressionFromString(text, "expression");
 }
 
 function parseExpressionUntilCommaOrLine(ctx) {
-  const text = readExpressionTextUntil(ctx, [",", "\n"]);
+  const text = readExpressionTextUntil(ctx, [",", "\n", ";"]);
   return parseExpressionFromString(text, "expression");
 }
 

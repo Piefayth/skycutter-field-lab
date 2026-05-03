@@ -7,7 +7,7 @@
 // breaks a wave into a rotating spiral.
 
 import { ramp, gray } from "../prims/colorers.mjs";
-import { compileDsl } from "../dsl/compiler.mjs";
+import { compileV2 } from "../dsl/compile-v2.mjs";
 
 export const views = [
   { id: "u", label: "U (membrane)", color: gray("u") },
@@ -35,87 +35,84 @@ export const pipelineDsl = `
 recipe "FitzHugh-Nagumo"
 summary "Excitable medium. Fast u spikes through a cubic threshold; slow v recovers and suppresses. Diffusion turns spikes into traveling fronts; an asymmetric seed breaks a front into a rotating spiral."
 recommendedPreset pulses
-grid geodesic tiles 64
 
-const a 0.13
-const epsilon 0.005
-const gamma 1.0
+substrate geodesic frequency 64
 
-use clock dt, frame
-use geo x, y, i, lon, lat, u, v, px, py, pz, N, PI, TAU
-use sim cell, diffuse, clamp
-use init fill, spot, region, eachCell
-use core clamp, smoothstep, max, min, abs, hypot, cellNoise
+const a = 0.13
+const epsilon = 0.005
+const gamma = 1.0
 
-field u, v
+field u: f32
+field v: f32
 
-setting simRateHz slider min 0 max 360 step 1 default 60 label "SIM RATE"
-param diffusion slider min 0 max 4 step 0.05 default 1.0 label "DIFF"
-param rate slider min 1 max 100 step 1 default 30 label "RATE"
+param simRateHz slider 0..360 step 1   default 60  label "SIM RATE"
+param diffusion slider 0..4   step 0.05 default 1.0 label "DIFF"
+param rate      slider 1..100 step 1   default 30  label "RATE"
 
 stamp pulse "Pulse" {
-  spot u lon lon lat lat radius r amount 1
+  spot u at brush.pos, radius=brush.r, amount=1
 }
 
 stamp refract "Refractory pad" {
-  spot v lon lon lat lat radius r amount 0.5
+  spot v at brush.pos, radius=brush.r, amount=0.5
 }
 
-stamp spiralSeed "Spiral seed" {
-  spot u lon lon - r * 0.6 lat lat radius r * 1.4 amount 1
-  spot v lon lon + r * 0.5 lat lat - r * 0.5 radius r amount 0.45
+scenario blank "Blank canvas" {
+  set u = 0
+  set v = 0
 }
 
-preset blank "Blank canvas" {
-  fill u 0
-  fill v 0
+scenario spiral "Spiral wave seed" {
+  set u = 0
+  set v = 0
+  region u at lonMin=-0.6, lonMax=0.6, latMin=0,    latMax=PI/2, amount=1
+  region v at lonMin=-0.2, lonMax=0.4, latMin=-0.5, latMax=0,    amount=0.4
 }
 
-preset spiral "Spiral wave seed" {
-  fill u 0
-  fill v 0
-  region u lon -0.6..0.6 lat 0..PI/2 amount 1
-  region v lon -0.2..0.4 lat -0.5..0 amount 0.4
-}
-
-preset pulses "Random pulses" {
-  fill u 0
-  fill v 0
-  eachCell {
+scenario pulses "Random pulses" {
+  set u = 0
+  set v = 0
+  for each cell {
     when cellNoise(7, 0.6) > 0.45 {
       set u = 1
     }
   }
 }
 
-preset front "Plane wave" {
-  fill u 0
-  fill v 0
-  region u lon -0.2..0.2 lat -PI/2..PI/2 amount 1
+scenario front "Plane wave" {
+  set u = 0
+  set v = 0
+  region u at lonMin=-0.2, lonMax=0.2, latMin=-PI/2, latMax=PI/2, amount=1
 }
 
-stage diffuseU "Diffuse u (only u diffuses; v is local recovery)" {
-  reads u
-  writes u
-  diffuse u amount diffusion * 0.16 * dt * rate
-}
-
-stage react "FitzHugh-Nagumo reaction" {
-  reads u, v
-  writes u, v
-  cell {
-    let cubic = u * (1 - u) * (u - a)
-    add u = (cubic - v) * dt * rate
-    add v = epsilon * (u - gamma * v) * dt * rate
+step {
+  stage diffuseU "Diffuse u (only u diffuses; v is local recovery)" {
+    reads u
+    writes u
+    cell {
+      add u = (mean n in neighbors { u@n } - u) * clamp(diffusion * 0.16 * dt * rate, 0, 0.24)
+    }
   }
-}
 
-stage clampFields "Clamp to safe envelope" {
-  reads u, v
-  writes u, v
-  clamp u -0.4 1.4
-  clamp v -0.4 1.0
+  stage react "FitzHugh-Nagumo reaction" {
+    reads u, v
+    writes u, v
+    cell {
+      let cubic = u * (1 - u) * (u - a)
+      add u = (cubic - v) * dt * rate
+      add v = epsilon * (u - gamma * v) * dt * rate
+    }
+  }
+
+  stage clampFields "Clamp to safe envelope" {
+    reads u, v
+    writes u, v
+    cell {
+      set u = clamp(u, -0.4, 1.4)
+      set v = clamp(v, -0.4, 1.0)
+    }
+  }
 }
 `;
 
-export const pipeline = compileDsl(pipelineDsl);
+export const pipeline = compileV2(pipelineDsl);

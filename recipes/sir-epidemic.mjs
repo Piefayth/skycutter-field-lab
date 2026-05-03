@@ -21,7 +21,7 @@
 // ring of rabid foxes propagating across a continent.
 
 import { ramp, gray } from "../prims/colorers.mjs";
-import { compileDsl } from "../dsl/compiler.mjs";
+import { compileV2 } from "../dsl/compile-v2.mjs";
 
 // Composite view. Three compartments mapped to a high-contrast palette
 // so each one occupies a different part of the lightness/temperature
@@ -96,91 +96,71 @@ export const pipelineDsl = `
 recipe "SIR epidemic"
 summary "Spatial Susceptible-Infected-Recovered model. Outbreak waves propagate from seed points; burnt-out (recovered) regions can't re-infect, so the front always moves outward into susceptible territory. Beta / gamma is the basic reproduction number — slide it past 1.0 and the wave starts to travel."
 recommendedPreset patientZero
-grid geodesic tiles 64
 
-use clock dt, frame
-use geo lon, lat, x, y, i, N, PI, TAU
-use sim cell, diffuse, clamp
-use init fill, spot, eachCell
-use core clamp, smoothstep, max, min, abs, hypot, exp, cellNoise
+substrate geodesic frequency 64
 
-field S, I, R
+field S: f32
+field I: f32
+field R: f32
 
-setting simRateHz slider min 0 max 360 step 1 default 60 label "SIM RATE"
+param simRateHz slider 0..360 step 1 default 60 label "SIM RATE"
 // Infection rate per S·I contact. Together with gamma sets R0 = β/γ.
 // Default 1.4 gives R0 = 4 — moderate epidemic, visible but stable.
 // Crank to ~3 for an explosive wave; drop below ~0.4 to make the
 // outbreak die in place (R0 < 1).
-param beta      slider min 0 max 4 step 0.01 default 1.40 label "β (INFECT)"
+param beta        slider 0..4     step 0.01     default 1.40    label "β (INFECT)"
 // Recovery rate. Higher = faster transition out of I, narrower
 // infected band. 0.35 gives a wavefront ~3 cell-diameters wide.
-param gamma     slider min 0 max 2 step 0.01 default 0.35 label "γ (RECOVER)"
+param gamma       slider 0..2     step 0.01     default 0.35    label "γ (RECOVER)"
 // Mobility of infected — how fast the outbreak diffuses across cells.
-// In real-world terms: how mixed the population is.
-param mobility  slider min 0 max 4 step 0.01 default 0.70 label "MOBILITY"
-// Waning immunity — recovered cells lose immunity at this rate and
-// flow back into S. With waning > 0 the model becomes SIRS instead
-// of SIR; the planet can support recurrent epidemic waves rather
-// than a single one-shot burnout. Set to 0 to recover pure SIR.
-param waning    slider min 0 max 0.5 step 0.001 default 0.030 label "WANING (R→S)"
-// Background introduction rate — fraction of S converted to I each
-// tick. Re-seeds outbreaks after a quiet stretch without user
-// intervention. Higher than ~0.0001 produces uniform background
-// infection rather than localized waves; default keeps the rare
-// re-seeding flavor without blurring the front.
-param immigration slider min 0 max 0.001 step 0.000005 default 0.000020 label "IMMIGRATE"
-// Time scaling. Effective dt per tick = (1/60)·rate. Keep this and
-// β both modest — \`β·dt·rate\` is the per-tick infect coefficient
-// and must stay well below 1 for stable wavefronts.
-param rate      slider min 1 max 100 step 1 default 12 label "RATE"
+param mobility    slider 0..4     step 0.01     default 0.70    label "MOBILITY"
+// Waning immunity — R→S rate. With waning > 0 the model becomes
+// SIRS instead of SIR; the planet supports recurrent epidemic waves.
+param waning      slider 0..0.5   step 0.001    default 0.030   label "WANING (R→S)"
+// Background introduction rate — fraction of S converted to I each tick.
+param immigration slider 0..0.001 step 0.000005 default 0.00002 label "IMMIGRATE"
+// Time scaling. Effective dt per tick = (1/60)·rate. Keep \`β·dt·rate\`
+// well below 1 for stable wavefronts.
+param rate        slider 1..100   step 1        default 12      label "RATE"
 
 stamp seed "Plant outbreak" {
-  // Drop a fresh outbreak. Reduces local S to make sure infection
-  // can take hold (otherwise the pulse just decays).
-  spot I lon lon lat lat radius r amount 0.4
-  spot S lon lon lat lat radius r amount -0.3
+  spot I at brush.pos, radius=brush.r, amount=0.4
+  spot S at brush.pos, radius=brush.r, amount=-0.3
 }
 
 stamp vaccinate "Vaccinate region" {
-  // Move a chunk of S → R locally. Rapid containment fence.
-  spot R lon lon lat lat radius r amount 0.6
-  spot S lon lon lat lat radius r amount -0.6
+  spot R at brush.pos, radius=brush.r, amount=0.6
+  spot S at brush.pos, radius=brush.r, amount=-0.6
 }
 
 stamp barrier "Recovered firewall" {
-  // Pre-immunize a thin band — useful for trying to halt a
-  // propagating wave before it arrives.
-  spot R lon lon lat lat radius r * 0.5 amount 0.85
-  spot S lon lon lat lat radius r * 0.5 amount -0.85
+  spot R at brush.pos, radius=brush.r * 0.5, amount=0.85
+  spot S at brush.pos, radius=brush.r * 0.5, amount=-0.85
 }
 
-preset patientZero "Single seed" {
-  // Naive population, one infection point near the equator.
-  fill S 0.95
-  fill I 0
-  fill R 0
-  spot I lon 0 lat 0 radius 0.08 amount 0.4
-  spot S lon 0 lat 0 radius 0.08 amount -0.3
+scenario patientZero "Single seed" {
+  set S = 0.95
+  set I = 0
+  set R = 0
+  spot I at lon=0, lat=0, radius=0.08, amount=0.4
+  spot S at lon=0, lat=0, radius=0.08, amount=-0.3
 }
 
-preset multiSeed "Three seeds" {
-  // Multiple ignition points — fronts collide where they meet.
-  fill S 0.95
-  fill I 0
-  fill R 0
-  spot I lon -1.5 lat 0.4 radius 0.08 amount 0.4
-  spot S lon -1.5 lat 0.4 radius 0.08 amount -0.3
-  spot I lon 1.5 lat -0.4 radius 0.08 amount 0.4
-  spot S lon 1.5 lat -0.4 radius 0.08 amount -0.3
-  spot I lon 0   lat 1.0 radius 0.08 amount 0.4
-  spot S lon 0   lat 1.0 radius 0.08 amount -0.3
+scenario multiSeed "Three seeds" {
+  set S = 0.95
+  set I = 0
+  set R = 0
+  spot I at lon=-1.5, lat=0.4,  radius=0.08, amount=0.4
+  spot S at lon=-1.5, lat=0.4,  radius=0.08, amount=-0.3
+  spot I at lon=1.5,  lat=-0.4, radius=0.08, amount=0.4
+  spot S at lon=1.5,  lat=-0.4, radius=0.08, amount=-0.3
+  spot I at lon=0,    lat=1.0,  radius=0.08, amount=0.4
+  spot S at lon=0,    lat=1.0,  radius=0.08, amount=-0.3
 }
 
-preset preVaccinated "Partial herd immunity" {
-  // ~40% of cells already recovered (vaccinated). Outbreaks have a
-  // hard time propagating — many fronts stall.
-  fill I 0
-  eachCell {
+scenario preVaccinated "Partial herd immunity" {
+  set I = 0
+  for each cell {
     let immune = cellNoise(11, 1.5) * 0.5 + 0.5
     when immune > 0.5 {
       set R = 0.7
@@ -191,38 +171,43 @@ preset preVaccinated "Partial herd immunity" {
       set S = 1
     }
   }
-  spot I lon 0 lat 0 radius 0.08 amount 0.4
-  spot S lon 0 lat 0 radius 0.08 amount -0.3
+  spot I at lon=0, lat=0, radius=0.08, amount=0.4
+  spot S at lon=0, lat=0, radius=0.08, amount=-0.3
 }
 
-stage spread "Spatial mobility of infected" {
-  reads I
-  writes I
-  diffuse I amount mobility * 0.18 * dt * rate
-}
-
-stage react "S→I→R(→S) reaction" {
-  reads S, I, R
-  writes S, I, R
-  cell {
-    let infect    = beta * S * I
-    let recover   = gamma * I
-    let wane      = waning * R
-    let reseeding = immigration * S
-    // SIR core (with waning + reseeding making it SIRS-with-import)
-    add S = (-infect + wane - reseeding) * dt * rate
-    add I = (infect - recover + reseeding) * dt * rate
-    add R = (recover - wane)              * dt * rate
+step {
+  stage spread "Spatial mobility of infected" {
+    reads I
+    writes I
+    cell {
+      add I = (mean n in neighbors { I@n } - I) * clamp(mobility * 0.18 * dt * rate, 0, 0.24)
+    }
   }
-}
 
-stage clampPositive "Keep populations non-negative" {
-  reads S, I, R
-  writes S, I, R
-  clamp S 0 1
-  clamp I 0 1
-  clamp R 0 1
+  stage react "S→I→R(→S) reaction" {
+    reads S, I, R
+    writes S, I, R
+    cell {
+      let infect    = beta * S * I
+      let recover   = gamma * I
+      let wane      = waning * R
+      let reseeding = immigration * S
+      add S = (-infect + wane - reseeding) * dt * rate
+      add I = (infect - recover + reseeding) * dt * rate
+      add R = (recover - wane)              * dt * rate
+    }
+  }
+
+  stage clampPositive "Keep populations non-negative" {
+    reads S, I, R
+    writes S, I, R
+    cell {
+      set S = clamp(S, 0, 1)
+      set I = clamp(I, 0, 1)
+      set R = clamp(R, 0, 1)
+    }
+  }
 }
 `;
 
-export const pipeline = compileDsl(pipelineDsl);
+export const pipeline = compileV2(pipelineDsl);

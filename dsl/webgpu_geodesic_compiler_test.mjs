@@ -164,7 +164,8 @@ stage sum "Sum" {
   assert(pass.needsNeighbors === true, "stage should bind neighbor arrays");
   assert(pass.source.includes("var nr_0: f32 = 0.0;"), "sum accumulator initialized to 0");
   assert(pass.source.includes("for (var nr_0_slot: u32 = 0u"), "loop emitted");
-  assert(pass.source.includes("let n: f32 = f_A[u32(neighbors[cell * 6u + nr_0_slot])]"), "binding read from neighbor");
+  assert(pass.source.includes("let nr_0_n: u32 = u32(neighbors[cell * 6u + nr_0_slot]);"), "neighbor index resolved once per slot");
+  assert(pass.source.includes("let n: f32 = f_A[nr_0_n];"), "binding read from neighbor index");
   assert(pass.source.includes("nr_0 = nr_0 + ((n - v_A))"), "sum body accumulated");
 });
 
@@ -292,7 +293,8 @@ stage mark "Mark" {
   assert(pass.needsNeighbors === true, "stage did not request neighbor buffers");
   assert(pass.source.includes("var<storage, read> neighbors"), "neighbor storage binding missing");
   assert(pass.source.includes("var nr_0: f32 = -1.0e38;"), "max accumulator initialized to -infinity");
-  assert(pass.source.includes("let n: f32 = f_W[u32(neighbors[cell * 6u + nr_0_slot])]"), "binding read from neighbor");
+  assert(pass.source.includes("let nr_0_n: u32 = u32(neighbors[cell * 6u + nr_0_slot]);"), "neighbor index resolved once per slot");
+  assert(pass.source.includes("let n: f32 = f_W[nr_0_n];"), "binding read from neighbor index");
   assert(pass.source.includes("let v_W = f_W[cell];"), "read variable should avoid W constant collision");
 });
 

@@ -23,7 +23,7 @@
 //   dT/dt     = greenhouse * absorbed - emitted + diffusion(T)
 
 import { gray } from "../prims/colorers.mjs";
-import { compileDsl } from "../dsl/compiler.mjs";
+import { compileV2 } from "../dsl/compile-v2.mjs";
 
 // Multi-stop temperature palette tuned for the ice-albedo bistability.
 // The freezing point (T=0) is a stark white seam between cold/blue
@@ -96,120 +96,83 @@ export const pipelineDsl = `
 recipe "Ice-albedo (snowball earth)"
 summary "Bistable climate. Cold cells freeze and reflect more sunlight, staying cold; warm cells thaw and absorb more, staying warm. Real Earth has done this — geological 'snowball' epochs are theorized for the late Proterozoic. Tip the solar knob past the threshold and the whole planet flips."
 recommendedPreset earth
-grid geodesic tiles 64
 
-const freezePoint 0.0
-const eps         0.10
-const albedoIce   0.7
-const albedoOcean 0.18
+substrate geodesic frequency 64
 
-use clock dt, frame
-use geo lon, lat, x, y, i, N, PI, TAU
-use sim cell, diffuse
-use init fill, spot, eachCell
-use core clamp, smoothstep, max, min, abs, hypot, cos, sin, exp, pow, cellNoise, cellRand
+const freezePoint = 0.0
+const eps         = 0.10
+const albedoIce   = 0.7
+const albedoOcean = 0.18
 
 // T: surface temperature, normalized so 0 ≈ freezing point.
-// albedo: derived field — recomputed each tick from T. Useful as its
-// own view to see the ice mask develop.
-field T, albedo
+// albedo: derived from T each tick. Marked \`derived\` because the
+// recipe never paints into it directly — it's always a function of T.
+field T: f32
+field albedo: f32 derived
 
-setting simRateHz slider min 0 max 360 step 1 default 60 label "SIM RATE"
+param simRateHz   slider 0..360    step 1     default 60    label "SIM RATE"
 // Solar constant. Around 1.0 is "modern Earth"; below ~0.6 the system
 // snaps to snowball; above ~1.4 it stays warm regardless of perturbations.
-param solar       slider min 0 max 2    step 0.01 default 1.00 label "SOLAR"
-// Greenhouse multiplier on absorbed sunlight. Higher = warmer overall.
-param greenhouse  slider min 0.5 max 2  step 0.01 default 1.10 label "GREENHOUSE"
-// How fast warm regions radiate energy back to space.
-param emissivity  slider min 0    max 4 step 0.01 default 1.20 label "EMISSIVITY"
-// Heat conduction across the surface. Higher = sharper smoothing of
-// temperature gradients, less spatial structure.
-param diffusion   slider min 0    max 4 step 0.01 default 0.40 label "DIFFUSION"
-// Slow Milankovitch-like solar oscillation. Sets the system breathing
-// across the bistability — at moderate amplitude, the planet flips
-// between warm and snowball every few orbits, and you can watch the
-// ice line march around the sphere. 0 = constant solar (equilibrium).
-param orbital     slider min 0    max 0.5 step 0.005 default 0.18 label "ORBITAL VAR"
-// Period of the orbital variation in frames. Lower = faster cycle.
-param orbitalRate slider min 100  max 5000 step 50 default 1200 label "ORBIT FRAMES"
-// Volcanic / stochastic per-cell forcing. Random thermal kicks each
-// tick — keeps the system stirred even at zero orbital variation.
-param volcanic    slider min 0    max 0.5 step 0.005 default 0.04 label "VOLCANIC"
-// Time scaling. Climate responds slowly relative to per-frame sim — let
-// users speed it up if they want to see equilibration faster.
-param rate        slider min 1    max 100 step 1  default 30   label "RATE"
+param solar       slider 0..2      step 0.01  default 1.00  label "SOLAR"
+param greenhouse  slider 0.5..2    step 0.01  default 1.10  label "GREENHOUSE"
+param emissivity  slider 0..4      step 0.01  default 1.20  label "EMISSIVITY"
+param diffusion   slider 0..4      step 0.01  default 0.40  label "DIFFUSION"
+// Slow Milankovitch-like solar oscillation. At moderate amplitude, the
+// planet flips between warm and snowball every few orbits.
+param orbital     slider 0..0.5    step 0.005 default 0.18  label "ORBITAL VAR"
+param orbitalRate slider 100..5000 step 50    default 1200  label "ORBIT FRAMES"
+param volcanic    slider 0..0.5    step 0.005 default 0.04  label "VOLCANIC"
+param rate        slider 1..100    step 1     default 30    label "RATE"
 
 stamp warm "Warmth pulse" {
-  // Drop a hot patch — useful for kicking a snowball back into the
-  // warm basin near the threshold.
-  spot T lon lon lat lat radius r amount 0.8
+  spot T at brush.pos, radius=brush.r, amount=0.8
 }
 
 stamp freeze "Freeze patch" {
-  // Inverse — drop a cold patch.
-  spot T lon lon lat lat radius r amount -0.8
+  spot T at brush.pos, radius=brush.r, amount=-0.8
 }
 
-preset earth "Modern earth" {
-  // Latitude-banded warm-cold gradient — equator hottest, poles below
-  // freezing. Settles into a stable ice-cap distribution.
-  fill albedo 0.18
-  eachCell {
+scenario earth "Modern earth" {
+  for each cell {
     set T = cos(lat) * 0.9 - 0.3
   }
 }
 
-preset snowball "Snowball earth" {
-  // Whole planet frozen. Without enough solar/greenhouse to escape,
-  // it stays this way.
-  fill albedo 0.7
-  fill T -0.6
+scenario snowball "Snowball earth" {
+  set T = -0.6
 }
 
-preset edge "Edge of bistability" {
-  // A near-uniform field at the threshold. Small perturbations will
-  // decide the basin. Stamp warm or cold patches to influence the
-  // outcome.
-  fill albedo 0.4
-  eachCell {
+scenario edge "Edge of bistability" {
+  for each cell {
     set T = 0.05 * cos(lat) + 0.02 * cellNoise(7, 1.5)
   }
 }
 
-stage diffuseT "Surface heat conduction" {
-  reads T
-  writes T
-  diffuse T amount diffusion * 0.18 * dt * rate
-}
+step {
+  stage diffuseT "Surface heat conduction" {
+    reads T
+    writes T
+    cell {
+      add T = (mean n in neighbors { T@n } - T) * clamp(diffusion * 0.18 * dt * rate, 0, 0.24)
+    }
+  }
 
-stage radiate "Solar absorption + thermal emission" {
-  reads T
-  writes T, albedo
-  cell {
-    // Albedo is a smooth step from ocean (warm) to ice (cold) around
-    // the freeze point. Smoothstep eps controls how sharp the
-    // ice-edge transition is.
-    let frozen = 1 - smoothstep(freezePoint - eps, freezePoint + eps, T)
-    let alb    = albedoOcean + (albedoIce - albedoOcean) * frozen
-    // Slowly-varying solar (Milankovitch-flavored). The recipe runs
-    // continuously even at low solar — no static equilibrium.
-    let solarMod   = solar * (1 + orbital * sin(frame / orbitalRate))
-    // Solar input falls off toward the poles; cos(lat) peaks at the
-    // equator. \`max(0, ...)\` because cos can go slightly negative on
-    // the curved geodesic representation in WGSL float math.
-    let insolation = max(0, solarMod * cos(lat))
-    let absorbed   = greenhouse * insolation * (1 - alb)
-    // Linear emission instead of Stefan-Boltzmann's T^4 — keeps the
-    // bistability structure but stays well within float precision and
-    // doesn't need tiny dt to integrate stably.
-    let emitted = emissivity * (T + 0.4)
-    // Volcanic / stochastic per-cell kicks. Keeps the system from
-    // settling perfectly even at zero orbital variation.
-    let volcanism = cellRand(frame) * volcanic
-    add T = (absorbed - emitted + volcanism) * dt * rate
-    set albedo = alb
+  stage radiate "Solar absorption + thermal emission" {
+    reads T
+    writes T, albedo
+    cell {
+      let frozen     = 1 - smoothstep(freezePoint - eps, freezePoint + eps, T)
+      let alb        = albedoOcean + (albedoIce - albedoOcean) * frozen
+      let solarMod   = solar * (1 + orbital * sin(frame / orbitalRate))
+      let insolation = max(0, solarMod * cos(lat))
+      let absorbed   = greenhouse * insolation * (1 - alb)
+      let emitted    = emissivity * (T + 0.4)
+      let volcanism  = cellRand(frame) * volcanic
+      add T = (absorbed - emitted + volcanism) * dt * rate
+      set albedo = alb
+    }
   }
 }
 `;
 
-export const pipeline = compileDsl(pipelineDsl);
+export const pipeline = compileV2(pipelineDsl);

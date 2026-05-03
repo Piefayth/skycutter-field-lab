@@ -16,7 +16,7 @@
 // On a closed surface there's no boundary condition to handle, no
 // reflections to worry about — clean physics, geodesic-native.
 
-import { compileDsl } from "../dsl/compiler.mjs";
+import { compileV2 } from "../dsl/compile-v2.mjs";
 
 // Wave-amplitude colorer. u is signed (positive crests, negative
 // troughs); a diverging palette with a stark white seam at zero
@@ -91,95 +91,87 @@ export const pipelineDsl = `
 recipe "Wave equation"
 summary "Hyperbolic wave on the sphere — leapfrog second-order time integration. A stamp drops a ripple; with no damping it bounces around the sphere forever, with two opposing wavefronts converging at the antipode in a phase-amplification spike. CFL-stable at default speed; cranking it past ~0.29 will make the integrator explode."
 recommendedPreset droplet
-grid geodesic tiles 64
 
-use clock dt, frame, prev
-use geo lon, lat, x, y, i, N, PI, TAU
-use sim cell, clamp
-use init fill, spot, eachCell
-use core clamp, smoothstep, max, min, abs, hypot, sin, cos, cellNoise, neighbor
+substrate geodesic frequency 64
 
-// History 1: each tick we read u_prev to integrate the second-order
-// time derivative. The runtime keeps a separate history buffer that
-// gets snapshotted at tick boundaries.
-field u history 1
+// History 1 buffer is allocated automatically when the compiler sees
+// any \`u@prev\` reference — no manual \`history N\` declaration needed.
+field u: f32
 
-setting simRateHz slider min 0 max 360 step 1 default 60 label "SIM RATE"
 // Effective wave speed coefficient. Per-tick update for a wavefront
 // at a sharp gradient is ~ speed² · neighbor-count, so this also
 // gates CFL stability. The discrete Laplacian on hexagonal cells
 // has max eigenvalue ~12, giving the bound speed² · 12 < 1 →
 // speed < ~0.29. Default 0.25 sits comfortably under the line.
-param speed   slider min 0  max 0.29  step 0.005 default 0.25  label "WAVE SPEED"
+param speed   slider 0..0.29 step 0.005 default 0.25 label "WAVE SPEED"
 // Linear damping (γ in the equation). 0 = energy never dissipates,
 // waves bounce around the sphere indefinitely. Cranking up makes
 // the system feel like a viscous medium — like ringing a struck bell
 // underwater.
-param damping slider min 0  max 0.05  step 0.001 default 0.0   label "DAMPING γ"
+param damping slider 0..0.05 step 0.001 default 0    label "DAMPING γ"
 
 stamp ripple "Drop ripple" {
-  // A pulse on u with prev(u) unchanged — the asymmetry creates an
-  // outgoing wave (impulse velocity = u − prev_u, so post-stamp
-  // velocity equals the stamp amplitude).
-  spot u lon lon lat lat radius r amount 1
+  // A pulse on u; prev(u) is unchanged (paint never mirrors to prev),
+  // so the asymmetry between current and prev creates an outgoing
+  // wave with launch velocity equal to the stamp amplitude.
+  spot u at brush.pos, radius=brush.r, amount=1
 }
 
 stamp lift "Lift surface" {
   // Smaller bump, broader area — gentler wavetrain.
-  spot u lon lon lat lat radius r * 1.6 amount 0.4
+  spot u at brush.pos, radius=brush.r * 1.6, amount=0.4
 }
 
 stamp dampen "Quiet zone" {
   // Negative spot — pushes the medium toward zero locally.
-  spot u lon lon lat lat radius r amount -1
+  spot u at brush.pos, radius=brush.r, amount=-1
 }
 
-preset still "Still surface" {
-  fill u 0
+scenario still "Still surface" {
+  set u = 0
 }
 
-preset droplet "Single droplet" {
-  fill u 0
-  spot u lon 0 lat 0 radius 0.08 amount 1
+scenario droplet "Single droplet" {
+  set u = 0
+  spot u at lon=0, lat=0, radius=0.08, amount=1
 }
 
-preset twoStones "Two pebbles" {
+scenario twoStones "Two pebbles" {
   // Two drops at antipodes — wave fronts will meet at the equator.
-  fill u 0
-  spot u lon -PI/2 lat 0.4 radius 0.06 amount 1
-  spot u lon  PI/2 lat -0.4 radius 0.06 amount 1
+  set u = 0
+  spot u at lon=-PI/2, lat=0.4,  radius=0.06, amount=1
+  spot u at lon= PI/2, lat=-0.4, radius=0.06, amount=1
 }
 
-preset standing "Standing wave seed" {
-  // A cos(2·lon) pattern. With nonzero ω initial velocity, this
-  // would sustain as a standing wave; with zero velocity (prev = u
-  // by default), it splits into two counter-rotating travelling
+scenario standing "Standing wave seed" {
+  // cos(2·lon) pattern. With zero initial velocity (prev = current
+  // after init), this splits into two counter-rotating travelling
   // waves whose superposition oscillates.
-  fill u 0
-  eachCell {
+  set u = 0
+  for each cell {
     set u = cos(lon * 2) * 0.6
   }
 }
 
-stage propagate "Leapfrog wave step" {
-  reads u
-  writes u
-  cell {
-    // Discrete Laplacian — sum of (neighbor − self) over neighbors.
-    // For a sphere with mostly-hex tiling, this has max eigenvalue
-    // ~12, which sets the CFL bound on \`speed\`.
-    let lap = neighbor sum n in u { n - u }
-    // Damping term: γ × (u − u_prev). Subtracted from the update so
-    // it always opposes the local velocity.
-    let damp = damping * (u - prev(u))
-    let raw = 2 * u - prev(u) + speed * speed * lap - damp
-    // Inline clamp keeps a CFL-violating speed from blowing up the
-    // GPU buffer with NaN; saturation reads as a visible flat patch
-    // rather than a silent black sphere. History fields can only be
-    // written by one stage per tick, so the clamp folds in here.
-    set u = clamp(raw, -2, 2)
+step {
+  stage propagate "Leapfrog wave step" {
+    reads u
+    writes u
+    cell {
+      // Discrete Laplacian — sum of (neighbor − self) over neighbors.
+      // For a sphere with mostly-hex tiling, this has max eigenvalue
+      // ~12, which sets the CFL bound on \`speed\`.
+      let lap = sum n in neighbors { u@n - u }
+      // Damping: γ × (u − u@prev). Always opposes local velocity.
+      let damp = damping * (u - u@prev)
+      let raw = 2 * u - u@prev + speed * speed * lap - damp
+      // Inline clamp keeps a CFL-violating speed from blowing up the
+      // GPU buffer with NaN; saturation reads as a visible flat patch
+      // rather than a silent black sphere.
+      set u = clamp(raw, -2, 2)
+    }
   }
 }
 `;
 
-export const pipeline = compileDsl(pipelineDsl);
+export const pipeline = compileV2(pipelineDsl);

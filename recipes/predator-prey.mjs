@@ -21,7 +21,7 @@
 // up; eventually predators can crash whole regions to extinction
 // before prey re-establishes.
 
-import { compileDsl } from "../dsl/compiler.mjs";
+import { compileV2 } from "../dsl/compile-v2.mjs";
 
 // Composite view: prey N → green tint, predator P → red tint.
 // Where both are low: dark / "extinction void." Where both are
@@ -101,60 +101,40 @@ export const pipelineDsl = `
 recipe "Predator-prey"
 summary "Spatial Rosenzweig-MacArthur — logistic prey + Holling-II predators with diffusion. Produces 'chase waves' on the sphere: prey colonizes empty cells, predators follow eating, a void trails them, prey re-colonizes the void. The system runs forever in a limit cycle when default K and m sit on the unstable side of the prey-isocline peak."
 recommendedPreset patches
-grid geodesic tiles 64
 
-use clock dt, frame
-use geo lon, lat, x, y, i, N, PI, TAU
-use sim cell, diffuse, clamp
-use init fill, spot, eachCell
-use core clamp, smoothstep, max, min, abs, hypot, cellNoise, cellRand
+substrate geodesic frequency 64
 
-field N, P
+field N: f32
+field P: f32
 
-setting simRateHz slider min 0 max 360 step 1 default 60 label "SIM RATE"
-// Prey intrinsic growth rate.
-param r        slider min 0    max 2 step 0.01  default 0.55  label "r (PREY GROWTH)"
-// Carrying capacity. Below ~0.5 the equilibrium is stable; above ~1.5
-// limit cycles get violent enough to crash whole regions to local
-// extinction before prey re-establishes (paradox of enrichment).
-param Kcap     slider min 0.2  max 3 step 0.01  default 1.10  label "K (CAP)"
-// Attack rate.
-param a        slider min 0    max 4 step 0.01  default 1.40  label "a (ATTACK)"
-// Half-saturation density. Lower = predators saturate quickly; higher =
-// predators only effective at high prey density. This + r·K·a sets the
-// position of the equilibrium relative to the prey-isocline peak.
-param hSat     slider min 0.05 max 1 step 0.01  default 0.30  label "h (SATURATE)"
-// Conversion efficiency: each prey eaten produces e·a predators.
-param eEff     slider min 0    max 1 step 0.01  default 0.55  label "e (EFFICIENCY)"
-// Predator mortality. Higher → predators die faster, equilibrium prey
-// density rises.
-param m        slider min 0    max 1 step 0.01  default 0.28  label "m (MORTALITY)"
-// Spatial diffusion rates. Predator mobility usually exceeds prey
-// mobility — gives the "predator wave catching up" structure.
-param Dn       slider min 0    max 4 step 0.05  default 0.45  label "Dn (PREY DIFF)"
-param Dp       slider min 0    max 4 step 0.05  default 0.85  label "Dp (PRED DIFF)"
-// Time scaling.
-param rate     slider min 1    max 100 step 1   default 14    label "RATE"
+param simRateHz slider 0..360    step 1    default 60    label "SIM RATE"
+param r         slider 0..2      step 0.01 default 0.55  label "r (PREY GROWTH)"
+param Kcap      slider 0.2..3    step 0.01 default 1.10  label "K (CAP)"
+param a         slider 0..4      step 0.01 default 1.40  label "a (ATTACK)"
+param hSat      slider 0.05..1   step 0.01 default 0.30  label "h (SATURATE)"
+param eEff      slider 0..1      step 0.01 default 0.55  label "e (EFFICIENCY)"
+param m         slider 0..1      step 0.01 default 0.28  label "m (MORTALITY)"
+param Dn        slider 0..4      step 0.05 default 0.45  label "Dn (PREY DIFF)"
+param Dp        slider 0..4      step 0.05 default 0.85  label "Dp (PRED DIFF)"
+param rate      slider 1..100    step 1    default 14    label "RATE"
 
 stamp seedPrey "Seed prey patch" {
-  spot N lon lon lat lat radius r amount 0.5
+  spot N at brush.pos, radius=brush.r, amount=0.5
 }
 
 stamp seedPredator "Seed predator patch" {
-  spot P lon lon lat lat radius r amount 0.4
+  spot P at brush.pos, radius=brush.r, amount=0.4
 }
 
 stamp cull "Cull both" {
-  spot N lon lon lat lat radius r amount -1.5
-  spot P lon lon lat lat radius r amount -1.5
+  spot N at brush.pos, radius=brush.r, amount=-1.5
+  spot P at brush.pos, radius=brush.r, amount=-1.5
 }
 
-preset patches "Random patches" {
-  // Prey scattered across the sphere with a few predator hotspots.
-  // Initial chaos seeds the chase-wave pattern.
-  fill N 0
-  fill P 0
-  eachCell {
+scenario patches "Random patches" {
+  set N = 0
+  set P = 0
+  for each cell {
     let seedN = cellRand(11)
     when seedN > 0.4 {
       set N = 0.5 + cellRand(13) * 0.3
@@ -166,62 +146,55 @@ preset patches "Random patches" {
   }
 }
 
-preset preyOnly "Prey-only world" {
-  // No initial predators. Prey grows to carrying capacity uniformly,
-  // then a small predator stamp can demonstrate invasion dynamics.
-  fill N 0.6
-  fill P 0
+scenario preyOnly "Prey-only world" {
+  set N = 0.6
+  set P = 0
 }
 
-preset front "Predator invasion front" {
-  // Prey at carrying capacity in one hemisphere; predator concentrated
-  // at a single seed point. Watch the predator wave radiate outward,
-  // leaving a void that prey slowly re-colonizes.
-  fill N 0.7
-  fill P 0
-  spot P lon -2.5 lat 0 radius 0.18 amount 0.6
+scenario front "Predator invasion front" {
+  set N = 0.7
+  set P = 0
+  spot P at lon=-2.5, lat=0, radius=0.18, amount=0.6
 }
 
-preset equilibrium "Near interior equilibrium" {
-  // Both populations seeded near the interior fixed point. Spatially
-  // uniform start; the limit-cycle instability is what breaks symmetry
-  // — small perturbations grow into the chase-wave pattern.
-  fill N 0.25
-  fill P 0.18
-  eachCell {
+scenario equilibrium "Near interior equilibrium" {
+  for each cell {
     set N = 0.25 + cellNoise(7, 1.4) * 0.05
     set P = 0.18 + cellNoise(13, 1.4) * 0.04
   }
 }
 
-stage diffuseFields "Spatial spread (Dp > Dn — predators move further)" {
-  reads N, P
-  writes N, P
-  diffuse N amount Dn * 0.18 * dt * rate
-  diffuse P amount Dp * 0.18 * dt * rate
-}
-
-stage react "Rosenzweig-MacArthur kinetics" {
-  reads N, P
-  writes N, P
-  cell {
-    // Holling type-II functional response — predation saturates as
-    // prey gets dense. The +1e-6 in the denominator keeps the term
-    // finite at N=0; without it WGSL float division throws Inf.
-    let response = a * N * P / (N + hSat + 0.000001)
-    let preyDot  = r * N * (1 - N / Kcap) - response
-    let predDot  = eEff * response - m * P
-    add N = preyDot * dt * rate
-    add P = predDot * dt * rate
+step {
+  stage diffuseFields "Spatial spread (Dp > Dn — predators move further)" {
+    reads N, P
+    writes N, P
+    cell {
+      add N = (mean n in neighbors { N@n } - N) * clamp(Dn * 0.18 * dt * rate, 0, 0.24)
+      add P = (mean n in neighbors { P@n } - P) * clamp(Dp * 0.18 * dt * rate, 0, 0.24)
+    }
   }
-}
 
-stage clampPositive "Densities can't go negative" {
-  reads N, P
-  writes N, P
-  clamp N 0 3
-  clamp P 0 3
+  stage react "Rosenzweig-MacArthur kinetics" {
+    reads N, P
+    writes N, P
+    cell {
+      let response = a * N * P / (N + hSat + 0.000001)
+      let preyDot  = r * N * (1 - N / Kcap) - response
+      let predDot  = eEff * response - m * P
+      add N = preyDot * dt * rate
+      add P = predDot * dt * rate
+    }
+  }
+
+  stage clampPositive "Densities can't go negative" {
+    reads N, P
+    writes N, P
+    cell {
+      set N = clamp(N, 0, 3)
+      set P = clamp(P, 0, 3)
+    }
+  }
 }
 `;
 
-export const pipeline = compileDsl(pipelineDsl);
+export const pipeline = compileV2(pipelineDsl);

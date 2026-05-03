@@ -9,12 +9,6 @@
       "summary": "Empty starter recipe. One field, one no-op stage. Replace contents of pipelineDsl with your own simulation."
     },
     {
-      "id": "weather",
-      "name": "Weather (example)",
-      "path": "recipes/weather.mjs",
-      "summary": "Forcing-driven weather pipeline. Single attractor; useful as a baseline."
-    },
-    {
       "id": "fitzhugh-nagumo",
       "name": "FitzHugh-Nagumo (example)",
       "path": "recipes/fitzhugh-nagumo.mjs",

@@ -1,66 +1,15 @@
-import * as weather from "../recipes/weather.mjs";
-import * as fitzhughNagumo from "../recipes/fitzhugh-nagumo.mjs";
-import * as belousovZhabotinsky from "../recipes/belousov-zhabotinsky.mjs";
-import * as kuramotoChimera from "../recipes/kuramoto-chimera.mjs";
-import * as iceAlbedo from "../recipes/ice-albedo.mjs";
-import * as sirEpidemic from "../recipes/sir-epidemic.mjs";
-import * as klausmeier from "../recipes/klausmeier.mjs";
-import * as predatorPrey from "../recipes/predator-prey.mjs";
-import * as waveEquation from "../recipes/wave-equation.mjs";
-import * as blank from "../recipes/blank.mjs";
-import { compileDsl, diagnoseDsl, parseStages, parseStamps, parseTopLevelDeclarations } from "./compiler.mjs";
-import { createPipelineMetadata } from "../visual/pipeline-metadata.mjs";
-import { materializeRecipe, prepareRecipeState } from "../visual/recipes.mjs";
-import { createState } from "../kernel/kernel.mjs";
+// V1-DSL-specific parser/validator tests. The per-recipe loop and the
+// runtime-state checks that lived here have moved to:
+//   - dsl/recipes_v2_smoke_test.mjs  (per-recipe load + WGSL compile)
+//   - kernel/kernel_test.mjs         (state prep, stamps)
+//
+// What remains in this file is testing of the v1 parser/validator shapes
+// using inline v1 DSL fragments. These will be deleted once v1 is fully
+// removed in favor of v2.
 
-const recipes = [
-  weather,
-  fitzhughNagumo,
-  belousovZhabotinsky,
-  kuramotoChimera,
-  iceAlbedo,
-  sirEpidemic,
-  klausmeier,
-  predatorPrey,
-  waveEquation,
-  blank,
-];
+import { compileDsl, diagnoseDsl, parseStages, parseStamps, parseTopLevelDeclarations } from "./compiler.mjs";
 
 let failed = 0;
-
-for (const recipe of recipes) {
-  const recipeName = recipe.pipeline?.dsl?.recipe?.name ?? recipe.name ?? "(unnamed recipe)";
-  check(recipeName, () => {
-    assert(typeof recipe.pipelineDsl === "string", "missing pipelineDsl");
-    assert(!recipe.pipelineDsl.includes("code ```"), "recipe DSL contains raw code fence");
-
-    const stages = parseStages(recipe.pipelineDsl);
-    assert(stages.length > 0, "no parsed stages");
-
-    const nodeIds = Object.keys(recipe.pipeline?.nodes ?? {});
-    assert(nodeIds.length === stages.length, "compiled node count does not match parsed stage count");
-
-    for (const stage of stages) {
-      assert(recipe.pipeline.nodes[stage.id], `missing compiled node ${stage.id}`);
-      assert(Array.isArray(stage.reads), `${stage.id} reads are not parsed`);
-      assert(Array.isArray(stage.writes), `${stage.id} writes are not parsed`);
-      assert(recipe.pipeline.nodes[stage.id].dsl?.body?.type === "dsl", `${stage.id} has no DSL IR body`);
-    }
-  });
-}
-
-check("runtime exposes pipeline DSL source", () => {
-  const runner = createPipelineMetadata(weather);
-  assert(runner.pipelineDsl() === weather.pipelineDsl, "runner.pipelineDsl() should return source text");
-});
-
-check("recipe state preparation allocates geodesic fields", () => {
-  const recipe = materializeRecipe(weather);
-  const state = createState();
-  prepareRecipeState(recipe, state);
-  assert(state.grid?.kind === "geodesic", "state grid should be geodesic");
-  assert(state.fields.pressure?.length === state.grid.cells, "pressure field should match geodesic cell count");
-});
 
 check("DSL top-level declarations expose recipe control schema", () => {
   const source = `

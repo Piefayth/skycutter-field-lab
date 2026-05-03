@@ -10,7 +10,7 @@
 // faithful reproduction of any specific BZ paper — tuned for visual
 // interest and parameter-space exploration.
 
-import { compileDsl } from "../dsl/compiler.mjs";
+import { compileV2 } from "../dsl/compile-v2.mjs";
 
 // 3-channel composite that maps u → red+orange, v → green, w → blue
 // shadow. Rotating chemistry shifts each cell's hue as the species
@@ -74,128 +74,112 @@ export const pipelineDsl = `
 recipe "Belousov-Zhabotinsky"
 summary "3-field oscillating chemistry. u is the fast autocatalyst, v is the medium-timescale inhibitor, w is the slow tertiary recovery. The three timescales produce nested target waves and rotating spirals; tune EPS1·/EPS2· to walk silent → target rings → spirals → period-doubled."
 recommendedPreset spiral
-grid geodesic tiles 64
 
-const a 0.1
-const eps1 0.08
-const eps2 0.012
+substrate geodesic frequency 64
 
-use clock dt, frame
-use geo x, y, i, lon, lat, px, py, pz, N, PI, TAU
-use sim cell, diffuse, clamp
-use init fill, spot, region, eachCell
-use core clamp, smoothstep, max, min, abs, hypot, cellNoise
+const a    = 0.1
+const eps1 = 0.08
+const eps2 = 0.012
 
-field u, v, w
+field u: f32
+field v: f32
+field w: f32
 
-setting simRateHz slider min 0 max 360 step 1 default 60 label "SIM RATE"
-param rate slider min 1 max 100 step 1 default 30 label "RATE"
-param diffU slider min 0 max 4 step 0.05 default 0.55 label "DIFF U"
-param diffV slider min 0 max 4 step 0.05 default 0.30 label "DIFF V"
-param diffW slider min 0 max 4 step 0.05 default 0.10 label "DIFF W"
-// THRESH is the unstable middle root of the cubic u(1−u)(u−T). When
-// negative, u=0 is a destabilized rest state — even a tiny seed grows
-// into a wave instead of decaying. When positive (T > 0), the cubic
-// is excitable but not auto-oscillating, so patterns fizzle once
-// active fronts pass. Default −0.05 puts the system in the auto-
-// oscillating regime; drag positive for "fire-once-then-quiet."
-param threshold slider min -0.3 max 0.5 step 0.01 default -0.05 label "THRESH"
-// Constant excitatory drive pushed into u every tick. Combined with
-// the negative threshold, this is what keeps the system breathing
-// indefinitely instead of relaxing to silence — a slow leak of energy
-// in lieu of a chemistry that's "actually being fed."
-param drive slider min 0 max 0.2 step 0.001 default 0.025 label "DRIVE"
-param eps1Mul slider min 0.1 max 5 step 0.05 default 1.0 label "EPS1·"
-param eps2Mul slider min 0.1 max 5 step 0.05 default 1.0 label "EPS2·"
-param wCoupling slider min 0 max 2 step 0.05 default 0.55 label "W→U"
-param vDamping slider min 0 max 2 step 0.05 default 1.0 label "V→U"
+param simRateHz  slider 0..360   step 1     default 60    label "SIM RATE"
+param rate       slider 1..100   step 1     default 30    label "RATE"
+param diffU      slider 0..4     step 0.05  default 0.55  label "DIFF U"
+param diffV      slider 0..4     step 0.05  default 0.30  label "DIFF V"
+param diffW      slider 0..4     step 0.05  default 0.10  label "DIFF W"
+param threshold  slider -0.3..0.5 step 0.01 default -0.05 label "THRESH"
+param drive      slider 0..0.2   step 0.001 default 0.025 label "DRIVE"
+param eps1Mul    slider 0.1..5   step 0.05  default 1.0   label "EPS1·"
+param eps2Mul    slider 0.1..5   step 0.05  default 1.0   label "EPS2·"
+param wCoupling  slider 0..2     step 0.05  default 0.55  label "W→U"
+param vDamping   slider 0..2     step 0.05  default 1.0   label "V→U"
 
 stamp pulse "Pulse u" {
-  spot u lon lon lat lat radius r amount 1
+  spot u at brush.pos, radius=brush.r, amount=1
 }
 
 stamp inhibitor "Inhibitor pad" {
-  spot v lon lon lat lat radius r amount 0.6
+  spot v at brush.pos, radius=brush.r, amount=0.6
 }
 
-stamp seed "Spiral seed" {
-  spot u lon lon - r * 0.6 lat lat radius r * 1.3 amount 1
-  spot v lon lon + r * 0.4 lat lat - r * 0.4 radius r amount 0.5
+scenario blank "Empty" {
+  set u = 0
+  set v = 0
+  set w = 0
 }
 
-preset blank "Empty" {
-  fill u 0
-  fill v 0
-  fill w 0
+scenario spiral "Spiral seed" {
+  set u = 0
+  set v = 0
+  set w = 0
+  region u at lonMin=-0.6, lonMax=0.6, latMin=0,    latMax=PI/2, amount=1
+  region v at lonMin=-0.2, lonMax=0.4, latMin=-0.5, latMax=0,    amount=0.5
 }
 
-preset spiral "Spiral seed" {
-  fill u 0
-  fill v 0
-  fill w 0
-  region u lon -0.6..0.6 lat 0..PI/2 amount 1
-  region v lon -0.2..0.4 lat -0.5..0 amount 0.5
+scenario rings "Concentric target waves" {
+  set u = 0
+  set v = 0
+  set w = 0
+  spot u at lon=0, lat=0, radius=0.18, amount=1
 }
 
-preset rings "Concentric target waves" {
-  fill u 0
-  fill v 0
-  fill w 0
-  spot u lon 0 lat 0 radius 0.18 amount 1
-}
-
-preset random "Random pulses" {
-  fill u 0
-  fill v 0
-  fill w 0
-  eachCell {
+scenario random "Random pulses" {
+  set u = 0
+  set v = 0
+  set w = 0
+  for each cell {
     when cellNoise(11, 0.45) > 0.55 {
       set u = 1
     }
   }
 }
 
-preset bands "Latitude bands" {
-  fill u 0
-  fill v 0
-  fill w 0
-  region u lon -PI..PI lat 0.4..0.8 amount 1
-  region u lon -PI..PI lat -0.8..-0.4 amount 1
-  region v lon -PI..PI lat -0.2..0.2 amount 0.5
+scenario bands "Latitude bands" {
+  set u = 0
+  set v = 0
+  set w = 0
+  region u at lonMin=-PI, lonMax=PI, latMin=0.4,  latMax=0.8,  amount=1
+  region u at lonMin=-PI, lonMax=PI, latMin=-0.8, latMax=-0.4, amount=1
+  region v at lonMin=-PI, lonMax=PI, latMin=-0.2, latMax=0.2,  amount=0.5
 }
 
-stage diffuseFields "Diffuse u, v, w (different rates)" {
-  reads u, v, w
-  writes u, v, w
-  diffuse u amount diffU * 0.16 * dt * rate
-  diffuse v amount diffV * 0.16 * dt * rate
-  diffuse w amount diffW * 0.16 * dt * rate
-}
-
-stage react "BZ reaction (u fast, v medium, w slow)" {
-  reads u, v, w
-  writes u, v, w
-  cell {
-    let cubic = u * (1 - u) * (u - threshold)
-    let inhibit = v * vDamping
-    let slowSuppress = w * wCoupling
-    // \`drive\` is the difference between an excitable medium that
-    // fires once on a seed and quiesces (drive=0) and a sustained
-    // chemical clock that breathes indefinitely (drive>0). At default
-    // it's a small but persistent push that keeps the system oscillating.
-    add u = (cubic - inhibit - slowSuppress + drive) * dt * rate
-    add v = eps1 * eps1Mul * (u - v) * dt * rate
-    add w = eps2 * eps2Mul * (v - w) * dt * rate
+step {
+  stage diffuseFields "Diffuse u, v, w (different rates)" {
+    reads u, v, w
+    writes u, v, w
+    cell {
+      add u = (mean n in neighbors { u@n } - u) * clamp(diffU * 0.16 * dt * rate, 0, 0.24)
+      add v = (mean n in neighbors { v@n } - v) * clamp(diffV * 0.16 * dt * rate, 0, 0.24)
+      add w = (mean n in neighbors { w@n } - w) * clamp(diffW * 0.16 * dt * rate, 0, 0.24)
+    }
   }
-}
 
-stage clampFields "Clamp to safe envelope" {
-  reads u, v, w
-  writes u, v, w
-  clamp u -0.4 1.4
-  clamp v -0.4 1.2
-  clamp w -0.4 1.2
+  stage react "BZ reaction (u fast, v medium, w slow)" {
+    reads u, v, w
+    writes u, v, w
+    cell {
+      let cubic = u * (1 - u) * (u - threshold)
+      let inhibit = v * vDamping
+      let slowSuppress = w * wCoupling
+      add u = (cubic - inhibit - slowSuppress + drive) * dt * rate
+      add v = eps1 * eps1Mul * (u - v) * dt * rate
+      add w = eps2 * eps2Mul * (v - w) * dt * rate
+    }
+  }
+
+  stage clampFields "Clamp to safe envelope" {
+    reads u, v, w
+    writes u, v, w
+    cell {
+      set u = clamp(u, -0.4, 1.4)
+      set v = clamp(v, -0.4, 1.2)
+      set w = clamp(w, -0.4, 1.2)
+    }
+  }
 }
 `;
 
-export const pipeline = compileDsl(pipelineDsl);
+export const pipeline = compileV2(pipelineDsl);

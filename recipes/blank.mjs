@@ -3,7 +3,7 @@
 // `pipelineDsl` below; the side-panel sections fill in as you add them.
 
 import { gray } from "../prims/colorers.mjs";
-import { compileDsl } from "../dsl/compiler.mjs";
+import { compileV2 } from "../dsl/compile-v2.mjs";
 
 export const views = [
   { id: "a", label: "A", color: gray("a") },
@@ -20,27 +20,24 @@ export const regime = {};
 
 export const pipelineDsl = `
 recipe "Blank"
-summary "Empty starter recipe. Replace contents of pipelineDsl with your own simulation."
+summary "Empty starter recipe. Replace step body with your own simulation."
 recommendedPreset blank
-grid geodesic tiles 64
 
-use clock dt, frame
-use geo x, y, i, lon, lat, u, v, px, py, pz, N, PI, TAU
-use sim cell, event, each, diffuse, clamp
-use init fill, region, eachCell
-use core clamp, smoothstep, max, min, abs, hypot, cellNoise
+substrate geodesic frequency 64
 
-field a
+field a: f32
 
-preset blank "Blank canvas" {
-  fill a 0
+scenario blank "Blank canvas" {
+  set a = 0
 }
 
-stage hold "No-op hold (replace with real physics)" {
-  reads a
-  writes a
-  clamp a 0 1
+step {
+  stage hold "No-op hold (replace with real physics)" {
+    reads a
+    writes a
+    cell { set a = clamp(a, 0, 1) }
+  }
 }
 `;
 
-export const pipeline = compileDsl(pipelineDsl);
+export const pipeline = compileV2(pipelineDsl);

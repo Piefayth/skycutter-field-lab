@@ -624,15 +624,21 @@ function emitReduction(node, ctx, statements) {
   const accName = `nr_${idx}`;
   const slot = `${accName}_slot`;
   const count = `${accName}_count`;
+  const neighborIdx = `${accName}_n`;
   const sumName = `${accName}_sum`;
-  const binding = node.bindings[0];
+  const bindings = node.bindings ?? [];
+  if (bindings.length === 0) {
+    throw new Error("emitReduction: NeighborReduce has no bindings");
+  }
 
-  // Compile the body with the binding in scope as a local. The body
-  // itself can reference declared fields (which read as `v_<name>`,
-  // i.e. the cell's value at stage entry — same as outside the body).
-  const bodyCtx = { ...ctx, locals: new Set([...ctx.locals, binding.name]) };
+  // Compile the body with all binding names in scope as locals. v2's
+  // cell-centered reductions emit one binding per coord-bound field
+  // (`field@n` in v2 lowers to a synthetic local named `_n_<field>`);
+  // v1's field-centered single-binding form is the trivial 1-binding case.
+  const bodyLocals = new Set(ctx.locals);
+  for (const b of bindings) bodyLocals.add(b.name);
+  const bodyCtx = { ...ctx, locals: bodyLocals };
   const bodyWgsl = compileExpr(node.body, bodyCtx);
-  const fieldRead = `f_${binding.field}[u32(neighbors[cell * 6u + ${slot}])]`;
 
   if (node.op === "sum") {
     statements.push(`var ${accName}: f32 = 0.0;`);
@@ -649,7 +655,15 @@ function emitReduction(node, ctx, statements) {
   statements.push(`{`);
   statements.push(`  let ${count}: u32 = neighborCounts[cell];`);
   statements.push(`  for (var ${slot}: u32 = 0u; ${slot} < ${count}; ${slot} = ${slot} + 1u) {`);
-  statements.push(`    let ${binding.name}: f32 = ${fieldRead};`);
+  // Resolve neighbor cell index once per slot, then bind each requested
+  // field's value at that neighbor. Multi-binding lets v2's
+  // cell-centered reductions read multiple fields per neighbor in one
+  // pass — `sum n in neighbors { u@n + v@n - u - v }` becomes
+  // bindings = [{name: _n_u, field: u}, {name: _n_v, field: v}].
+  statements.push(`    let ${neighborIdx}: u32 = u32(neighbors[cell * 6u + ${slot}]);`);
+  for (const b of bindings) {
+    statements.push(`    let ${b.name}: f32 = f_${b.field}[${neighborIdx}];`);
+  }
   if (node.op === "sum") {
     statements.push(`    ${accName} = ${accName} + (${bodyWgsl});`);
   } else if (node.op === "max" || node.op === "min") {
