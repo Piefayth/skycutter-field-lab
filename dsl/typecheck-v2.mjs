@@ -424,32 +424,44 @@ function typeOfCall(ast, locals, ctx, label) {
   const name = callee.name;
   const args = ast.args ?? [];
 
-  // Special cases that need extra-domain validation (the field-id'd
-  // ones inspect the field's declared type to reject gradient-on-vec2
-  // / divergence-on-scalar). These can't be expressed by argTypes
-  // alone since the parser sees an Identifier, not a type.
+  // gradient and divergence accept either a bare field identifier
+  // (compiled via the per-(field) helper-fn path) or an arbitrary
+  // cell-evaluable expression (lifted to an inline statement block
+  // by emitDifferentialOnExpression). Both forms validate the
+  // argument's *type*: gradient wants f32, divergence wants vec2.
   if (name === GRADIENT_BUILTIN) {
-    if (args.length !== 1 || args[0]?.type !== "Identifier") {
-      throwTypeError(`${label}: gradient(field) expects a single field identifier`);
+    if (args.length !== 1) {
+      throwTypeError(`${label}: gradient(...) expects 1 argument, got ${args.length}`);
     }
-    const fname = args[0].name;
-    const ftype = ctx.fieldTypes.get(fname);
-    if (ftype === "vec2") {
-      throwTypeError(`${label}: gradient(${fname}) — gradient is only defined on scalar (f32) fields`);
+    if (args[0].type === "Identifier") {
+      const fname = args[0].name;
+      const ftype = ctx.fieldTypes.get(fname);
+      if (ftype === "vec2") {
+        throwTypeError(`${label}: gradient(${fname}) — gradient is only defined on scalar (f32) fields`);
+      }
+    } else {
+      const argType = typeOfExpr(args[0], locals, ctx, label);
+      if (argType !== "f32" && argType !== "unknown") {
+        throwTypeError(`${label}: gradient(...) expects a scalar (f32) argument, got ${argType}`);
+      }
     }
     return "vec2";
   }
   if (name === DIVERGENCE_BUILTIN) {
-    if (args.length !== 1 || args[0]?.type !== "Identifier") {
-      throwTypeError(`${label}: divergence(field) expects a single field identifier`);
+    if (args.length !== 1) {
+      throwTypeError(`${label}: divergence(...) expects 1 argument, got ${args.length}`);
     }
-    const fname = args[0].name;
-    const ftype = ctx.fieldTypes.get(fname);
-    // Only vec2 fields have a meaningful divergence; integer-storage
-    // and scalar fields all reject. (ftype undefined falls through —
-    // the v1 validator catches "unknown identifier".)
-    if (ftype && ftype !== "vec2") {
-      throwTypeError(`${label}: divergence(${fname}) — divergence is only defined on vec2 fields`);
+    if (args[0].type === "Identifier") {
+      const fname = args[0].name;
+      const ftype = ctx.fieldTypes.get(fname);
+      if (ftype && ftype !== "vec2") {
+        throwTypeError(`${label}: divergence(${fname}) — divergence is only defined on vec2 fields`);
+      }
+    } else {
+      const argType = typeOfExpr(args[0], locals, ctx, label);
+      if (argType !== "vec2" && argType !== "unknown") {
+        throwTypeError(`${label}: divergence(...) expects a vec2 argument, got ${argType}`);
+      }
     }
     return "f32";
   }

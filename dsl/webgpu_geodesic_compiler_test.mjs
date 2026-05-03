@@ -317,6 +317,69 @@ step {
     "vec2(...) call lowers to WGSL native constructor");
 });
 
+test("gradient on an arbitrary expression lifts to inline stencil", () => {
+  // Bare-field calls keep using the per-(field) helper-fn path; this
+  // asserts that gradient(expr) (where expr isn't a bare Identifier)
+  // gets lifted into an inline statement block evaluating expr at
+  // self + each neighbor.
+  const recipe = compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field c: f32
+field grad_out: vec2
+
+step {
+  stage s "Test" {
+    reads c
+    writes grad_out
+    cell {
+      set grad_out = gradient(c*c*c - c)
+    }
+  }
+}
+`);
+  const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
+  // Lifted inline form: `var de_<n>: vec2<f32>` accumulator,
+  // expression evaluated at center via f_c[cell] and at each
+  // neighbor via f_c[<idx>].
+  assert(/var de_\d+: vec2<f32>/.test(pass.source),
+    "gradient-of-expression must lift to a `de_<n>: vec2<f32>` accumulator");
+  assert(pass.source.includes("let center: f32 = (((f_c[cell] * f_c[cell]) * f_c[cell]) - f_c[cell])"),
+    "center evaluation must substitute f_c[cell] for the expression's field reads");
+  assert(/let neighborVal: f32 = \(\(\(f_c\[de_\d+_n\] \* f_c\[de_\d+_n\]\) \* f_c\[de_\d+_n\]\) - f_c\[de_\d+_n\]\)/.test(pass.source),
+    "neighbor evaluation must substitute f_c[neighborIdx] for the expression's field reads");
+});
+
+test("divergence(gradient(c)) — nested helper calls retarget to neighbor index", () => {
+  // The inner gradient(c) is a bare-field call; in the outer
+  // divergence's neighbor-eval context it must emit
+  // `_gradient_c(<neighborIdx>)` rather than the cell-side
+  // `_gradient_c(cell)`. Threaded via ctx.currentCell.
+  const recipe = compileV2(`
+recipe "Lap"
+substrate geodesic frequency 16
+field c: f32
+
+step {
+  stage s "Laplacian via divergence(gradient)" {
+    reads c
+    writes c
+    cell {
+      add c = divergence(gradient(c)) * dt
+    }
+  }
+}
+`);
+  const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
+  // The center evaluation should still call _gradient_c(cell).
+  assert(pass.source.includes("let centerV: vec2<f32> = _gradient_c(cell)"),
+    "center divergence eval must call _gradient_c(cell)");
+  // The neighbor evaluation must call _gradient_c with the neighbor
+  // index, not "cell".
+  assert(/let neighborV: vec2<f32> = _gradient_c\(de_\d+_n\)/.test(pass.source),
+    "neighbor divergence eval must call _gradient_c with the neighbor index");
+});
+
 test("u32 fields emit array<u32> bindings + f32 read/u32 write casts", () => {
   // u32 storage shows up as `array<u32>` on the wire, but the cell
   // body sees it as f32 (cast on read, cast on write). Same for the

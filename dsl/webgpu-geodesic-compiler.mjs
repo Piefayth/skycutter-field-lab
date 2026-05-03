@@ -753,7 +753,12 @@ function emitStencilHelpers(ctx, typeOf) {
   const grads = [...(ctx.usedGradients ?? [])];
   const divs = [...(ctx.usedDivergences ?? [])];
   const upstreams = [...(ctx.usedUpstreams ?? [])];
-  if (grads.length === 0 && divs.length === 0 && upstreams.length === 0) return "";
+  // The expression-arg gradient/divergence path also depends on the
+  // shared `_stencil_position` / `_stencil_eastBasis` helpers, so
+  // emit them whenever the inline lift was used even if no per-(
+  // field) helpers fire.
+  const inlineUsed = ctx.usedStencilInline === true;
+  if (grads.length === 0 && divs.length === 0 && upstreams.length === 0 && !inlineUsed) return "";
   const blocks = [];
   // Shared helpers — emitted once per shader.
   blocks.push(`
@@ -955,12 +960,129 @@ function rewriteWithLifts(expr, ctx, statements) {
     };
   }
   if (expr.type === "Call") {
+    // gradient(EXPR) / divergence(EXPR) where EXPR isn't a bare field
+    // identifier: lift to an inline statement-block that builds the
+    // operator over the full expression, instead of rejecting at
+    // compileCall. Bare-field calls fall through unchanged (they're
+    // handled by the existing per-(field) helper-fn emission path).
+    if (expr.callee?.type === "Identifier"
+        && (expr.callee.name === "gradient" || expr.callee.name === "divergence")) {
+      const arg = expr.args?.[0];
+      if (arg && arg.type !== "Identifier") {
+        return emitDifferentialOnExpression(expr.callee.name, arg, ctx, statements);
+      }
+    }
     return { ...expr, args: expr.args.map((arg) => rewriteWithLifts(arg, ctx, statements)) };
   }
   if (expr.type === "Member") {
     return { ...expr, object: rewriteWithLifts(expr.object, ctx, statements) };
   }
   return expr;
+}
+
+// gradient/divergence on an arbitrary cell-evaluable expression.
+// Synthesises an inline statement block that evaluates the expression
+// at the cell ("center") and at each neighbor, then assembles the
+// tangent-frame stencil from those values. The expression is compiled
+// twice — once with field reads pointing at `cell`, once with them
+// pointing at the neighbor index — using the new
+// ctx.fieldReadOverride hook in compileIdentifier.
+//
+// Constraints (enforced by the type checker upstream):
+//   - gradient(EXPR): EXPR must produce f32 → returns vec2
+//   - divergence(EXPR): EXPR must produce vec2 → returns f32
+//
+// Local references (`let` bindings) and reduction accumulators inside
+// the expression resolve to their existing names — they're already in
+// scope at the call site, and they're per-cell-uniform values that
+// don't need re-evaluation at neighbors. Field references are the
+// only thing that gets re-pointed.
+function emitDifferentialOnExpression(opName, expr, ctx, statements) {
+  const fieldType = ctx.layout?.fieldTypes ?? {};
+  const idx = ctx.nrCounter.value++;
+  const accName = `de_${idx}`;
+  const indexLocal = `${accName}_n`;
+
+  // The override re-points field reads. centerCtx evaluates at `cell`
+  // (which is the current cell's WGSL local — the cell-shader's `let
+  // cell = id.x` from the entry point), neighborCtx at `${indexLocal}`.
+  const overrideForIndex = (indexExpr) => (name) => {
+    const ftype = fieldType[name] ?? "f32";
+    return wgslReadAt(name, ftype, indexExpr);
+  };
+  // currentCell is consumed by compileCall's gradient/divergence
+  // branch when emitting the helper-fn invocation, so a nested
+  // `gradient(c)` inside this expression evaluates at the right
+  // cell — `_gradient_c(cell)` for self, `_gradient_c(de_0_n)` for
+  // each neighbor.
+  const centerCtx = {
+    ...ctx,
+    fieldReadOverride: overrideForIndex("cell"),
+    currentCell: "cell",
+  };
+  const neighborCtx = {
+    ...ctx,
+    fieldReadOverride: overrideForIndex(indexLocal),
+    currentCell: indexLocal,
+  };
+  const centerWgsl = compileExpr(expr, centerCtx);
+  const neighborWgsl = compileExpr(expr, neighborCtx);
+
+  // The op's return shape determines the accumulator's WGSL type and
+  // the gather formula. gradient sums tangent · scalarDelta / |tan|²;
+  // divergence accumulates per-component tangent-frame differences.
+  if (opName === "gradient") {
+    statements.push(`var ${accName}: vec2<f32>;`);
+    statements.push(`{`);
+    statements.push(`  let p = _stencil_position(cell);`);
+    statements.push(`  let east = _stencil_eastBasis(p);`);
+    statements.push(`  let north = normalize(cross(p, east));`);
+    statements.push(`  let center: f32 = ${centerWgsl};`);
+    statements.push(`  let count = neighborCounts[cell];`);
+    statements.push(`  var acc = vec3<f32>(0.0, 0.0, 0.0);`);
+    statements.push(`  for (var slot: u32 = 0u; slot < count; slot = slot + 1u) {`);
+    statements.push(`    let ${indexLocal}: u32 = u32(neighbors[cell * 6u + slot]);`);
+    statements.push(`    let q = _stencil_position(${indexLocal});`);
+    statements.push(`    let tan = q - p * dot(q, p);`);
+    statements.push(`    let len2 = max(dot(tan, tan), 0.000001);`);
+    statements.push(`    let neighborVal: f32 = ${neighborWgsl};`);
+    statements.push(`    acc = acc + tan * ((neighborVal - center) / len2);`);
+    statements.push(`  }`);
+    statements.push(`  acc = acc / f32(count);`);
+    statements.push(`  ${accName} = vec2<f32>(dot(acc, east), dot(acc, north));`);
+    statements.push(`}`);
+    return { type: "Identifier", name: accName };
+  }
+  if (opName === "divergence") {
+    statements.push(`var ${accName}: f32;`);
+    statements.push(`{`);
+    statements.push(`  let p = _stencil_position(cell);`);
+    statements.push(`  let east = _stencil_eastBasis(p);`);
+    statements.push(`  let north = normalize(cross(p, east));`);
+    statements.push(`  let centerV: vec2<f32> = ${centerWgsl};`);
+    statements.push(`  let count = neighborCounts[cell];`);
+    statements.push(`  var divAcc: f32 = 0.0;`);
+    statements.push(`  for (var slot: u32 = 0u; slot < count; slot = slot + 1u) {`);
+    statements.push(`    let ${indexLocal}: u32 = u32(neighbors[cell * 6u + slot]);`);
+    statements.push(`    let q = _stencil_position(${indexLocal});`);
+    statements.push(`    let tan = q - p * dot(q, p);`);
+    statements.push(`    let len2 = max(dot(tan, tan), 0.000001);`);
+    statements.push(`    let neighborV: vec2<f32> = ${neighborWgsl};`);
+    statements.push(`    let dEast: f32 = dot(tan, east);`);
+    statements.push(`    let dNorth: f32 = dot(tan, north);`);
+    statements.push(`    divAcc = divAcc + ((neighborV.x - centerV.x) * dEast + (neighborV.y - centerV.y) * dNorth) / len2;`);
+    statements.push(`  }`);
+    statements.push(`  ${accName} = divAcc / f32(count);`);
+    statements.push(`  // Stencil helpers _stencil_position / _stencil_eastBasis`);
+    statements.push(`  // get emitted into the prelude when ctx.usedStencil flag is set.`);
+    statements.push(`}`);
+    // Mark the stencil prelude as needed; emitStencilHelpers checks
+    // this set in addition to the bare-field gradient/divergence
+    // sets.
+    ctx.usedStencilInline = true;
+    return { type: "Identifier", name: accName };
+  }
+  throw new Error(`unsupported differential op: ${opName}`);
 }
 
 function emitReduction(node, ctx, statements) {
@@ -1258,6 +1380,16 @@ function compileIdentifier(name, ctx) {
   if (ctx.locals.has(name)) return name;
   if (name === "dt") return "params.dt";
   if (name === "frame") return "params.frame";
+  // Field-read override hook. By default a bare field name lowers to
+  // the per-cell `v_<name>` local that compileCellShader pre-loads;
+  // the override (set by the gradient/divergence-of-expression lift
+  // path) replaces that with a custom per-cell-OR-neighbor read so
+  // the same expression can be re-evaluated at any point on the
+  // mesh. Stays untouched in the normal cell-body compile path.
+  if (ctx.fieldReadOverride && ctx.reads.has(name)) {
+    const override = ctx.fieldReadOverride(name);
+    if (override) return override;
+  }
   if (ctx.reads.has(name)) return readVar(name);
   // Bare param / const / planet references. Recipe-level uniqueness
   // (validateNameUniqueness) guarantees only one of these matches per
@@ -1312,24 +1444,33 @@ function compileCall(ast, ctx) {
     const fieldType = fieldTypes[arg.name] ?? "f32";
     return wgslReadAt(`${arg.name}_prev`, fieldType, "cell");
   }
-  // Tangent-frame differential operators. The argument must be a bare
-  // field identifier; the compiler emits a per-(field) helper function
-  // in the shader prelude (see emitStencilHelpers). Routed before
-  // generic dispatch because the registry's `wgsl` is null for these.
+  // Tangent-frame differential operators. With a bare field identifier
+  // the compiler emits a per-(field) helper function in the shader
+  // prelude (see emitStencilHelpers). With an arbitrary expression
+  // arg the lift in rewriteWithLifts has already replaced the call
+  // with an Identifier referring to a synthesized accumulator, so by
+  // the time we get here the arg is always an Identifier.
+  //
+  // The helper-fn call uses ctx.currentCell instead of hardcoded
+  // "cell" so that when the compile is happening inside the
+  // emitDifferentialOnExpression neighbor-eval loop, a nested
+  // `gradient(c)` resolves to `_gradient_c(<neighborIdx>)` rather
+  // than `_gradient_c(cell)`.
   if (name === "gradient" || name === "divergence") {
     const arg = ast.args[0];
     if (arg?.type !== "Identifier") {
-      throw new Error(`${name} requires a bare field identifier`);
+      throw new Error(`${name} requires a bare field identifier (compiler bug — non-Identifier args should have been lifted by rewriteWithLifts)`);
     }
     const fieldName = arg.name;
+    const cellExpr = ctx.currentCell ?? "cell";
     if (name === "gradient") {
       ctx.usedGradients ??= new Set();
       ctx.usedGradients.add(fieldName);
-      return `_gradient_${fieldName}(cell)`;
+      return `_gradient_${fieldName}(${cellExpr})`;
     }
     ctx.usedDivergences ??= new Set();
     ctx.usedDivergences.add(fieldName);
-    return `_divergence_${fieldName}(cell)`;
+    return `_divergence_${fieldName}(${cellExpr})`;
   }
   // Generic math-fn dispatch via the registry. Everything else flows
   // through here, including new fns added later — no switch update.
