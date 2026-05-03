@@ -86,6 +86,8 @@ test("CST expression spans record identifiers, coord reads, and reduction binder
   const cst = parseDslCst(SOURCE);
   const letStmt = statementAt(cst, SOURCE.indexOf("let lap"));
   const expr = letStmt.expressions[0];
+  assertEq(expr.node.type, "ExprNeighborReduce");
+  assertEq(expr.node.body.type, "ExprBinary");
   assertEq(expr.coordReads.map((read) => `${read.field}@${read.coord}`), ["u@n"]);
   assertEq(expr.reductions.map((reduction) => `${reduction.op}:${reduction.binder}`), ["sum:n"]);
   assert(cst.references.some((ref) => ref.role === "coordField" && ref.name === "u"));
@@ -93,6 +95,29 @@ test("CST expression spans record identifiers, coord reads, and reduction binder
   assertEq(expectedAt(cst, SOURCE.indexOf("u@n") + "u@".length), ["coordName"]);
   const ctx = cursorContextAt(cst, SOURCE.indexOf("u@n - u"));
   assert(ctx.symbols.some((symbol) => symbol.kind === "binder" && symbol.name === "n"));
+});
+
+test("CST parses expression nodes for calls members coord reads and ternaries", () => {
+  const source = `field u: f32\nfield wind: vec2\nstep { stage s { reads u, wind; writes u; cell { set u = wind.x > 0 ? clamp(u@prev, 0, 1) : u@upstream(wind.x, wind.y, dt) } } }`;
+  const cst = parseDslCst(source);
+  const stmt = statementAt(cst, source.indexOf("set u ="));
+  const node = stmt.expressions[0].node;
+  assertEq(node.type, "ExprConditional");
+  assertEq(node.test.type, "ExprBinary");
+  assertEq(node.consequent.type, "ExprCall");
+  assertEq(node.consequent.args[0].type, "ExprCoordRead");
+  assertEq(node.alternate.type, "ExprCoordRead");
+  assertEq(node.alternate.coord, "upstream");
+  assertEq(node.alternate.args.length, 3);
+});
+
+test("CST expression parser tolerates missing right-hand side", () => {
+  const source = `field u: f32\nstep { stage s { reads u; writes u; cell { set u = u + } } }`;
+  const cst = parseDslCst(source);
+  const stmt = statementAt(cst, source.indexOf("set u ="));
+  const node = stmt.expressions[0].node;
+  assertEq(node.type, "ExprBinary");
+  assertEq(node.right.type, "ExprMissing");
 });
 
 test("CST reports coord-name expectation for incomplete coord reads", () => {

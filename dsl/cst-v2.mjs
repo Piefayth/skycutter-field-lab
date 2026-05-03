@@ -495,6 +495,7 @@ function annotateExpression(expr) {
   const text = expr.text;
   const base = expr.from;
   expr.tokens = expressionTokens(text, base);
+  expr.node = parseExpressionNode(expr.tokens);
   expr.identifiers = expr.tokens.filter((token) => token.kind === "identifier");
   expr.coordReads = coordReadsInExpression(text, base);
   expr.reductions = reductionsInExpression(text, base);
@@ -503,18 +504,316 @@ function annotateExpression(expr) {
 
 function expressionTokens(text, base) {
   const tokens = [];
-  const re = /\b[A-Za-z_][A-Za-z0-9_]*\b|(?:\d+\.\d+|\.\d+|\d+)|[@+\-*/%=<>!&|.,?:()[\]{}]/g;
-  for (const match of text.matchAll(re)) {
-    const value = match[0];
-    const from = base + match.index;
-    const kind = /^[A-Za-z_]/.test(value)
-      ? "identifier"
-      : /^\d|\./.test(value)
-        ? "number"
-        : "punct";
-    tokens.push({ type: "Token", kind, value, from, to: from + value.length });
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (/\s/.test(ch)) { i++; continue; }
+    const number = /^(?:\d+\.\d*|\.\d+|\d+)(?:e[+-]?\d+)?/i.exec(text.slice(i));
+    if (number) {
+      tokens.push(token("number", number[0], base + i));
+      i += number[0].length;
+      continue;
+    }
+    const ident = /^[A-Za-z_][A-Za-z0-9_]*/.exec(text.slice(i));
+    if (ident) {
+      let value = ident[0];
+      if (value === "and") value = "&&";
+      if (value === "or") value = "||";
+      if (value === "not") value = "!";
+      const kind = BINARY_PRECEDENCE.has(value) || value === "!" ? "operator" : "identifier";
+      tokens.push(token(kind, value, base + i));
+      i += ident[0].length;
+      continue;
+    }
+    const op = ["===", "!==", "??", "&&", "||", ">=", "<=", "==", "!=", "+", "-", "*", "/", "%", ">", "<", "!", "?", ":", ".", "(", ")", ",", "{", "}", "@"]
+      .find((cand) => text.startsWith(cand, i));
+    if (op) {
+      tokens.push(token(BINARY_PRECEDENCE.has(op) || op === "!" ? "operator" : "punct", op, base + i));
+      i += op.length;
+      continue;
+    }
+    tokens.push(token("unknown", ch, base + i));
+    i++;
   }
+  tokens.push({ type: "Token", kind: "eof", value: "", from: base + text.length, to: base + text.length });
   return tokens;
+}
+
+function token(kind, value, from) {
+  return { type: "Token", kind, value, from, to: from + value.length };
+}
+
+const BINARY_PRECEDENCE = new Map([
+  ["??", 1],
+  ["||", 2],
+  ["&&", 3],
+  ["===", 4],
+  ["!==", 4],
+  ["==", 4],
+  ["!=", 4],
+  [">", 5],
+  [">=", 5],
+  ["<", 5],
+  ["<=", 5],
+  ["+", 6],
+  ["-", 6],
+  ["*", 7],
+  ["/", 7],
+  ["%", 7],
+]);
+
+const REDUCTION_OPS = new Set(["sum", "max", "min", "mean"]);
+
+function parseExpressionNode(tokens) {
+  const parser = { tokens, index: 0 };
+  const expr = parseConditionalNode(parser);
+  if (!expr) return missingNode(tokens[0]?.from ?? 0, "expression");
+  return expr;
+}
+
+function parseConditionalNode(parser) {
+  const test = parseBinaryNode(parser, 0);
+  if (peek(parser).value !== "?") return test;
+  const question = next(parser);
+  const consequent = parseConditionalNode(parser);
+  let colon = null;
+  let alternate = null;
+  if (peek(parser).value === ":") {
+    colon = next(parser);
+    alternate = parseConditionalNode(parser);
+  } else {
+    alternate = missingNode(question.to, "conditionalAlternate");
+  }
+  return {
+    type: "ExprConditional",
+    test,
+    consequent,
+    alternate,
+    from: test.from,
+    to: alternate.to,
+    questionFrom: question.from,
+    colonFrom: colon?.from ?? null,
+    missing: !colon,
+  };
+}
+
+function parseBinaryNode(parser, minPrec) {
+  let left = parseUnaryNode(parser);
+  while (true) {
+    const tok = peek(parser);
+    const prec = tok.kind === "operator" ? BINARY_PRECEDENCE.get(tok.value) : undefined;
+    if (prec === undefined || prec < minPrec) break;
+    next(parser);
+    const right = parseBinaryNode(parser, prec + 1);
+    left = {
+      type: "ExprBinary",
+      op: tok.value,
+      left,
+      right,
+      from: left.from,
+      to: right.to,
+      opFrom: tok.from,
+      missing: right.type === "ExprMissing",
+    };
+  }
+  return left;
+}
+
+function parseUnaryNode(parser) {
+  const tok = peek(parser);
+  if (tok.value === "!" || tok.value === "-" || tok.value === "+") {
+    next(parser);
+    const expr = parseUnaryNode(parser);
+    return {
+      type: "ExprUnary",
+      op: tok.value,
+      expr,
+      from: tok.from,
+      to: expr.to,
+      opFrom: tok.from,
+      missing: expr.type === "ExprMissing",
+    };
+  }
+  return parsePostfixNode(parser);
+}
+
+function parsePostfixNode(parser) {
+  let expr = parsePrimaryNode(parser);
+  while (true) {
+    const tok = peek(parser);
+    if (tok.value === ".") {
+      next(parser);
+      const prop = peek(parser).kind === "identifier" ? next(parser) : null;
+      expr = {
+        type: "ExprMember",
+        object: expr,
+        prop: prop?.value ?? null,
+        from: expr.from,
+        to: prop?.to ?? tok.to,
+        dotFrom: tok.from,
+        missing: !prop,
+      };
+      continue;
+    }
+    if (tok.value === "(") {
+      expr = parseCallNode(parser, expr);
+      continue;
+    }
+    if (tok.value === "@") {
+      expr = parseCoordReadNode(parser, expr);
+      continue;
+    }
+    return expr;
+  }
+}
+
+function parseCallNode(parser, callee) {
+  const open = expectValue(parser, "(");
+  const args = [];
+  let closed = false;
+  while (peek(parser).kind !== "eof") {
+    if (peek(parser).value === ")") {
+      closed = true;
+      break;
+    }
+    args.push(parseConditionalNode(parser));
+    if (peek(parser).value === ",") {
+      next(parser);
+      continue;
+    }
+    if (peek(parser).value === ")") {
+      closed = true;
+      break;
+    }
+    break;
+  }
+  const close = peek(parser).value === ")" ? next(parser) : null;
+  return {
+    type: "ExprCall",
+    callee,
+    args,
+    from: callee.from,
+    to: close?.to ?? (args.at(-1)?.to ?? open.to),
+    openFrom: open.from,
+    closeFrom: close?.from ?? null,
+    missing: !closed,
+  };
+}
+
+function parseCoordReadNode(parser, target) {
+  const at = expectValue(parser, "@");
+  const coordTok = peek(parser).kind === "identifier" ? next(parser) : null;
+  let coord = coordTok?.value ?? null;
+  let args = [];
+  let closeFrom = null;
+  let missing = !coordTok;
+  if (coord === "upstream" && peek(parser).value === "(") {
+    const call = parseCallNode(parser, {
+      type: "ExprIdentifier",
+      name: "upstream",
+      from: coordTok.from,
+      to: coordTok.to,
+    });
+    args = call.args;
+    closeFrom = call.closeFrom;
+    missing = missing || call.missing;
+  }
+  return {
+    type: "ExprCoordRead",
+    target,
+    field: target.type === "ExprIdentifier" ? target.name : null,
+    coord,
+    args,
+    from: target.from,
+    to: closeFrom != null ? (args.at(-1)?.to ?? coordTok?.to ?? at.to) : (coordTok?.to ?? at.to),
+    atFrom: at.from,
+    coordFrom: coordTok?.from ?? null,
+    closeFrom,
+    missing,
+  };
+}
+
+function parsePrimaryNode(parser) {
+  const tok = peek(parser);
+  if (tok.kind === "number") {
+    next(parser);
+    return { type: "ExprNumber", value: tok.value, from: tok.from, to: tok.to };
+  }
+  if (tok.kind === "identifier") {
+    if (REDUCTION_OPS.has(tok.value)) {
+      const reduction = tryParseReductionNode(parser);
+      if (reduction) return reduction;
+    }
+    next(parser);
+    return { type: "ExprIdentifier", name: tok.value, from: tok.from, to: tok.to };
+  }
+  if (tok.value === "(") {
+    const open = next(parser);
+    const expr = parseConditionalNode(parser);
+    const close = peek(parser).value === ")" ? next(parser) : null;
+    return {
+      type: "ExprGroup",
+      expr,
+      from: open.from,
+      to: close?.to ?? expr.to,
+      openFrom: open.from,
+      closeFrom: close?.from ?? null,
+      missing: !close,
+    };
+  }
+  if (tok.value === ")" || tok.value === "}" || tok.value === "," || tok.value === ":" || tok.kind === "eof") {
+    return missingNode(tok.from, "expression");
+  }
+  next(parser);
+  return { type: "ExprUnknown", value: tok.value, from: tok.from, to: tok.to };
+}
+
+function tryParseReductionNode(parser) {
+  const start = parser.index;
+  const op = peek(parser);
+  const binder = parser.tokens[start + 1];
+  const inTok = parser.tokens[start + 2];
+  const neighbors = parser.tokens[start + 3];
+  const open = parser.tokens[start + 4];
+  if (binder?.kind !== "identifier") return null;
+  if (inTok?.kind !== "identifier" || inTok.value !== "in") return null;
+  if (neighbors?.kind !== "identifier" || neighbors.value !== "neighbors") return null;
+  if (open?.value !== "{") return null;
+  parser.index = start + 5;
+  const body = parseConditionalNode(parser);
+  const close = peek(parser).value === "}" ? next(parser) : null;
+  return {
+    type: "ExprNeighborReduce",
+    op: op.value,
+    binder: binder.value,
+    body,
+    from: op.from,
+    to: close?.to ?? body.to,
+    binderFrom: binder.from,
+    bodyFrom: open.to,
+    bodyTo: close?.from ?? body.to,
+    missing: !close,
+  };
+}
+
+function missingNode(from, label) {
+  return { type: "ExprMissing", label, from, to: from, missing: true };
+}
+
+function peek(parser) {
+  return parser.tokens[parser.index] ?? parser.tokens[parser.tokens.length - 1];
+}
+
+function next(parser) {
+  const tok = peek(parser);
+  if (parser.index < parser.tokens.length - 1) parser.index++;
+  return tok;
+}
+
+function expectValue(parser, value) {
+  const tok = peek(parser);
+  if (tok.value === value) return next(parser);
+  return { type: "Token", kind: "missing", value, from: tok.from, to: tok.from };
 }
 
 function coordReadsInExpression(text, base) {
