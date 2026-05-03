@@ -15,11 +15,16 @@
 import test from "node:test";
 import { runFuzz } from "./fuzz-v2.mjs";
 import { runNegativeFuzz } from "./negative-fuzz-v2.mjs";
+import { runMutationalFuzz } from "./mutational-fuzz-v2.mjs";
 
-test("fuzz 500 seeds for coverage measurement", async () => {
+test("generative fuzz 500 seeds — happy-path coverage", async () => {
   await runFuzz({ count: 500, seedStart: 1, wgsl: true, log: () => {} });
 });
 
-test("negative fuzz 500 seeds — exercise validator rejection branches", () => {
+test("negative fuzz 500 seeds — validator rejection branches", () => {
   runNegativeFuzz({ count: 500, seedStart: 1, log: () => {} });
+});
+
+test("mutational fuzz 500 seeds — shipped-recipe surface", async () => {
+  await runMutationalFuzz({ count: 500, depth: 3, seedStart: 1, log: () => {} });
 });
