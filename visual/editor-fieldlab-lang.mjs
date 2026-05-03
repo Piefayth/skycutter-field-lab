@@ -54,13 +54,10 @@ const CONTROL_KEYWORDS = new Set([
 // Statement verbs inside stage / scenario / stamp bodies.
 //   set/add/let — cell-action verbs
 //   spot/ellipse/region — scenario/stamp action verbs
-//   wind/advect — v2 stage primitives kept until vector-field types
-//                 and continuous-position CoordRead land
 //   sum/max/min/mean/count — neighbor reduction ops + metric ops
 const ACTION_KEYWORDS = new Set([
   "add", "set", "let",
   "spot", "ellipse", "region",
-  "wind", "advect",
   "sum", "max", "min", "mean", "count",
 ]);
 

@@ -112,20 +112,29 @@ function typecheckScenarioOrStamp(decl, ctx, kind) {
     if (action.type === "fill") {
       checkFieldAssignment(action.field, action.value, ctx, `${label} fill`);
     } else if (action.type === "spot" || action.type === "ellipse" || action.type === "region") {
-      // Stamp position/size/amount expressions are scalars.
-      const exprs = ["lon", "lat", "radius", "rx", "ry", "amount", "lonMin", "lonMax", "latMin", "latMax", "angle"]
-        .map((k) => action[k])
-        .filter(Boolean);
-      for (const expr of exprs) {
-        const t = typeOfExpr(expr, new Map(), ctx, `${label} ${action.type}`);
-        if (t === "vec2") throwTypeError(`${label} ${action.type} expression: expected scalar, got vec2`);
-        if (t === "bool") throwTypeError(`${label} ${action.type} expression: expected scalar, got bool`);
+      // Position / size / angle args are always scalar.
+      const positionalKeys = ["lon", "lat", "radius", "rx", "ry", "angle", "lonMin", "lonMax", "latMin", "latMax"];
+      for (const key of positionalKeys) {
+        const expr = action[key];
+        if (!expr) continue;
+        const t = typeOfExpr(expr, new Map(), ctx, `${label} ${action.type} ${key}`);
+        if (t === "vec2") throwTypeError(`${label} ${action.type} ${key}: expected scalar, got vec2`);
+        if (t === "bool") throwTypeError(`${label} ${action.type} ${key}: expected scalar, got bool`);
       }
-      // For non-region: `amount` becomes the value written to a scalar
-      // field, but stamps support vec2 fields by writing component-wise.
-      // The value-vs-field type relationship is handled by the runtime;
-      // we don't enforce it here because stamps target either f32 or
-      // (for vec2 fields) accept scalar amounts that broadcast.
+      // The `amount` expression must match the targeted field's type.
+      // The runtime (visual/dsl-init-runtime.mjs:addGeodesicBlobAtVector)
+      // explicitly rejects scalar amounts for vec2 fields and vec2
+      // amounts for scalar fields — there is no broadcast. Catch the
+      // mismatch here at recipe load instead of letting it surface as
+      // a runtime error mid-paint.
+      if (action.amount) {
+        checkFieldAssignment(
+          action.field,
+          action.amount,
+          ctx,
+          `${label} ${action.type} amount on "${action.field}"`,
+        );
+      }
     } else if (action.type === "eachCell") {
       typecheckActionList(action.actions ?? [], new Map(), ctx, `${label} for each cell`);
     }
@@ -248,8 +257,23 @@ function typeOfExpr(ast, locals, ctx, label) {
       // accumulators). Reject vec2 bodies here so the failure is at
       // recipe load, not WGSL emit time.
       return typeOfNeighborReduce(ast, locals, ctx, label);
-    case "CoordRead":
+    case "CoordRead": {
+      // Walk coord-arg expressions so vec2/scalar mismatches inside
+      // `field@upstream(velX, velY, dt)` are caught at recipe load.
+      // Without this, `set u = u@upstream(some_vec2, 0, dt)` would
+      // compile clean and only fail at WGSL emit time.
+      if (ast.coord?.kind === "upstream") {
+        const argLabel = `${label} (${ast.field}@upstream args)`;
+        const tx = typeOfExpr(ast.coord.velX, locals, ctx, argLabel);
+        const ty = typeOfExpr(ast.coord.velY, locals, ctx, argLabel);
+        const tdt = typeOfExpr(ast.coord.dt, locals, ctx, argLabel);
+        for (const [t, name] of [[tx, "velX"], [ty, "velY"], [tdt, "dt"]]) {
+          if (t === "vec2") throwTypeError(`${argLabel}: ${name} must be a scalar, got vec2`);
+          if (t === "bool") throwTypeError(`${argLabel}: ${name} must be a scalar, got bool`);
+        }
+      }
       return ctx.fieldTypes.get(ast.field) ?? "unknown";
+    }
     default:
       return "unknown";
   }

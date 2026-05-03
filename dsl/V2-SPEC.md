@@ -446,8 +446,13 @@ explicit-previous-reads), and `dsl/typecheck-v2.mjs` (assignment-shape
 - Recipe must have exactly one `substrate ...` declaration. *(parser)*
 - All names (fields, params, scenarios, stamps, stages, metrics) must be
   globally unique. *(v1 + v2 metric collision check)*
-- Names cannot shadow builtins (math fns, globals, substrate helpers).
-  *(v1 RESERVED_NAMES)*
+- Names cannot shadow callable builtins (math fns, stencil helpers,
+  clock helpers, literals). They CAN shadow position-coord builtins
+  (`u`, `v`, `x`, `y`, `lon`, `lat`, `i`, `N`, …) and clock identifier
+  builtins (`dt`, `frame`) — common idiom: `field u: f32` in a wave
+  recipe shadows the geo `u` projection coord, and the WGSL compiler
+  resolves `u` to the field-read first by definition. *(`RESERVED_NAMES`
+  in dsl-spec.mjs covers the cannot-shadow set)*
 - Each stage has exactly one `cell { }` block. *(parser)*
 - `add f = expr` requires `f` in `reads`. *(v1)*
 - `set f = expr` requires `f` in `writes`. *(v1)*

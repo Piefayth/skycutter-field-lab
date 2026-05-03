@@ -648,6 +648,69 @@ step {
 `), "vec2");
 });
 
+test("type-check rejects scalar amount on vec2 stamp", () => {
+  // Reviewer-flagged: typecheck used to allow scalar `amount` for a
+  // vec2 field, claiming "broadcast." The runtime does not broadcast;
+  // it errors mid-paint. Catch at recipe load.
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field wind: vec2
+stamp blow "blow" {
+  spot wind at brush.pos, radius=brush.r, amount=1
+}
+step { stage s { reads wind; writes wind; cell { set wind = wind } } }
+`), "assigning f32 to vec2 field");
+});
+
+test("type-check accepts vec2 amount on vec2 stamp", () => {
+  compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field wind: vec2
+stamp blow "blow" {
+  spot wind at brush.pos, radius=brush.r, amount=vec2(1, 0)
+}
+step { stage s { reads wind; writes wind; cell { set wind = wind } } }
+`);
+});
+
+test("type-check rejects vec2 amount on scalar stamp", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+stamp drop "drop" {
+  spot u at brush.pos, radius=brush.r, amount=vec2(1, 0)
+}
+step { stage s { reads u; writes u; cell { set u = u } } }
+`), "assigning vec2 to f32 field");
+});
+
+test("metric body @upstream rejects unknown identifier in coord args", () => {
+  // Reviewer-flagged: validateMetricIdentifiers' CoordRead branch used
+  // to check the sampled field but skip velX/velY/dt, so a typo in a
+  // metric body emitted invalid WGSL.
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+step { stage s { reads u; writes u; cell { set u = u } } }
+metric bad = max cells { u@upstream(nope, 0, dt) }
+`), "nope");
+});
+
+test("metric body @upstream rejects vec2 in coord args (type check)", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+field slope: vec2
+step { stage s { reads u; writes u; cell { set u = u } } }
+metric bad = max cells { u@upstream(slope, 0, dt) }
+`), "must be a scalar, got vec2");
+});
+
 test("type-check accepts @upstream coord-arg expressions on vec2 fields", () => {
   // Regression: the reviewer-flagged @upstream bug already covered the
   // dependency / validator paths; this confirms the new type checker

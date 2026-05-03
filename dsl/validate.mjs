@@ -30,8 +30,6 @@ import {
 } from "./expr-parser.mjs";
 import { RESERVED_NAMES } from "./dsl-spec.mjs";
 
-const UNIFORM_IDENTIFIERS = new Set(["PI", "TAU"]);
-
 export function buildDeclaredPipelineSummary(stages) {
   return stages.flatMap((stage) => (stage.declares ?? []).map((name) => ({
     name,
@@ -432,73 +430,18 @@ function validatePresetCellActions(actions, declaredFields, declaredParams, decl
   }
 }
 
+// V2 stages emit exactly one statement per stage: a `cell` block. The
+// v1-era `event` / `each` / `wind` / `advect` / `diffuse` / `clamp` /
+// `normalize` statement shapes are rejected upstream by parse-v2 with
+// redirect messages.
 function validateStatement(statement, stage, reads, writes, declares, visibleFields, declaredParams, declaredConstants, declaredPlanet, imports) {
-  switch (statement.type) {
-    case "event":
-      requireImport(imports, "sim", "event", stage.id);
-      validateExpr(statement.condition, visibleFields, new Set(), `${stage.id} event condition`, declaredParams, declaredConstants, declaredPlanet, imports);
-      validateActions(statement.actions, stage, reads, writes, declares, visibleFields, "event", declaredParams, declaredConstants, declaredPlanet, imports);
-      break;
-    case "cell":
-      requireImport(imports, "sim", "cell", stage.id);
-      validateActions(statement.actions, stage, reads, writes, declares, visibleFields, "cell", declaredParams, declaredConstants, declaredPlanet, imports);
-      break;
-    case "each":
-      requireImport(imports, "sim", "each", stage.id);
-      validateActions(statement.actions, stage, reads, writes, declares, visibleFields, "each", declaredParams, declaredConstants, declaredPlanet, imports);
-      break;
-    case "wind":
-      requireImport(imports, "sim", "wind", stage.id);
-      requireVisibleField(statement.pressure, visibleFields, stage.id, "wind pressure");
-      requireOutput(statement.windU, writes, declares, stage.id);
-      requireOutput(statement.windV, writes, declares, stage.id);
-      if (statement.lift) requireOutput(statement.lift, writes, declares, stage.id);
-      validateUniformExpr(statement.strength, `${stage.id} wind strength`, declaredParams, declaredConstants, declaredPlanet, imports);
-      break;
-    case "advect":
-      requireImport(imports, "sim", "advect", stage.id);
-      requireVisibleField(statement.field, visibleFields, stage.id, "advect field");
-      // Two surface forms: vec2 wind field (`statement.wind`) or two
-      // scalar windU/windV fields. The parser surfaces exactly one shape.
-      if (statement.wind) {
-        requireVisibleField(statement.wind, visibleFields, stage.id, "advect wind");
-      } else {
-        requireVisibleField(statement.windU, visibleFields, stage.id, "advect windU");
-        requireVisibleField(statement.windV, visibleFields, stage.id, "advect windV");
-      }
-      requireWrite(statement.field, writes, stage.id);
-      validateUniformExpr(statement.dt, `${stage.id} advect dt`, declaredParams, declaredConstants, declaredPlanet, imports);
-      break;
-    case "diffuse":
-      requireImport(imports, "sim", statement.type, stage.id);
-      requireVisibleField(statement.field, visibleFields, stage.id, statement.type);
-      requireWrite(statement.field, writes, stage.id);
-      validateUniformExpr(statement.amount, `${stage.id} diffuse amount`, declaredParams, declaredConstants, declaredPlanet, imports);
-      break;
-    case "clamp":
-      requireImport(imports, "sim", statement.type, stage.id);
-      requireVisibleField(statement.field, visibleFields, stage.id, statement.type);
-      requireWrite(statement.field, writes, stage.id);
-      validateUniformExpr(statement.lo, `${stage.id} clamp lo`, declaredParams, declaredConstants, declaredPlanet, imports);
-      validateUniformExpr(statement.hi, `${stage.id} clamp hi`, declaredParams, declaredConstants, declaredPlanet, imports);
-      break;
-    case "normalize":
-      requireImport(imports, "sim", statement.type, stage.id);
-      requireVisibleField(statement.field, visibleFields, stage.id, statement.type);
-      requireWrite(statement.field, writes, stage.id);
-      validateUniformExpr(statement.damping, `${stage.id} normalize damping`, declaredParams, declaredConstants, declaredPlanet, imports);
-      validateUniformExpr(statement.condition, `${stage.id} normalize when`, declaredParams, declaredConstants, declaredPlanet, imports);
-      break;
-    default:
-      throw new Error(`Unknown statement in ${stage.id}: ${statement.type}`);
+  if (statement.type !== "cell") {
+    throw new Error(`Unknown statement in ${stage.id}: ${statement.type}`);
   }
+  validateActions(statement.actions, stage, reads, writes, declares, visibleFields, declaredParams, declaredConstants, declaredPlanet, imports);
 }
 
-function validateUniformExpr(ast, label, declaredParams, declaredConstants, declaredPlanet, imports) {
-  validateExpr(ast, new Set(), new Set(), label, declaredParams, declaredConstants, declaredPlanet, imports, UNIFORM_IDENTIFIERS, false);
-}
-
-function validateActions(actions, stage, reads, writes, declares, visibleFields, mode, declaredParams, declaredConstants, declaredPlanet, imports, locals = new Set()) {
+function validateActions(actions, stage, reads, writes, declares, visibleFields, declaredParams, declaredConstants, declaredPlanet, imports, locals = new Set()) {
   for (const action of actions) {
     if (action.type === "let") {
       validateLocalName(
@@ -514,10 +457,10 @@ function validateActions(actions, stage, reads, writes, declares, visibleFields,
       if (action.type === "add") requireRead(action.field, reads, stage.id);
       validateExpr(action.expr, visibleFields, locals, `${stage.id} ${action.type} ${action.field}`, declaredParams, declaredConstants, declaredPlanet, imports, GEO_IDENTIFIERS);
     } else if (action.type === "when") {
-      validateExpr(action.condition, visibleFields, locals, `${stage.id} ${mode} when`, declaredParams, declaredConstants, declaredPlanet, imports, GEO_IDENTIFIERS);
-      validateActions(action.actions, stage, reads, writes, declares, visibleFields, mode, declaredParams, declaredConstants, declaredPlanet, imports, new Set(locals));
+      validateExpr(action.condition, visibleFields, locals, `${stage.id} cell when`, declaredParams, declaredConstants, declaredPlanet, imports, GEO_IDENTIFIERS);
+      validateActions(action.actions, stage, reads, writes, declares, visibleFields, declaredParams, declaredConstants, declaredPlanet, imports, new Set(locals));
     } else {
-      throw new Error(`Unknown ${mode} action in ${stage.id}: ${action.type}`);
+      throw new Error(`Unknown cell action in ${stage.id}: ${action.type}`);
     }
   }
 }

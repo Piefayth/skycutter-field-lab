@@ -522,8 +522,8 @@ export const DECL_DIRECTIVES = [
   {
     name: "field",
     signature: "field NAME: TYPE [derived]",
-    doc: "Declares per-cell state. TYPE is `f32` for now (`vec2`, `vec3`, `u32` reserved). Optional `derived` annotation marks the field as computed-by-stage — derived fields must be written by ≥1 stage and cannot be written by scenarios or stamps. History is inferred: any `field@prev` read anywhere allocates triple-buffer rotation for that field.",
-    example: "field u: f32\nfield abs_u: f32 derived",
+    doc: "Declares per-cell state. TYPE is `f32` (scalar) or `vec2` (2D vector — storage is `array<vec2<f32>>`, member access via `.x`/`.y`). `vec3`/`u32` are reserved but not yet implemented. Optional `derived` annotation marks the field as computed-by-stage — derived fields must be written by ≥1 stage and cannot be written by scenarios or stamps. History is inferred: any `field@prev` read anywhere allocates triple-buffer rotation for that field.",
+    example: "field u: f32\nfield wind: vec2\nfield abs_u: f32 derived",
   },
   {
     name: "const",

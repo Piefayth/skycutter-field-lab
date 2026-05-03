@@ -117,8 +117,17 @@ function runPresetAction(state, action, cell) {
     const grid = geodesicGrid(state, "eachCell");
     for (let i = 0; i < grid.cellCount; i++) {
       const coords = geodesicAuthorCoords(grid, i);
+      // Build the per-cell field map using component-aware reads so
+      // vec2 fields surface as tagged `{ __vec2: true, x, y }` values
+      // the expression runtime understands. The naive
+      // `state.fields[name][i]` indexing only works for scalar fields
+      // (vec2 storage is interleaved, so index `i` yielded the wrong
+      // component or wrong cell entirely).
       const field = {};
-      for (const name of Object.keys(state.fields)) field[name] = state.fields[name][i];
+      for (const name of Object.keys(state.fields)) {
+        const components = fieldComponents(state, name);
+        field[name] = readCellComponents(state.fields[name], i, components);
+      }
       runPresetCellActions(state, action.actions ?? [], {
         ...coords, i,
         locals: Object.create(null),

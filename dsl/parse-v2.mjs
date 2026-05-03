@@ -1,30 +1,30 @@
 // Field Lab DSL v2 parser.
 //
-// Parses v2 syntax and lowers to a v1-shaped recipe object so the existing
-// webgpu-geodesic-compiler and runtime can consume it without modification.
-// See dsl/V2-SPEC.md for the language definition.
+// Parses v2 syntax into a parsed-recipe object the rest of the
+// pipeline (validate.mjs / validate-v2.mjs / typecheck-v2.mjs /
+// webgpu-geodesic-compiler.mjs) consumes. See dsl/V2-SPEC.md for the
+// language definition.
 //
-// v2 changes that affect parsing:
-//   - `substrate geodesic frequency N` instead of `grid geodesic tiles N`
+// v2 surface in one breath:
+//   - `substrate geodesic frequency N`
 //   - `field u: f32 [derived]` (typed, with optional derived annotation)
-//   - `scenario id "..." { ... }` instead of `preset`
+//   - `scenario id "..." { ... }`
 //   - `step { stages... }` wrapper around stages
 //   - exactly one `cell { }` per stage (no multi-block, no `each`/`event`)
-//   - `u@prev` instead of `prev(u)`
+//   - `u@prev` / `u@n` / `u@upstream(velX, velY, dt)` coordinate queries
 //   - cell-centered neighbor reductions: `sum n in neighbors { u@n - u }`
 //   - `metric ID = REDUCTION cells [where PRED] { EXPR }` (top-level)
 //   - history is inferred from `@prev` usage (no manual `history N`)
-//   - imports are optional / removed; all builtins are in scope
+//   - imports are optional; all builtins are in scope by default
 //   - named-arg `spot u at lon=0, lat=0, radius=0.08, amount=1`
 
 // =============================================================================
 // Public entry: parseV2
 // =============================================================================
 //
-// Returns a v1-shaped recipe object: { recipe, grid, planet, constants,
-// imports, fields, sources, settings, parameters, presets, stamps, stages,
-// metrics }. Designed to flow through the existing v1 validator and compiler
-// with minimal v2-specific extensions.
+// Returns a parsed recipe object: { recipe, grid, planet, constants,
+// imports, fields, sources, settings, parameters, presets, stamps,
+// stages, metrics }.
 
 export function parseV2(source) {
   const ctx = makeCtx(source);

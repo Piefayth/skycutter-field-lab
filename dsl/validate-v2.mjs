@@ -522,6 +522,17 @@ function validateMetricIdentifiers(metric, schema) {
         if (ast.coord?.kind === "prev" && importedNames && !importedNames.includes("prev")) {
           throw new Error(`${label}: clock.prev is not imported (required for \`field@prev\`)`);
         }
+        // `field@upstream(velX, velY, dt)` carries arbitrary expressions
+        // for the velocity components and dt. Walk them through the same
+        // identifier visitor so unknown identifiers + missing imports
+        // surface at recipe load. Without this, `metric m = max cells {
+        // u@upstream(undeclared, 0, dt) }` compiled clean and emitted
+        // invalid WGSL referencing `undeclared`.
+        if (ast.coord?.kind === "upstream") {
+          visitExpr(ast.coord.velX, locals);
+          visitExpr(ast.coord.velY, locals);
+          visitExpr(ast.coord.dt, locals);
+        }
         return;
       }
       default:
