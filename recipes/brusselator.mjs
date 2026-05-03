@@ -61,11 +61,11 @@ field v: f32
 // Turing-unstable defaults: D_v / D_u = 15. Bumping Dv past ~1.5 or
 // lowering Du below ~0.02 picks shorter wavelengths (denser spots).
 param simRateHz slider 0..360 step 1     default 60   label "SIM RATE"
-param rate      slider 1..60  step 1     default 15   label "RATE"
+param rate      slider 1..60  step 1     default 20   label "RATE"
 param A         slider 0.5..4 step 0.05  default 2.0  label "A (FEED)"
 param B         slider 0..8   step 0.05  default 3.0  label "B (RATIO)"
 param Du        slider 0..0.2 step 0.005 default 0.04 label "Du"
-param Dv        slider 0..2   step 0.01  default 0.60 label "Dv"
+param Dv        slider 0..3   step 0.01  default 1.00 label "Dv"
 
 step {
   stage diffuse "Diffuse u + v (D_v ≫ D_u drives Turing)" {
@@ -129,16 +129,25 @@ stamps {
 
 scenarios {
   scenario stripes "Random near-steady seed" {
-    // Defaults sit in the Turing-unstable regime; tiny perturbations
-    // around (u*, v*) = (A, B/A) = (2, 1.5) grow into stripes/spots
-    // after a few hundred ticks.
+    // Seed both noise (broadband) and a structured sin/cos modulation
+    // at roughly the most-unstable Turing wavelength (~5 modes around
+    // the sphere, λ_pattern ≈ 1.3 rad). Pure cellNoise tends to
+    // concentrate energy at high spatial frequencies that the Turing
+    // mechanism damps; the structured term puts a measurable seed at
+    // exactly the wavelength the instability wants to amplify, so
+    // patterns crystallize in ~1 second instead of slow-growing from
+    // numerical roundoff.
     for each cell {
-      set u = 2.0 + cellNoise(11, 1.0) * 0.15
-      set v = 1.5 + cellNoise(13, 1.0) * 0.10
+      set u = 2.0 + cellNoise(11, 1.0) * 0.4 + sin(lon * 5) * cos(lat * 4) * 0.3
+      set v = 1.5 + cellNoise(13, 1.0) * 0.25
     }
   }
 
   scenario steady "Homogeneous steady state" {
+    // Pure homogeneous fixed point — only numerical roundoff seeds
+    // perturbations, so patterns form glacially (or not at all).
+    // Useful for testing whether your changes broke the FE-stable
+    // damping.
     set u = 2.0
     set v = 1.5
   }
