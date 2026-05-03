@@ -1,0 +1,14 @@
+{
+  "name": "field-lab",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Geodesic-sphere simulation lab — v2 DSL, WebGPU compute pipeline, recipes corpus.",
+  "scripts": {
+    "test": "node --test",
+    "fuzz": "node testing/fuzz-v2.mjs"
+  },
+  "devDependencies": {
+    "webgpu": "^0.3.8"
+  }
+}

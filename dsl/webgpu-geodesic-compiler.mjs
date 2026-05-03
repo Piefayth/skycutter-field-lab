@@ -447,7 +447,7 @@ fn hashNoise(i: f32, seed: f32) -> f32 {
 }
 
 fn hashLattice(c: vec3<i32>, seed: f32) -> f32 {
-  var x = bitcast<u32>(c.x) * 73856093u ^ bitcast<u32>(c.y) * 19349663u ^ bitcast<u32>(c.z) * 83492791u;
+  var x = (bitcast<u32>(c.x) * 73856093u) ^ (bitcast<u32>(c.y) * 19349663u) ^ (bitcast<u32>(c.z) * 83492791u);
   x = x ^ ((bitcast<u32>(i32(floor(seed))) + 1013904223u) * 1664525u);
   x = x ^ (x >> 16u);
   x = x * 2246822519u;
