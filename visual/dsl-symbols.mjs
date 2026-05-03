@@ -25,10 +25,13 @@ const CATEGORY_BY_GROUP = {
   GEO_BUILTINS:        "Geodesic position builtins",
   GEO_CONSTANTS:       "Math constants",
   STAMP_EXTRAS:        "Geodesic position builtins",
+  // PIPELINE_PRIMITIVES is empty in v2 (every kernel op folds into the
+  // cell-stage grammar). The category mapping stays so any stragglers
+  // surface visibly rather than getting silently bucketed elsewhere.
   PIPELINE_PRIMITIVES: "Pipeline primitives",
   STAGE_BLOCKS:        "Control flow",
   INIT_VERBS:          "Init verbs (presets/stamps)",
-  ACTION_VERBS:        "Action verbs (cell/event/each)",
+  ACTION_VERBS:        "Action verbs (cell)",
   DECL_DIRECTIVES:     "Schema declarations",
   BLOCK_KEYWORDS:      "Block forms",
   STAGE_IO_KEYWORDS:   "Stage I/O",

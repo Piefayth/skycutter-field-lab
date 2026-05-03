@@ -39,12 +39,98 @@ export function validateV2(schema) {
   validateMetrics(schema);
   validateExplicitPreviousReads(schema);
   validateImportsOnSchema(schema);
+  validateInitExpressions(schema);
   // Type checking runs last: it relies on identifier resolution
   // (declared fields, params, etc.) being well-formed, which the
   // earlier passes guarantee. Catches the assignment-mismatch /
   // wrong-shape errors that used to surface only at WGSL emit time
   // with cryptic shader compile messages.
   typecheckV2(schema);
+}
+
+// =============================================================================
+// Init-context expression subset
+// =============================================================================
+//
+// Scenario and stamp bodies (top-level + `for each cell`) execute on
+// the JS-side init evaluator, not on the GPU. The init evaluator
+// implements only the cell-local subset of the cell-stage grammar:
+// scalar / vec2 reads of a cell's own field values, math functions,
+// vec2 / length / cellNoise / cellRand. It does NOT implement
+// neighbor reductions, coordinate queries (`@prev` / `@n` /
+// `@upstream`), or the tangent-frame stencil builtins
+// (`gradient` / `divergence`) — those need GPU-side neighbor topology.
+//
+// Without this pass, a recipe like `scenario init { for each cell {
+// set wind = gradient(u) } }` would compile clean and only fail when
+// the user picked the scenario, with an opaque "unknown init function"
+// error. Catch the unsupported constructs at recipe load with a
+// pointer at the cell-stage form that does work.
+const INIT_REJECTED_CALLEES = new Set(["gradient", "divergence"]);
+
+function validateInitExpressions(schema) {
+  for (const scenario of schema.presets ?? []) {
+    walkInitActionsForExpressionSubset(
+      scenario.actions ?? [],
+      `scenario "${scenario.id}"`,
+    );
+  }
+  for (const stamp of schema.stamps ?? []) {
+    walkInitActionsForExpressionSubset(
+      stamp.actions ?? [],
+      `stamp "${stamp.id}"`,
+    );
+  }
+}
+
+function walkInitActionsForExpressionSubset(actions, label) {
+  for (const action of actions) {
+    if (!action) continue;
+    for (const key of ["lon", "lat", "radius", "amount", "value", "rx", "ry",
+                       "angle", "lonMin", "lonMax", "latMin", "latMax",
+                       "expr", "condition"]) {
+      if (action[key]) walkExprForInitSubset(action[key], label);
+    }
+    if (action.actions) {
+      walkInitActionsForExpressionSubset(action.actions, `${label} ${action.type ?? "block"}`);
+    }
+  }
+}
+
+function walkExprForInitSubset(ast, label) {
+  if (!ast || typeof ast !== "object") return;
+  if (ast.type === "CoordRead") {
+    const kind = ast.coord?.kind ?? "?";
+    let hint;
+    if (kind === "prev") {
+      hint = "Scenarios run once at start-of-simulation; there's no `previous tick` to read from.";
+    } else if (kind === "neighbor") {
+      hint = "Use bare `${ast.field}` (current cell's value); neighbor reads only work in stage cells, where the GPU has the neighbor topology bound.";
+    } else if (kind === "upstream") {
+      hint = "Continuous-position sampling needs the GPU stencil; express the seeding pattern with bare-field reads + math, or move the logic into a stage cell.";
+    } else {
+      hint = "This coordinate query is GPU-only.";
+    }
+    throw new Error(`${label}: \`${ast.field}@${kind}\` is not supported in scenario / stamp bodies — ${hint}`);
+  }
+  if (ast.type === "NeighborReduce") {
+    throw new Error(
+      `${label}: neighbor reductions (\`<op> n in neighbors { ... }\`) are not supported in scenario / stamp bodies. ` +
+      `Move the logic into a stage cell, or use bare-field math here.`,
+    );
+  }
+  if (ast.type === "Call" && ast.callee?.type === "Identifier"
+      && INIT_REJECTED_CALLEES.has(ast.callee.name)) {
+    throw new Error(
+      `${label}: \`${ast.callee.name}(...)\` is a tangent-frame stencil builtin and only works inside a stage cell. ` +
+      `Compute it there and read the result here, or seed with a closed-form expression.`,
+    );
+  }
+  for (const k of Object.keys(ast)) {
+    const v = ast[k];
+    if (Array.isArray(v)) v.forEach((c) => walkExprForInitSubset(c, label));
+    else if (v && typeof v === "object") walkExprForInitSubset(v, label);
+  }
 }
 
 // V2 import constraint. When the recipe declares no `import` line,

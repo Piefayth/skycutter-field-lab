@@ -416,14 +416,13 @@ export const PIPELINE_PRIMITIVES = [];
 export const STAGE_BLOCKS = [
   {
     name: "cell",
-    importNamespace: "sim",
+    // Block keyword; not an importable builtin. Leaving importNamespace
+    // unset keeps `cell` out of the `import …` autocomplete and stops
+    // the symbol catalog from synthesizing a bogus `import cell` line.
     signature: "cell { ... per-cell math ... }",
     doc: "Per-cell continuous math. Each cell runs the body in parallel; reads field values from the start-of-stage snapshot, writes via `add` (accumulate) or `set` (overwrite). Use for reaction terms, growth, decay, neighbor reductions, coordinate queries — every per-cell computation in v2 lives here. v2 stages contain exactly one `cell { }` block; sequencing within the cell is via `let` locals.",
     example: "cell {\n  let lap = mean n in neighbors { u@n } - u\n  let damp = damping * (u - u@prev)\n  set u = 2 * u - u@prev + speed*speed*lap - damp\n}",
   },
-  // `each` and `event` are v1 block forms. v2 has only `cell { }` with
-  // optional `when` blocks for predicates; emit-style events are
-  // expressed as metrics instead (`metric x = count cells where ...`).
 ];
 
 // ---------------------------------------------------------------------------
@@ -435,32 +434,33 @@ export const INIT_VERBS = [
   // work the same way in scenario / stamp / cell bodies. The init-verb
   // group contains only the verbs unique to scenarios and stamps
   // (spot / ellipse / region / for).
+  // Init verbs are syntactic block keywords — they appear at the front
+  // of a scenario / stamp action, not as importable builtin names.
+  // Leaving importNamespace unset keeps them out of the `import` line
+  // autocomplete (which would otherwise synthesize bogus `import spot`
+  // / `import for` lines that the v2 import validator rejects).
   {
     name: "spot",
-    importNamespace: "init",
     signature: "spot FIELD at lon=LON, lat=LAT, radius=R, amount=A",
     doc: "Adds a Gaussian spherical spot to FIELD. Inside scenarios, lon/lat are explicit. Inside stamps, use `at brush.pos, radius=brush.r, amount=A` for the brush position shorthand. Named args after `at` — `lon=`, `lat=`, `radius=`, `amount=`.",
     example: "spot u at lon=0, lat=0.5, radius=0.18, amount=1\n// stamp:\nspot u at brush.pos, radius=brush.r, amount=1",
   },
   {
     name: "ellipse",
-    importNamespace: "init",
     signature: "ellipse FIELD at lon=LON, lat=LAT, rx=RX, ry=RY, amount=A, angle=ANG",
     doc: "Adds a Gaussian elliptical spot. Like `spot` but with separate semi-axes rx (along east) and ry (along north). angle is rotation in radians.",
     example: "ellipse pressure at lon=0, lat=0, rx=0.4, ry=0.1, amount=1, angle=0.7",
   },
   {
     name: "region",
-    importNamespace: "init",
     signature: "region FIELD at lonMin=LO, lonMax=HI, latMin=LO, latMax=HI, amount=A",
     doc: "Hard-edged rectangular assign in lon/lat space. Sets every cell whose lon ∈ [lonMin, lonMax] AND lat ∈ [latMin, latMax] to amount (overwrite, not additive).",
     example: "region u at lonMin=-0.6, lonMax=0.6, latMin=0, latMax=PI/2, amount=1",
   },
   {
     name: "for",
-    importNamespace: "init",
     signature: "for each cell { ... per-cell init math ... }",
-    doc: "Per-cell programmable init (scenario/stamp bodies). Has access to position coords (lon, lat, x, y, ...) for spatially-varying initialization. Inside the body use `let`, `set`, `add`, `when`. Replaces v1's `eachCell { }`.",
+    doc: "Per-cell programmable init (scenario/stamp bodies). Has access to position coords (lon, lat, x, y, ...) for spatially-varying initialization. Inside the body use `let`, `set`, `add`, `when`. The body uses the cell-local subset of the cell-stage grammar — neighbor reductions, `gradient`/`divergence`, and coordinate queries (`@prev` / `@n` / `@upstream`) all need GPU-side stencil topology and aren't available here. Compute those in a stage cell and read the result in this scenario.",
     example: "scenario standing {\n  for each cell {\n    set u = cos(lon * 2) * 0.6\n  }\n}",
   },
 ];
@@ -564,7 +564,7 @@ export const BLOCK_KEYWORDS = [
   {
     name: "stage",
     signature: 'stage NAME [\"Label\"] { reads ... writes ... cell { ... } }',
-    doc: "A pipeline stage inside `step { }`. v2 stages contain exactly one `cell { }` block (plus `reads`/`writes` clauses). The legacy stage primitives `wind` and `advect` may also appear as the only body (for kernels that don't fold into cell expressions yet).",
+    doc: "A pipeline stage inside `step { }`. v2 stages contain exactly one `cell { }` block (plus `reads` / `writes` clauses) — every kernel operation (diffusion, advection, gradient/divergence, reductions) is expressible as a per-cell expression in v2.",
     example: 'stage propagate "Wave step" {\n  reads u\n  writes u\n  cell {\n    let lap = sum n in neighbors { u@n - u }\n    set u = 2*u - u@prev + speed*speed*lap\n  }\n}',
   },
   {
@@ -595,11 +595,6 @@ export const STAGE_IO_KEYWORDS = [
     name: "writes",
     signature: "writes field1, field2, ...",
     doc: "Lists fields the stage's body mutates via `add`/`set`. Required — names must already be declared via `field`.",
-  },
-  {
-    name: "declares",
-    signature: "declares field1, field2, ...",
-    doc: "Declares NEW fields produced by this stage's primitive (e.g. `wind` declares `windU`, `windV`, `lift`). Allocated automatically.",
   },
 ];
 
@@ -652,9 +647,6 @@ export const MODIFIERS = [
   { name: "where",    signature: "metric x = <op> cells where PRED { ... }",    doc: "Predicate that filters cells contributing to the reduction. Available on every metric op; for `count`, it's the only argument." },
   // v2 init-verb arg keywords
   { name: "at",       signature: "spot FIELD at lon=L, lat=L, radius=R, amount=A", doc: "Introduces named-arg position arguments to spot/ellipse/region. Inside stamps, also accepts `brush.pos` shorthand." },
-  // v2 stage primitive args
-  { name: "by",       signature: "advect FIELD by U, V dt EXPR",                doc: "Velocity-fields modifier on `advect`. Names the two scalar fields used as east/north components." },
-  { name: "strength", signature: "wind ... strength EXPR",                       doc: "Multiplicative gain on the `wind` primitive." },
   // Spot/ellipse arg names (used as `name=value`)
   { name: "amount",   signature: "spot ... amount=EXPR",                         doc: "Magnitude on init verbs. Negative amounts subtract." },
   { name: "radius",   signature: "spot ... radius=EXPR",                         doc: "Angular radius for `spot` (radians). Use `brush.r` in stamps for the user-set brush radius." },

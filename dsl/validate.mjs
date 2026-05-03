@@ -120,6 +120,18 @@ function collectParamRefsFromExpr(ast, add) {
       // reference params freely. Recurse — `add` will skip non-params.
       collectParamRefsFromExpr(ast.body, add);
       return;
+    case "CoordRead":
+      // `field@upstream(velX, velY, dt)` carries arbitrary expressions
+      // for the velocity components and dt; walk them so a recipe
+      // like `set w = w@upstream(0, 0, dt * speed)` correctly surfaces
+      // `speed` in stage.params (the pipeline graph metadata uses it).
+      // `@prev` and `@n` carry no sub-expressions; nothing to walk.
+      if (ast.coord?.kind === "upstream") {
+        collectParamRefsFromExpr(ast.coord.velX, add);
+        collectParamRefsFromExpr(ast.coord.velY, add);
+        collectParamRefsFromExpr(ast.coord.dt, add);
+      }
+      return;
     default:
       return;
   }

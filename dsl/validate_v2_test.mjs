@@ -648,6 +648,104 @@ step {
 `), "vec2");
 });
 
+// -----------------------------------------------------------------------------
+// Init-context expression subset (scenarios + stamps run on the JS init
+// evaluator; some cell-stage grammar constructs aren't implemented there).
+// -----------------------------------------------------------------------------
+
+test("scenario for-each-cell rejects gradient(...)", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+field wind: vec2
+scenario init "init" {
+  for each cell {
+    set wind = gradient(u)
+  }
+}
+step { stage s { reads u, wind; writes u, wind; cell { set u = u; set wind = wind } } }
+`), "tangent-frame stencil builtin");
+});
+
+test("scenario for-each-cell rejects neighbor reductions", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+scenario init "init" {
+  for each cell {
+    set u = sum n in neighbors { u@n }
+  }
+}
+step { stage s { reads u; writes u; cell { set u = u } } }
+`), "neighbor reductions");
+});
+
+test("scenario for-each-cell rejects @upstream", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+field slope: vec2
+scenario init "init" {
+  for each cell {
+    set u = u@upstream(slope.x, slope.y, dt)
+  }
+}
+step { stage s { reads u; writes u; cell { set u = u } } }
+`), "u@upstream");
+});
+
+test("scenario for-each-cell rejects @prev (no previous tick at start)", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+scenario init "init" {
+  for each cell {
+    set u = u@prev
+  }
+}
+step { stage s { reads u; writes u; cell { set u = u } } }
+`), "u@prev");
+});
+
+test("stamp body rejects gradient(...) too", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+field wind: vec2
+stamp paint "paint" {
+  spot wind at brush.pos, radius=brush.r, amount=vec2(0, 0)
+  spot u at brush.pos, radius=brush.r, amount=length(gradient(u))
+}
+step { stage s { reads u, wind; writes u, wind; cell { set u = u; set wind = wind } } }
+`), "tangent-frame stencil builtin");
+});
+
+test("scenario for-each-cell accepts the cell-local subset", () => {
+  // Sanity: the stuff scenarios CAN do (math, conditionals, locals,
+  // bare-field reads, cellNoise / cellRand) compiles fine.
+  compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+field wind: vec2
+scenario init "init" {
+  for each cell {
+    let phase = lon * 2 + cellNoise(31, 1.5) * 0.1
+    when phase > 0 {
+      set u = sin(phase) * 0.5 + 0.5
+    }
+    set wind = vec2(cos(phase), sin(phase))
+  }
+}
+step { stage s { reads u, wind; writes u, wind; cell { set u = u; set wind = wind } } }
+`);
+});
+
 test("type-check rejects scalar amount on vec2 stamp", () => {
   // Reviewer-flagged: typecheck used to allow scalar `amount` for a
   // vec2 field, claiming "broadcast." The runtime does not broadcast;
