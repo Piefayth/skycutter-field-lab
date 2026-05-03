@@ -95,6 +95,13 @@ export function compileV2(source) {
         params, body, previousReads,
       })),
       metrics: schema.metrics,
+      // Render-side declarations from v2's `palette` / `view` /
+      // `overlay` keywords. visual/recipes.mjs::materializeRecipe
+      // consumes these to build colorers + the overlay panel; falls
+      // back to the legacy JS-export `views[]` if these are empty.
+      palettes: schema.palettes ?? [],
+      views: schema.views ?? [],
+      overlays: schema.overlays ?? [],
     },
   };
 }

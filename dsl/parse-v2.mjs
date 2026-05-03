@@ -37,6 +37,9 @@ export function parseV2(source) {
   const stamps = [];
   const stages = [];
   const metrics = [];
+  const palettes = [];
+  const views = [];
+  const overlays = [];
   const importedNames = [];      // flat list of names declared via `import ...`
 
   while (!atEnd(ctx)) {
@@ -59,6 +62,9 @@ export function parseV2(source) {
       case "stamp":              stamps.push(parseStamp(ctx)); break;
       case "step":               stages.push(...parseStep(ctx)); break;
       case "metric":             metrics.push(parseMetric(ctx)); break;
+      case "palette":            palettes.push(parsePalette(ctx)); break;
+      case "view":               views.push(parseView(ctx)); break;
+      case "overlay":            overlays.push(parseOverlay(ctx)); break;
       case "import":             importedNames.push(...parseImport(ctx)); break;
       default:
         throw new Error(`v2 parse: unknown top-level keyword "${kw}"`);
@@ -92,7 +98,225 @@ export function parseV2(source) {
     stamps,
     stages,
     metrics,
+    palettes,
+    views,
+    overlays,
   };
+}
+
+// =============================================================================
+// Render DSL — palette / view / overlay
+// =============================================================================
+
+// Top-level palette declaration:
+//
+//   palette WAVE {
+//     stop 0.0  color [40, 90, 200]
+//     stop 0.35 color [120, 170, 230]
+//     stop 0.5  color [240, 240, 240]
+//     stop 0.7  color [240, 160, 110]
+//     stop 1.0  color [200, 50, 30]
+//   }
+//
+// Stops carry explicit t∈[0, 1] positions so non-uniform spacing is
+// expressible from day one. Validator enforces sorted, in-range,
+// at-least-2-stops.
+function parsePalette(ctx) {
+  consumeKeyword(ctx, "palette");
+  const name = readIdent(ctx, "palette name");
+  skipInlineWs(ctx);
+  consumeChar(ctx, "{");
+  const stops = parseStopList(ctx, `palette ${name}`);
+  consumeChar(ctx, "}");
+  skipLine(ctx);
+  return { name, stops };
+}
+
+// `stop T color [R, G, B]` lines, used by both palette declarations
+// and inline `stops { ... }` blocks inside a view. T is a number in
+// [0, 1]; R/G/B are 0..255 ints.
+function parseStopList(ctx, label) {
+  const stops = [];
+  while (true) {
+    skipTrivia(ctx);
+    if (atEnd(ctx) || ctx.source[ctx.i] === "}") break;
+    const kw = peekKeyword(ctx);
+    if (kw !== "stop") {
+      throw new Error(`v2 parse: ${label}: expected \`stop T color [R, G, B]\`, got "${kw ?? currentLine(ctx)}"`);
+    }
+    consumeKeyword(ctx, "stop");
+    skipInlineWs(ctx);
+    const t = readNumber(ctx);
+    skipInlineWs(ctx);
+    consumeKeyword(ctx, "color");
+    skipInlineWs(ctx);
+    const color = parseColorTriple(ctx, label);
+    stops.push({ t, color });
+    skipLine(ctx);
+  }
+  return stops;
+}
+
+function parseColorTriple(ctx, label) {
+  consumeChar(ctx, "[");
+  const r = readNumber(ctx);
+  skipInlineWs(ctx);
+  consumeChar(ctx, ",");
+  skipInlineWs(ctx);
+  const g = readNumber(ctx);
+  skipInlineWs(ctx);
+  consumeChar(ctx, ",");
+  skipInlineWs(ctx);
+  const b = readNumber(ctx);
+  skipInlineWs(ctx);
+  consumeChar(ctx, "]");
+  return [r, g, b];
+}
+
+function parseRangeLiteral(ctx) {
+  consumeChar(ctx, "[");
+  skipInlineWs(ctx);
+  const lo = readNumber(ctx);
+  skipInlineWs(ctx);
+  consumeChar(ctx, ",");
+  skipInlineWs(ctx);
+  const hi = readNumber(ctx);
+  skipInlineWs(ctx);
+  consumeChar(ctx, "]");
+  return [lo, hi];
+}
+
+// Top-level view declaration. Always block form — anticipates future
+// multi-layer compositions like `arrows`, `glyphs`, etc. inside the
+// same view block.
+//
+//   view height "Height" {
+//     color ramp h range [-1, 1] palette WAVE
+//   }
+//
+//   view phase "Phase" {
+//     color wheel theta range [0, TAU]
+//   }
+//
+//   view bz "BZ composite" {
+//     color expr {
+//       let uc = clamp(u, 0, 1.4)
+//       set red   = 20 + uc * 210
+//       set green = 22 + vc * 200 - uc * 20
+//       set blue  = 70 + vc * 120
+//     }
+//   }
+function parseView(ctx) {
+  consumeKeyword(ctx, "view");
+  const id = readIdent(ctx, "view id");
+  skipInlineWs(ctx);
+  let label = id;
+  if (ctx.source[ctx.i] === "\"") label = readString(ctx);
+  skipInlineWs(ctx);
+  consumeChar(ctx, "{");
+  skipTrivia(ctx);
+  consumeKeyword(ctx, "color");
+  skipInlineWs(ctx);
+  const kind = readIdent(ctx, `view ${id} color kind (ramp|wheel|expr)`);
+  let body;
+  if (kind === "ramp") {
+    body = parseColorRamp(ctx, id);
+  } else if (kind === "wheel") {
+    body = parseColorWheel(ctx, id);
+  } else if (kind === "expr") {
+    body = parseColorExpr(ctx, id);
+  } else {
+    throw new Error(`v2 parse: view ${id}: unknown color kind "${kind}" (allowed: ramp, wheel, expr)`);
+  }
+  skipTrivia(ctx);
+  consumeChar(ctx, "}");
+  skipLine(ctx);
+  return { id, label, ...body };
+}
+
+function parseColorRamp(ctx, viewId) {
+  // color ramp FIELD [range [a, b]] (palette NAME | stops { ... })
+  skipInlineWs(ctx);
+  const field = readIdent(ctx, `view ${viewId} ramp field`);
+  let range = null;
+  let paletteName = null;
+  let stops = null;
+  while (true) {
+    skipInlineWs(ctx);
+    if (atEnd(ctx) || ctx.source[ctx.i] === "}") break;
+    if (ctx.source[ctx.i] === "\n") { ctx.i++; skipTrivia(ctx); continue; }
+    const kw = peekKeyword(ctx);
+    if (kw === "range") {
+      consumeKeyword(ctx, "range");
+      skipInlineWs(ctx);
+      range = parseRangeLiteral(ctx);
+      continue;
+    }
+    if (kw === "palette") {
+      consumeKeyword(ctx, "palette");
+      skipInlineWs(ctx);
+      paletteName = readIdent(ctx, `view ${viewId} palette ref`);
+      continue;
+    }
+    if (kw === "stops") {
+      consumeKeyword(ctx, "stops");
+      skipInlineWs(ctx);
+      consumeChar(ctx, "{");
+      stops = parseStopList(ctx, `view ${viewId} inline stops`);
+      consumeChar(ctx, "}");
+      continue;
+    }
+    break;
+  }
+  if (!paletteName && !stops) {
+    throw new Error(`v2 parse: view ${viewId}: ramp requires either \`palette NAME\` or \`stops { ... }\``);
+  }
+  if (paletteName && stops) {
+    throw new Error(`v2 parse: view ${viewId}: ramp can't carry both \`palette\` and inline \`stops\` — pick one`);
+  }
+  return { kind: "ramp", field, range: range ?? [0, 1], paletteName, stops };
+}
+
+function parseColorWheel(ctx, viewId) {
+  // color wheel FIELD [range [a, b]]
+  skipInlineWs(ctx);
+  const field = readIdent(ctx, `view ${viewId} wheel field`);
+  let range = null;
+  while (true) {
+    skipInlineWs(ctx);
+    if (atEnd(ctx) || ctx.source[ctx.i] === "}") break;
+    if (ctx.source[ctx.i] === "\n") { ctx.i++; skipTrivia(ctx); continue; }
+    const kw = peekKeyword(ctx);
+    if (kw === "range") {
+      consumeKeyword(ctx, "range");
+      skipInlineWs(ctx);
+      range = parseRangeLiteral(ctx);
+      continue;
+    }
+    break;
+  }
+  // Default range covers a full cycle in radians; recipes that want
+  // a different domain (degrees, [0, 1] phase) override.
+  return { kind: "wheel", field, range: range ?? [0, Math.PI * 2] };
+}
+
+function parseColorExpr(ctx, viewId) {
+  // color expr { ... cell-action body, must `set red`, `set green`,
+  //              `set blue` ... }
+  skipInlineWs(ctx);
+  const body = readBracedBlock(ctx);
+  const actions = parseCellActions(body, `view ${viewId} expr`, /*forScenario=*/false);
+  return { kind: "expr", actions };
+}
+
+// Top-level overlay declaration. One-line: `overlay grid` etc.
+// Names are restricted at validate time to a small registered set.
+function parseOverlay(ctx) {
+  consumeKeyword(ctx, "overlay");
+  skipInlineWs(ctx);
+  const name = readIdent(ctx, "overlay name");
+  skipLine(ctx);
+  return { name };
 }
 
 // Parse a single `import name1, name2, name3` line. Names are flat —

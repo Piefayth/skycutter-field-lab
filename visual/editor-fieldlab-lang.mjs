@@ -27,11 +27,15 @@ const RECIPE_KEYWORDS = new Set([
 // Schema declarations — introduce names into the recipe.
 const SCHEMA_KEYWORDS = new Set([
   "const", "field", "param", "import", "metric",
+  // Render decls — `palette NAME { ... }`, `overlay grid`, `view ID …`.
+  "palette", "overlay",
 ]);
 
 // Block headers — `stage id "label" { ... }` and friends.
 const DEFINITION_KEYWORDS = new Set([
   "stage", "scenario", "stamp",
+  // Render: `view ID "Label" { color KIND ... }`.
+  "view",
 ]);
 
 // Stage I/O lists.
@@ -80,6 +84,13 @@ const MODIFIER_KEYWORDS = new Set([
   "slider", "toggle", "boolean", "label",
   "step", "default",
   "geodesic", "frequency",
+  // Render-DSL trailing keywords:
+  //   `color ramp FIELD range [a, b] palette NAME` / `stops { … }`
+  //   `color wheel FIELD range [a, b]`
+  //   `color expr { … }`
+  //   palette / inline-stops body: `stop T color [r, g, b]`
+  "color", "ramp", "wheel", "expr",
+  "range", "stops", "stop",
   // `step` lands here too — see the comment on CONTROL_KEYWORDS above.
 ]);
 

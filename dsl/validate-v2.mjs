@@ -40,12 +40,199 @@ export function validateV2(schema) {
   validateExplicitPreviousReads(schema);
   validateImportsOnSchema(schema);
   validateInitExpressions(schema);
+  validateRenderDecls(schema);
   // Type checking runs last: it relies on identifier resolution
   // (declared fields, params, etc.) being well-formed, which the
   // earlier passes guarantee. Catches the assignment-mismatch /
   // wrong-shape errors that used to surface only at WGSL emit time
   // with cryptic shader compile messages.
   typecheckV2(schema);
+}
+
+// =============================================================================
+// Render decls — palette, view, overlay
+// =============================================================================
+//
+// Render-side validation. The render runtime consumes these
+// declarations after the JS materialize step, so failures here surface
+// at recipe-load time rather than during the first render frame.
+//
+// Rules:
+//   - palette names unique; ≥ 2 stops; t in [0, 1]; stops in
+//     ascending t order; rgb components in 0..255.
+//   - view ids unique; labels are free strings.
+//   - view.field references a declared field.
+//   - ramp views: range [a, b] has a ≠ b; references a real palette
+//     OR carries inline stops with the same shape rules.
+//   - wheel views: range [a, b] has a ≠ b. (Field type is unrestricted
+//     since wheel hue-rotates by t = (v - a) / (b - a) — works for
+//     any scalar source even if it isn't strictly an "angle".)
+//   - expr views: body uses the cell-grammar subset usable at render
+//     time — no field writes, no @prev / @n / @upstream, no neighbor
+//     reductions, no gradient/divergence. Must `set red`, `set green`,
+//     `set blue` on every code path. No other targets allowed.
+//   - overlay names are in the registered set (`grid` for now).
+const REGISTERED_OVERLAYS = new Set(["grid"]);
+const VIEW_EXPR_OUTPUTS = new Set(["red", "green", "blue"]);
+
+function validateRenderDecls(schema) {
+  const palettes = schema.palettes ?? [];
+  const views = schema.views ?? [];
+  const overlays = schema.overlays ?? [];
+  const fieldNames = new Set((schema.fields ?? []).map((d) => d.name));
+
+  // Palettes — uniqueness + stop shape.
+  const paletteSet = new Set();
+  for (const p of palettes) {
+    if (paletteSet.has(p.name)) throw new Error(`palette "${p.name}" declared more than once`);
+    paletteSet.add(p.name);
+    validateStops(p.stops, `palette "${p.name}"`);
+  }
+
+  // Views — uniqueness + per-kind validation.
+  const viewSet = new Set();
+  for (const v of views) {
+    if (viewSet.has(v.id)) throw new Error(`view "${v.id}" declared more than once`);
+    viewSet.add(v.id);
+    if (v.kind === "ramp" || v.kind === "wheel") {
+      if (!fieldNames.has(v.field)) {
+        throw new Error(`view "${v.id}": references unknown field "${v.field}"`);
+      }
+      validateRange(v.range, `view "${v.id}" range`);
+    }
+    if (v.kind === "ramp") {
+      if (v.paletteName) {
+        if (!paletteSet.has(v.paletteName)) {
+          throw new Error(`view "${v.id}": references undefined palette "${v.paletteName}"`);
+        }
+      } else if (v.stops) {
+        validateStops(v.stops, `view "${v.id}" inline stops`);
+      } else {
+        throw new Error(`view "${v.id}": ramp requires either \`palette NAME\` or inline \`stops { ... }\``);
+      }
+    }
+    if (v.kind === "expr") {
+      validateExprViewBody(v.actions ?? [], `view "${v.id}" expr`);
+    }
+  }
+
+  // Overlays — registered names only.
+  const overlaySet = new Set();
+  for (const o of overlays) {
+    if (!REGISTERED_OVERLAYS.has(o.name)) {
+      throw new Error(`overlay "${o.name}" is not a registered overlay (allowed: ${[...REGISTERED_OVERLAYS].join(", ")})`);
+    }
+    if (overlaySet.has(o.name)) throw new Error(`overlay "${o.name}" declared more than once`);
+    overlaySet.add(o.name);
+  }
+}
+
+function validateStops(stops, label) {
+  if (!Array.isArray(stops) || stops.length < 2) {
+    throw new Error(`${label}: needs at least 2 stops`);
+  }
+  let prevT = -Infinity;
+  for (const s of stops) {
+    if (typeof s.t !== "number" || s.t < 0 || s.t > 1) {
+      throw new Error(`${label}: stop t=${s.t} out of [0, 1]`);
+    }
+    if (s.t < prevT) {
+      throw new Error(`${label}: stops must be in ascending t order (got ${s.t} after ${prevT})`);
+    }
+    prevT = s.t;
+    if (!Array.isArray(s.color) || s.color.length !== 3) {
+      throw new Error(`${label}: stop at t=${s.t} must have a 3-component color`);
+    }
+    for (const c of s.color) {
+      if (typeof c !== "number" || c < 0 || c > 255) {
+        throw new Error(`${label}: stop at t=${s.t}: color component ${c} out of [0, 255]`);
+      }
+    }
+  }
+}
+
+function validateRange(range, label) {
+  if (!Array.isArray(range) || range.length !== 2) {
+    throw new Error(`${label}: range must be [a, b]`);
+  }
+  if (range[0] === range[1]) {
+    throw new Error(`${label}: range [${range[0]}, ${range[1]}] is empty (a must differ from b)`);
+  }
+}
+
+// view's `color expr { ... }` body has tighter restrictions than a
+// stage cell. View bodies run at render time on the JS side (no GPU
+// stencil topology), so neighbor reductions, history reads, and
+// stencil ops are all out. The body's only legal effects are setting
+// the three color outputs.
+function validateExprViewBody(actions, label, seenOutputs = null) {
+  const isRoot = seenOutputs === null;
+  const outputs = seenOutputs ?? new Set();
+  for (const action of actions ?? []) {
+    if (!action) continue;
+    if (action.type === "let") {
+      if (action.expr) walkViewExprForBannedOps(action.expr, label);
+      continue;
+    }
+    if (action.type === "set" || action.type === "add") {
+      if (!VIEW_EXPR_OUTPUTS.has(action.field)) {
+        throw new Error(`${label}: only \`red\` / \`green\` / \`blue\` are valid \`set\` targets in a view body — saw "${action.field}"`);
+      }
+      if (action.type === "add") {
+        throw new Error(`${label}: use \`set ${action.field} = ...\`, not \`add\` (view bodies are pure render expressions, no per-tick accumulation)`);
+      }
+      outputs.add(action.field);
+      if (action.expr) walkViewExprForBannedOps(action.expr, label);
+      continue;
+    }
+    if (action.type === "when") {
+      if (action.condition) walkViewExprForBannedOps(action.condition, label);
+      validateExprViewBody(action.actions ?? [], `${label} when`, outputs);
+      continue;
+    }
+    throw new Error(`${label}: unsupported action "${action.type}" in view body`);
+  }
+  if (isRoot) {
+    for (const channel of VIEW_EXPR_OUTPUTS) {
+      if (!outputs.has(channel)) {
+        throw new Error(`${label}: missing \`set ${channel} = ...\` (every code path must assign red, green, and blue)`);
+      }
+    }
+  }
+}
+
+function walkViewExprForBannedOps(ast, label) {
+  if (!ast || typeof ast !== "object") return;
+  if (ast.type === "CoordRead") {
+    const kind = ast.coord?.kind ?? "?";
+    throw new Error(
+      `${label}: \`${ast.field}@${kind}\` is not allowed in a view body. ` +
+      `Views are evaluated at render time without GPU stencil topology — ` +
+      `read the field at the cell directly with bare \`${ast.field}\`.`,
+    );
+  }
+  if (ast.type === "NeighborReduce") {
+    throw new Error(
+      `${label}: neighbor reductions aren't allowed in a view body. ` +
+      `Promote the reduction to a derived field, then read the derived ` +
+      `field at this cell.`,
+    );
+  }
+  if (ast.type === "Call" && ast.callee?.type === "Identifier") {
+    const name = ast.callee.name;
+    if (name === "gradient" || name === "divergence") {
+      throw new Error(
+        `${label}: \`${name}(...)\` is a tangent-frame stencil and only ` +
+        `works inside a stage cell. Compute it there into a derived ` +
+        `field and read the derived field here.`,
+      );
+    }
+  }
+  for (const k of Object.keys(ast)) {
+    const v = ast[k];
+    if (Array.isArray(v)) v.forEach((c) => walkViewExprForBannedOps(c, label));
+    else if (v && typeof v === "object") walkViewExprForBannedOps(v, label);
+  }
 }
 
 // =============================================================================

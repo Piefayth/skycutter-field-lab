@@ -19,7 +19,7 @@ import { setControlHandlers } from "./controls.mjs";
 import { formModal, confirmModal } from "./modal.mjs";
 import { showToast } from "./toast.mjs";
 import { compileV2 as compileDsl } from "../dsl/compile-v2.mjs";
-import { gray } from "../prims/colorers.mjs";
+import { gray, materializeView } from "../prims/colorers.mjs";
 import {
   downloadRecipeSnapshot,
   loadSavedRecipes,
@@ -856,6 +856,46 @@ function applyDslRecipeMetadata(recipe, dsl, getParam) {
       ...existing,
       ...synthesized.filter((d) => !existingIds.has(d.id)),
     ];
+  }
+
+  // V2 DSL render decls: `palette` / `view` / `overlay`. If the
+  // recipe declares any `view` blocks in DSL, those are the
+  // authoritative views — the JS-export `views[]` is ignored. (We
+  // don't merge — a recipe that mixes both would be ambiguous.) If
+  // no DSL views exist, the JS-export views[] stays in effect for
+  // back-compat. Same fallback shape for overlays.
+  const dslViews = dsl.views ?? [];
+  const dslPalettes = dsl.palettes ?? [];
+  if (dslViews.length > 0) {
+    const fieldDecls = recipe.fields ?? [];
+    const paramDecls = recipe.parameters ?? [];
+    const constDecls = recipe.constants ?? [];
+    const materialized = dslViews.map((v) =>
+      materializeView(v, dslPalettes, fieldDecls, paramDecls, constDecls),
+    );
+    // Bind the live params/consts onto each expr-view colorer so
+    // body expressions resolving param refs read the current slider
+    // values, not the snapshot at recipe-load time. Slider drags
+    // take effect on the next frame.
+    if (typeof getParam === "function") {
+      for (const view of materialized) {
+        if (typeof view.color?.bindContext === "function") {
+          view.color.bindContext({
+            params: new Proxy({}, { get: (_, name) => getParam(name) }),
+            consts: Object.fromEntries(constDecls.map((c) => [c.name, c.value])),
+          });
+        }
+      }
+    }
+    recipe.views = materialized;
+  }
+  const dslOverlays = dsl.overlays ?? [];
+  if (dslOverlays.length > 0) {
+    recipe.overlays = dslOverlays.map((o) => ({
+      id: o.name,
+      type: o.name,
+      label: o.name.charAt(0).toUpperCase() + o.name.slice(1),
+    }));
   }
 }
 

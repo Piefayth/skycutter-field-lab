@@ -740,6 +740,153 @@ step {
 `), "shadows a builtin/reserved identifier");
 });
 
+// -----------------------------------------------------------------------------
+// Render DSL — palette / view / overlay
+// -----------------------------------------------------------------------------
+
+test("render DSL: palette + ramp view compiles", () => {
+  const out = compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field h: f32
+palette WAVE {
+  stop 0.0 color [40, 90, 200]
+  stop 0.5 color [240, 240, 240]
+  stop 1.0 color [200, 50, 30]
+}
+view height "Height" {
+  color ramp h range [-1, 1] palette WAVE
+}
+step { stage s { reads h; writes h; cell { set h = h } } }
+`);
+  assert(out.dsl.palettes.length === 1, "palette in output");
+  assert(out.dsl.views.length === 1, "view in output");
+  assert(out.dsl.views[0].kind === "ramp" && out.dsl.views[0].paletteName === "WAVE",
+    "ramp view should reference palette WAVE");
+});
+
+test("render DSL: wheel view", () => {
+  const out = compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field theta: f32
+view phase "Phase" {
+  color wheel theta range [0, 6.283]
+}
+step { stage s { reads theta; writes theta; cell { set theta = theta } } }
+`);
+  const v = out.dsl.views[0];
+  assert(v.kind === "wheel" && v.field === "theta", "wheel view shape");
+});
+
+test("render DSL: expr view requires red+green+blue assignments", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field h: f32
+view custom "Custom" {
+  color expr {
+    set red = 100
+    set green = 200
+  }
+}
+step { stage s { reads h; writes h; cell { set h = h } } }
+`), "missing `set blue");
+});
+
+test("render DSL: expr view rejects non-channel set targets", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field h: f32
+view custom "Custom" {
+  color expr {
+    set h     = 1
+    set red   = 100
+    set green = 200
+    set blue  = 50
+  }
+}
+step { stage s { reads h; writes h; cell { set h = h } } }
+`), "only `red` / `green` / `blue` are valid `set` targets");
+});
+
+test("render DSL: expr view rejects neighbor reductions", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field h: f32
+view custom "Custom" {
+  color expr {
+    let avg = mean n in neighbors { h@n }
+    set red   = avg * 255
+    set green = avg * 255
+    set blue  = avg * 255
+  }
+}
+step { stage s { reads h; writes h; cell { set h = h } } }
+`), "neighbor reductions aren't allowed");
+});
+
+test("render DSL: ramp range must have a != b", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field h: f32
+palette P {
+  stop 0 color [0, 0, 0]
+  stop 1 color [255, 255, 255]
+}
+view bad "Bad" { color ramp h range [0.5, 0.5] palette P }
+step { stage s { reads h; writes h; cell { set h = h } } }
+`), "empty");
+});
+
+test("render DSL: ramp references undeclared palette", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field h: f32
+view bad "Bad" { color ramp h range [0, 1] palette MISSING }
+step { stage s { reads h; writes h; cell { set h = h } } }
+`), "references undefined palette \"MISSING\"");
+});
+
+test("render DSL: overlay grid", () => {
+  const out = compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field h: f32
+overlay grid
+view h "H" {
+  color ramp h range [0, 1] stops {
+    stop 0 color [0, 0, 0]
+    stop 1 color [255, 255, 255]
+  }
+}
+step { stage s { reads h; writes h; cell { set h = h } } }
+`);
+  assert(out.dsl.overlays.length === 1 && out.dsl.overlays[0].name === "grid");
+});
+
+test("render DSL: inline stops form (no named palette)", () => {
+  const out = compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field h: f32
+view h "Heat" {
+  color ramp h range [0, 1] stops {
+    stop 0 color [20, 22, 18]
+    stop 1 color [80, 220, 90]
+  }
+}
+step { stage s { reads h; writes h; cell { set h = h } } }
+`);
+  const v = out.dsl.views[0];
+  assert(v.kind === "ramp" && Array.isArray(v.stops) && v.stops.length === 2,
+    "inline stops should land on the view");
+});
+
 test("type-check rejects let-local inside gradient(...) arg", () => {
   // gradient(local) silently produced wrong WGSL (the local
   // resolved to its cell-uniform value at every neighbor in the
