@@ -267,6 +267,24 @@
       "name": "Coupled-map lattice (example)",
       "path": "recipes/coupled-logistic-map.mjs",
       "summary": "Per-cell logistic map x' = r·x·(1−x) with diffusive coupling ε to the local mean. At ε=0 every cell is its own chaotic process; at intermediate ε you get Kaneko's spatiotemporal intermittency — frozen random patches that occasionally rupture; at large ε the sphere locks into a coherent oscillator. The only recipe in the catalog using deterministic chaos rather than explicit randomness."
+    },
+    {
+      "id": "morris-lecar",
+      "name": "Morris-Lecar excitable medium (example)",
+      "path": "recipes/morris-lecar.mjs",
+      "summary": "Two-variable excitable membrane with proper sigmoid gating m∞(V) = ½(1+tanh((V−V₁)/V₂)). Same family of phenomena as FitzHugh-Nagumo / Aliev-Panfilov (spirals, target waves, reentry) but with physiologically-shaped saturation rather than a cubic stand-in, so high-amplitude dynamics don't blow up nonphysically."
+    },
+    {
+      "id": "mackey-glass",
+      "name": "Mackey-Glass delay-feedback (example)",
+      "path": "recipes/mackey-glass.mjs",
+      "summary": "Classical scalar delay-differential equation: dx/dt = β·x(t−τ)/(1+x(t−τ)^n) − γ·x. Each sphere cell runs its own Mackey-Glass with delay τ ticks; neighbours diffuse their CURRENT x but not their delayed x@prev(τ), so amplitudes can synchronise while phases stay independent. Demonstrates the @prev(N) multi-tick lookback."
+    },
+    {
+      "id": "stuart-landau",
+      "name": "Stuart-Landau coupled oscillators (example)",
+      "path": "recipes/stuart-landau.mjs",
+      "summary": "Sphere-wide grid of Hopf-normal-form oscillators with diffusive coupling. Each cell carries (re, im) amplitude; |A| saturates to √μ; phase wraps via mod(atan2(im, re), TAU). The shear parameter c drives the Benjamin-Feir instability — at large c the synchronous limit cycle gives way to defect turbulence with phase singularities pinned to pentagonal cells."
     }
   ]
 }
