@@ -5,8 +5,9 @@
 const FIELD_TYPES = new Set(["f32", "vec2", "vec3", "u32", "bool"]);
 const METRIC_OPS = new Set(["sum", "max", "min", "mean", "count"]);
 
-export function recipeCstToAst(cst) {
+export function recipeCstToAst(cst, options = {}) {
   if (!cst || cst.type !== "RecipeCst") throw new Error("v2 CST projection: expected recipe CST");
+  if (options.strict) validateStrictRecipeCst(cst);
   const recipe = {};
   let substrate = null;
   const fields = [];
@@ -61,6 +62,140 @@ export function recipeCstToAst(cst) {
     views: render.views,
     overlays: render.overlays,
   };
+}
+
+function validateStrictRecipeCst(cst) {
+  if ((cst.errors ?? []).length > 0) {
+    throw new Error(cst.errors[0].message ?? "v2 CST parse: syntax error");
+  }
+
+  const rootStatementKinds = new Set([
+    "recipe", "summary", "recommendedPreset", "substrate",
+    "field", "param", "const", "import", "metric",
+    "step", "views", "stamps", "scenarios",
+  ]);
+  for (const stmt of sorted(cst.root.statements)) {
+    if (!rootStatementKinds.has(stmt.keyword)) {
+      throw new Error(`v2 parse: unknown top-level keyword "${stmt.keyword}"`);
+    }
+  }
+
+  const rootBlocks = sorted(cst.root.children ?? []);
+  for (const block of rootBlocks) {
+    if (!["step", "views", "stamps", "scenarios"].includes(block.keyword)) {
+      throw new Error(`v2 parse: \`${block.keyword}\` blocks must live inside the proper section`);
+    }
+  }
+
+  const recipeStmt = cst.root.statements.find((stmt) => stmt.keyword === "recipe");
+  if (!recipeStmt || !firstString(cst, recipeStmt)) {
+    throw new Error("v2 parse: recipe must declare `recipe \"<name>\"`");
+  }
+  if (!cst.root.statements.some((stmt) => stmt.keyword === "substrate")) {
+    throw new Error("v2 parse: recipe must declare `substrate ...`");
+  }
+  const stepBlocks = cst.blocks.filter((block) => block.keyword === "step");
+  if (stepBlocks.length === 0 || !stepBlocks.some((block) => (block.children ?? []).some((child) => child.keyword === "stage"))) {
+    throw new Error("v2 parse: recipe must declare at least one stage inside `step { }`");
+  }
+
+  for (const block of sorted(cst.blocks)) {
+    validateBlockPlacement(block);
+    if (block.keyword === "step") validateStepBlock(block);
+    else if (block.keyword === "stage") validateStageBlock(block);
+    else if (block.keyword === "views") validateSectionBlock(block, ["palette", "view"], ["palette", "view", "overlay"]);
+    else if (block.keyword === "stamps") validateSectionBlock(block, ["stamp"], ["stamp"]);
+    else if (block.keyword === "scenarios") validateSectionBlock(block, ["scenario"], ["scenario"]);
+    else if (block.keyword === "scenario" || block.keyword === "stamp") validateInitBlock(block);
+    else if (block.keyword === "cell" || block.keyword === "for" || block.keyword === "when") validateCellLikeBlock(block);
+    else if (block.keyword === "palette") validatePaletteBlock(block);
+    else if (block.keyword === "view") validateViewBlock(block);
+  }
+}
+
+function validateBlockPlacement(block) {
+  const parent = block.parent?.keyword ?? "root";
+  const ok =
+    (["step", "views", "stamps", "scenarios"].includes(block.keyword) && parent === "root")
+    || (block.keyword === "stage" && parent === "step")
+    || (block.keyword === "cell" && parent === "stage")
+    || (block.keyword === "when" && (parent === "cell" || parent === "for" || parent === "when" || parent === "view"))
+    || (block.keyword === "for" && (parent === "scenario" || parent === "stamp"))
+    || (block.keyword === "palette" && parent === "views")
+    || (block.keyword === "view" && parent === "views")
+    || (block.keyword === "scenario" && parent === "scenarios")
+    || (block.keyword === "stamp" && parent === "stamps");
+  if (!ok) {
+    if (block.keyword === "scenario") throw new Error("v2 parse: `scenario` blocks must live inside `scenarios { ... }`");
+    if (block.keyword === "stamp") throw new Error("v2 parse: `stamp` blocks must live inside `stamps { ... }`");
+    if (block.keyword === "palette") throw new Error("v2 parse: `palette` blocks must live inside `views { ... }`");
+    if (block.keyword === "view") throw new Error("v2 parse: `view` blocks must live inside `views { ... }`");
+    throw new Error(`v2 parse: misplaced ${block.keyword} block`);
+  }
+}
+
+function validateStepBlock(block) {
+  if (!(block.children ?? []).some((child) => child.keyword === "stage")) {
+    throw new Error("v2 parse: empty step block");
+  }
+  validateSectionBlock(block, ["stage"], ["stage"]);
+}
+
+function validateStageBlock(block) {
+  const allowed = new Set(["reads", "writes", "cell"]);
+  let cellCount = 0;
+  for (const stmt of sorted(block.statements)) {
+    if (!allowed.has(stmt.keyword)) {
+      if (["advect", "wind", "diffuse", "clamp", "normalize"].includes(stmt.keyword)) {
+        throw new Error(`v2 parse: stage ${block.id}: \`${stmt.keyword}\` is no longer a stage primitive in v2`);
+      }
+      throw new Error(`v2 parse: stage ${block.id}: unknown clause "${stmt.keyword}"`);
+    }
+    if (stmt.keyword === "cell") cellCount++;
+  }
+  if (cellCount === 0) throw new Error(`v2 parse: stage ${block.id}: missing cell { } block (or legacy primitive)`);
+  if (cellCount > 1) throw new Error(`v2 parse: stage ${block.id}: only one cell { } block per stage`);
+}
+
+function validateSectionBlock(block, childKeywords, statementKeywords) {
+  const childAllowed = new Set(childKeywords);
+  const statementAllowed = new Set(statementKeywords);
+  for (const child of sorted(block.children ?? [])) {
+    if (!childAllowed.has(child.keyword)) {
+      throw new Error(`v2 parse: ${block.keyword} section: unexpected ${child.keyword} block`);
+    }
+  }
+  for (const stmt of sorted(block.statements ?? [])) {
+    if (!statementAllowed.has(stmt.keyword)) {
+      throw new Error(`v2 parse: ${block.keyword} section: unexpected ${stmt.keyword} declaration`);
+    }
+  }
+}
+
+function validateInitBlock(block) {
+  const allowed = new Set(["set", "spot", "ellipse", "region", "for"]);
+  for (const stmt of sorted(block.statements)) {
+    if (!allowed.has(stmt.keyword)) throw new Error(`v2 parse: ${block.keyword} ${block.id}: unknown action "${stmt.keyword}"`);
+  }
+}
+
+function validateCellLikeBlock(block) {
+  const allowed = new Set(["let", "set", "add", "when"]);
+  for (const stmt of sorted(block.statements)) {
+    if (block.keyword === "for" && stmt.keyword === "for") continue;
+    if (!allowed.has(stmt.keyword)) throw new Error(`v2 parse: ${block.keyword} body: unknown action "${stmt.keyword}"`);
+  }
+}
+
+function validatePaletteBlock(block) {
+  validateSectionBlock(block, [], ["stop"]);
+}
+
+function validateViewBlock(block) {
+  const allowed = new Set(["color", "let", "set", "when", "stop"]);
+  for (const stmt of sorted(block.statements)) {
+    if (!allowed.has(stmt.keyword)) throw new Error(`v2 parse: view ${block.id}: unknown declaration "${stmt.keyword}"`);
+  }
 }
 
 export function expressionCstToAst(node) {
@@ -190,7 +325,8 @@ export function metricCstToAst(stmt) {
   const parts = [...stmt.cleanText.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)].map((m) => m[0]);
   const id = parts[1] ?? null;
   const op = parts.find((word, index) => index > 1 && METRIC_OPS.has(word)) ?? null;
-  if (!id || !op) throw new Error("v2 CST projection: incomplete metric declaration");
+  if (!id) throw new Error("v2 CST projection: incomplete metric declaration");
+  if (!op) throw new Error(`v2 parse: metric ${id}: unknown reduction "${parts[2] ?? ""}"`);
   const predicateSpan = (stmt.expressions ?? []).find((expr) => expr.kind === "metricPredicate");
   const bodySpan = (stmt.expressions ?? []).find((expr) => expr.kind === "metricBody");
   return {
@@ -462,6 +598,11 @@ function numberAfter(text, prefixRe) {
 
 function firstExpression(stmt) {
   const expr = stmt.expressions?.[0]?.node;
+  if (!expr && !stmt.cleanText.includes("=") && ["let", "set", "add"].includes(stmt.keyword)) {
+    const match = new RegExp(String.raw`^\s*${stmt.keyword}\s+[A-Za-z_][A-Za-z0-9_]*\s*(.*)$`).exec(stmt.cleanText);
+    const tail = match?.[1]?.trim() ?? "";
+    if (tail) throw new Error(`v2 parse: expected "=" at "${tail}"`);
+  }
   if (!expr) throw new Error(`v2 CST projection: ${stmt.keyword} action is missing expression`);
   return expr;
 }

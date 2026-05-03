@@ -2,6 +2,7 @@ import {
   cellActionsCstToAst,
   expressionCstToAst,
   metricCstToAst,
+  recipeCstToAst,
   stageCstToAst,
 } from "./cst-to-ast-v2.mjs";
 import { parseDslCst } from "./cst-v2.mjs";
@@ -104,6 +105,62 @@ metric energy = sum cells { u * u + u@prev }
   assertEq(actual, expected);
 });
 
+test("strict CST projection rejects missing required recipe structure", () => {
+  assertStrictProjectionError(`
+substrate geodesic frequency 16
+field u: f32
+step { stage s { reads u; writes u; cell { set u = u } } }
+`, "recipe must declare");
+  assertStrictProjectionError(`
+recipe "Missing substrate"
+field u: f32
+step { stage s { reads u; writes u; cell { set u = u } } }
+`, "substrate");
+  assertStrictProjectionError(`
+recipe "Missing step"
+substrate geodesic frequency 16
+field u: f32
+`, "at least one stage");
+});
+
+test("strict CST projection rejects misplaced grouped declarations", () => {
+  assertStrictProjectionError(`
+recipe "Bad"
+substrate geodesic frequency 16
+field u: f32
+scenario blank { set u = 0 }
+step { stage s { reads u; writes u; cell { set u = u } } }
+`, "scenario");
+  assertStrictProjectionError(`
+recipe "Bad"
+substrate geodesic frequency 16
+field u: f32
+views { scenario blank { set u = 0 } }
+step { stage s { reads u; writes u; cell { set u = u } } }
+`, "views section");
+});
+
+test("strict CST projection rejects malformed stage bodies", () => {
+  assertStrictProjectionError(`
+recipe "Bad"
+substrate geodesic frequency 16
+field u: f32
+step { }
+`, "at least one stage");
+  assertStrictProjectionError(`
+recipe "Bad"
+substrate geodesic frequency 16
+field u: f32
+step { stage s { reads u; writes u } }
+`, "missing cell");
+  assertStrictProjectionError(`
+recipe "Bad"
+substrate geodesic frequency 16
+field u: f32
+step { stage s { reads u; writes u; diffuse u by 0.1 } }
+`, "no longer a stage primitive");
+});
+
 function assertProjectionParity(expr) {
   const source = recipeWithSetExpr(expr);
   const expected = firstSetExpr(parseV2(source));
@@ -130,4 +187,16 @@ step {
 
 function firstSetExpr(schema) {
   return schema.stages[0].body.statements[0].actions[0].expr;
+}
+
+function assertStrictProjectionError(source, expectedMessage) {
+  try {
+    recipeCstToAst(parseDslCst(source), { strict: true });
+  } catch (error) {
+    if (!String(error.message).includes(expectedMessage)) {
+      throw new Error(`expected error containing ${JSON.stringify(expectedMessage)}, got ${error.message}`);
+    }
+    return;
+  }
+  throw new Error(`expected strict CST projection error containing ${JSON.stringify(expectedMessage)}`);
 }
