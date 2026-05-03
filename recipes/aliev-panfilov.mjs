@@ -58,14 +58,24 @@ palette V_RAMP {
 view u "Membrane (u)"  { color ramp u range [0, 1]   palette U_RAMP }
 view v "Recovery (v)"  { color ramp v range [0, 2.5] palette V_RAMP }
 
+// CFL: the cubic excitation term has effective relaxation rate ~k.
+// Forward-Euler stability requires dt_eff·k < 2; defaults k=6, rate=10,
+// dt=1/60 give dt_eff·k = 10/60·6 = 1.0 — safely below the bound.
+// Cranking k past ~10 will start oscillating between u≈0 and u≈1
+// each tick; drop rate proportionally (k=8 wants rate≤7).
+//
+// Wave speed scales as √(D·k). With D=0.04, k=6, that's ~0.49 sim-time
+// units per radian — at rate=10 the wavefront crosses ~3 cells per
+// real-time tick, slow enough to read but fast enough to traverse the
+// sphere in ~10 wall-seconds.
 param simRateHz slider 0..360  step 1     default 60    label "SIM RATE"
-param rate      slider 1..120  step 1     default 30    label "RATE"
-param a         slider 0..0.3  step 0.005 default 0.05  label "a (THRESH)"
-param k         slider 0..16   step 0.1   default 8     label "k (KINETIC)"
+param rate      slider 1..30   step 1     default 10    label "RATE"
+param a         slider 0..0.3  step 0.005 default 0.10  label "a (THRESH)"
+param k         slider 0..12   step 0.1   default 6     label "k (KINETIC)"
 param eps0      slider 0..0.05 step 0.0005 default 0.002 label "ε₀"
 param mu1       slider 0..0.5  step 0.005 default 0.20  label "μ₁"
 param mu2       slider 0.05..1 step 0.01  default 0.30  label "μ₂"
-param diffusion slider 0..0.1  step 0.001 default 0.020 label "DIFF"
+param diffusion slider 0..0.2  step 0.002 default 0.040 label "DIFF"
 
 stamp shock "Defibrillator pulse" {
   spot u at brush.pos, radius=brush.r, amount=1
@@ -76,14 +86,22 @@ stamp pad "Refractory pad" {
 }
 
 scenario reentry "Spiral rotor seed (broken plane wave)" {
-  // Eastern half of sphere is depolarized; an equatorial band of
-  // refractory tissue on the same half blocks part of the wavefront.
-  // The break in the front evolves into a rotating spiral whose
-  // tip sits where the refractory shadow ends.
+  // Thin north-south wavefront travelling east, with a half-domain
+  // refractory block immediately ahead in the northern hemisphere.
+  // The southern half of the front propagates into clean tissue;
+  // the northern half hits refractory tissue and dies. The torn
+  // front bends into the killed region as v decays there, forming
+  // a phase singularity at the boundary — that's the spiral tip.
+  //
+  // Filling a large region with u=1 doesn't work — every cell starts
+  // refractory-recovering simultaneously and the whole patch
+  // collapses before any wavefront can spread. The trick is to seed
+  // a *gradient*: u high on a thin strip, v already high in the
+  // tissue you want the wave to die in.
   set u = 0
   set v = 0
-  region u at lonMin=-PI, lonMax=0, latMin=-PI/2, latMax=PI/2, amount=1
-  region v at lonMin=-PI, lonMax=0, latMin=-0.4, latMax=0.4,  amount=0.6
+  region u at lonMin=-0.4, lonMax=-0.2, latMin=-PI/2, latMax=PI/2, amount=1
+  region v at lonMin=-0.2, lonMax=0.6,  latMin=0,     latMax=PI/2, amount=1.0
 }
 
 scenario blank "Resting tissue" {
@@ -92,12 +110,13 @@ scenario blank "Resting tissue" {
 }
 
 scenario front "Plane wave (no break)" {
-  // A clean north-south plane wave sweeping eastward — no spiral
-  // forms; the wave just travels around the sphere and self-collides
-  // at the antipode.
+  // Clean north-south wavefront sweeping eastward — no spiral forms;
+  // the wave travels around the sphere and self-collides at the
+  // antipode. Same wavefront shape as REENTRY but without the
+  // refractory shadow that would tear it.
   set u = 0
   set v = 0
-  region u at lonMin=-0.2, lonMax=0.2, latMin=-PI/2, latMax=PI/2, amount=1
+  region u at lonMin=-0.4, lonMax=-0.2, latMin=-PI/2, latMax=PI/2, amount=1
 }
 
 scenario chaos "Random initial depolarization" {

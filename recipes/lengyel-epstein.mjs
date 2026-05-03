@@ -62,13 +62,21 @@ palette V_RAMP {
 view u "U (iodide)"   { color ramp u range [0, 8]  palette U_RAMP }
 view v "V (chlorite)" { color ramp v range [0, 16] palette V_RAMP }
 
-param simRateHz slider 0..360 step 1    default 60    label "SIM RATE"
-param rate      slider 1..200 step 1    default 80    label "RATE"
-param a         slider 0..30  step 0.5  default 12    label "a"
-param b         slider 0..2   step 0.01 default 0.4   label "b"
-param sigma     slider 1..200 step 1    default 50    label "σ (STIFF)"
+// CFL: the σ stiffness multiplies the inhibitor's whole right-hand
+// side, so the v-equation has eigenvalues O(σ·b). Forward-Euler
+// stability needs dt_eff·σ·b < 2; with dt = 1/60 and defaults
+// σ=10, b=0.4, rate=15 → dt_eff·σ·b = 15/60·10·0.4 = 1.0 — comfortable.
+//
+// Cranking σ past ~20 with rate=15 will start to push the integrator;
+// drop rate proportionally if you want to explore the stiff end of
+// the parameter space (σ=50, rate=4 still works).
+param simRateHz slider 0..360 step 1    default 60   label "SIM RATE"
+param rate      slider 1..60  step 1    default 15   label "RATE"
+param a         slider 0..30  step 0.5  default 12   label "a"
+param b         slider 0..2   step 0.01 default 0.4  label "b"
+param sigma     slider 1..50  step 0.5  default 10   label "σ (STIFF)"
 param Du        slider 0..0.3 step 0.005 default 0.05 label "Du"
-param Dv        slider 0..3   step 0.01  default 0.80 label "Dv"
+param Dv        slider 0..3   step 0.01  default 1.00 label "Dv"
 
 stamp pulse "Pulse U" {
   spot u at brush.pos, radius=brush.r, amount=2
