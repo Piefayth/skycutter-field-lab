@@ -51,6 +51,7 @@ export function compileWebGpuGeodesicStage(stage, dsl = {}) {
         field: statement.field,
         windU: statement.windU,
         windV: statement.windV,
+        wind: statement.wind,    // v2 vec2 form
         dt: statement.dt,
       });
     } else if (statement.type === "normalize") {
@@ -407,13 +408,25 @@ export function buildWebGpuGeodesicUniforms(layout, { dt = 0, frame = 0, cellCou
   return new Float32Array(values);
 }
 
+// Map field type → WGSL storage element type. Used by the cell shader
+// to emit `array<f32>` vs `array<vec2<f32>>` etc. for storage buffer
+// bindings, and to type the per-cell read locals.
+function wgslElemType(fieldType) {
+  if (fieldType === "vec2") return "vec2<f32>";
+  return "f32";
+}
+
 function compileCellShader({ stage, field, reads, prevReads = [], actions, layout, needsNeighbors = false, eventCounter = null }) {
-  const readBindings = reads.map((name, index) => `@group(0) @binding(${index}) var<storage, read> f_${name}: array<f32>;`);
+  const fieldTypes = layout.fieldTypes ?? {};
+  const typeOf = (name) => fieldTypes[name] ?? "f32";
+  const readBindings = reads.map((name, index) =>
+    `@group(0) @binding(${index}) var<storage, read> f_${name}: array<${wgslElemType(typeOf(name))}>;`,
+  );
   // Prev-read bindings sit between the regular reads and the output
   // binding so existing binding indices for params / positions /
   // neighbors / event-counter only need to shift by `prevReads.length`.
   const prevReadBindings = prevReads.map(
-    (name, index) => `@group(0) @binding(${reads.length + index}) var<storage, read> f_${name}_prev: array<f32>;`,
+    (name, index) => `@group(0) @binding(${reads.length + index}) var<storage, read> f_${name}_prev: array<${wgslElemType(typeOf(name))}>;`,
   );
   const outputBinding = reads.length + prevReads.length;
   const paramsBinding = outputBinding + 1;
@@ -421,7 +434,12 @@ function compileCellShader({ stage, field, reads, prevReads = [], actions, layou
   const neighborsBinding = outputBinding + 3;
   const neighborCountsBinding = outputBinding + 4;
   const eventCounterBinding = outputBinding + 3 + (needsNeighbors ? 2 : 0);
-  const readValues = reads.map((name) => `  let ${readVar(name)} = f_${name}[cell];`);
+  // Per-cell read locals carry an explicit type annotation so vec2
+  // fields don't get implicitly inferred as f32 (which would silently
+  // collapse to the .x component on use).
+  const readValues = reads.map((name) =>
+    `  let ${readVar(name)}: ${wgslElemType(typeOf(name))} = f_${name}[cell];`,
+  );
   const neighborBindings = needsNeighbors ? `
 @group(0) @binding(${neighborsBinding}) var<storage, read> neighbors: array<i32>;
 @group(0) @binding(${neighborCountsBinding}) var<storage, read> neighborCounts: array<u32>;
@@ -436,7 +454,11 @@ struct EventCounter {
   // emit their loops inline at the call site (see compileActions). The
   // previous `neighborMax_${name}` global helpers became dead.
   const neighborFns = "";
-  const initial = reads.includes(field) ? readVar(field) : "0.0";
+  // Initial value for the per-cell `outValue` accumulator. For vec2
+  // fields not in reads, default to vec2<f32>(0.0, 0.0); for f32, 0.0.
+  const fieldType = typeOf(field);
+  const zeroLiteral = fieldType === "vec2" ? "vec2<f32>(0.0, 0.0)" : "0.0";
+  const initial = reads.includes(field) ? readVar(field) : zeroLiteral;
   // The buffer layout includes the neighbor arrays whenever needsNeighbors
   // is true, but if the action body happens not to reference them in any
   // emitted statement (e.g. the loop is conditional on `when`-stripped
@@ -471,7 +493,7 @@ ${layout.planet.map((name) => `  planet_${name}: f32,`).join("\n")}
 
 ${readBindings.join("\n")}
 ${prevReadBindings.join("\n")}
-@group(0) @binding(${outputBinding}) var<storage, read_write> outputField: array<f32>;
+@group(0) @binding(${outputBinding}) var<storage, read_write> outputField: array<${wgslElemType(fieldType)}>;
 @group(0) @binding(${paramsBinding}) var<uniform> params: Params;
 @group(0) @binding(${positionsBinding}) var<storage, read> positions: array<f32>;
 ${neighborBindings}
@@ -561,10 +583,19 @@ ${indent(body, 2)}
 }
 
 function uniformLayout(dsl) {
+  // fieldTypes is consumed by compileCellShader to type its storage
+  // bindings (`array<f32>` vs `array<vec2<f32>>`) and the per-cell
+  // read locals. Defaults to f32 for any field missing from this map.
+  const fieldTypes = Object.fromEntries(
+    (dsl.fields ?? [])
+      .filter((decl) => decl?.name && decl.type)
+      .map((decl) => [decl.name, decl.type]),
+  );
   return {
     parameters: dsl.parameters ?? [],
     constants: dsl.constants ?? [],
     planet: Object.keys(dsl.planet ?? {}),
+    fieldTypes,
   };
 }
 
@@ -1088,6 +1119,16 @@ function compileCall(ast, ctx) {
     return `f_${arg.name}_prev[cell]`;
   }
   const args = ast.args.map((arg) => compileExpr(arg, ctx));
+  // Vector constructors. `vec2(x, y)` lowers to the WGSL constructor;
+  // future `vec3(x, y, z)` extends similarly. Catches a common authoring
+  // case before the generic math-fn path (which would error: vec2 is
+  // not in MATH_FUNCTIONS).
+  if (ast.callee.name === "vec2") {
+    if (args.length !== 2) {
+      throw new Error(`vec2(x, y) takes exactly 2 args; got ${args.length}`);
+    }
+    return `vec2<f32>(${args.join(", ")})`;
+  }
   switch (ast.callee.name) {
     case "cellNoise": {
       // 1-arg: natural sphere scale. 2-arg: scale-multiplied sphere coords.
@@ -1115,6 +1156,9 @@ function compileCall(ast, ctx) {
     case "pow":
     case "smoothstep":
     case "clamp":
+    case "length":
+      // WGSL `length` is polymorphic: scalars return abs, vectors
+      // return magnitude. Both work, so emit identically.
       return `${ast.callee.name}(${args.join(", ")})`;
     case "hypot":
       return `length(vec2<f32>(${args.join(", ")}))`;

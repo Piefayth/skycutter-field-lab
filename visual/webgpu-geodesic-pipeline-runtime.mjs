@@ -32,7 +32,17 @@ export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGri
   }
   const grid = providedGrid ?? createGeodesicGrid({ frequency: dsl.grid.frequency ?? 48 });
   const fieldNames = recipeFieldNames(dsl);
-  const runtime = await createWebGpuGeodesicRuntime({ grid, fieldNames });
+  // V2 typed fields: pass each declared field's type through to the
+  // runtime so storage buffers use the correct stride (f32 = 4
+  // bytes/cell, vec2 = 8). Unlisted fields default to f32 inside the
+  // runtime — covers `declared` fields that don't carry an explicit
+  // type annotation.
+  const fieldTypes = Object.fromEntries(
+    (dsl.fields ?? [])
+      .filter((decl) => decl?.name && decl.type)
+      .map((decl) => [decl.name, decl.type]),
+  );
+  const runtime = await createWebGpuGeodesicRuntime({ grid, fieldNames, fieldTypes });
   const { stages, eventCounters } = compileWebGpuGeodesicPipeline(dsl);
   const consts = Object.fromEntries((dsl.constants ?? []).map((decl) => [decl.name, decl.value]));
   const planet = dsl.planet ?? {};
@@ -148,6 +158,7 @@ export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGri
               field: pass.field,
               windU: pass.windU,
               windV: pass.windV,
+              wind: pass.wind,    // vec2 field path
               dt: evalUniformExpr(pass.dt, { params, consts, planet, dt, frame }),
             });
           } else if (pass.kind === "normalize") {

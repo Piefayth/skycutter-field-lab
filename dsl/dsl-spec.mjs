@@ -171,6 +171,27 @@ export const MATH_FUNCTIONS = [
     doc: "Wraps an angle (radians) into [-π, π]. Useful any time you accumulate phase that would otherwise grow unbounded — Kuramoto, XY model, active nematics, anywhere a `theta` keeps integrating `omega * dt`.",
     example: "set theta = wrapAngle(theta)",
   },
+  // Vector constructors. The compiler lowers these to WGSL native
+  // constructors; field types accept `vec2` declarations, expressions
+  // can build vec2 values, member access (`.x`, `.y`) reads components.
+  {
+    name: "vec2",
+    target: null,        // Compile-time WGSL emit, no JS counterpart.
+    arity: [2],
+    importNamespace: "core",
+    signature: "vec2(x, y)",
+    doc: "Constructs a vec2 value from two scalars. Pair with a `field name: vec2` declaration for vector-valued fields (wind components, slope direction, etc). Component access via `.x` / `.y`. WGSL-native arithmetic: vec2 + vec2, vec2 * scalar, etc.",
+    example: "field wind: vec2\nstage compute_wind {\n  reads pressure\n  writes wind\n  cell {\n    set wind = vec2(-grad_e, -grad_n) * strength\n  }\n}",
+  },
+  {
+    name: "length",
+    target: "Math.hypot", // JS-side fallback uses hypot for the scalar form.
+    arity: [1],
+    importNamespace: "core",
+    signature: "length(v)",
+    doc: "Vector magnitude. WGSL-native — works on vec2 / vec3. For scalars, use `abs`.",
+    example: "let speed = length(wind)",
+  },
 ];
 
 // ---------------------------------------------------------------------------

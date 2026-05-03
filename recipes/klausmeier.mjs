@@ -61,10 +61,9 @@ substrate geodesic frequency 64
 
 field n: f32
 field w: f32
-// Slope direction is set at scenario init and never written by stages.
-// Will become a single vec2 once v2 supports vector field types.
-field slopeU: f32
-field slopeV: f32
+// Slope direction as a vec2 — east in .x, north in .y. Set once per
+// scenario; the advect primitive reads it directly.
+field slope: vec2
 
 param simRateHz slider 0..360   step 1     default 60   label "SIM RATE"
 param rainfall  slider 0..4     step 0.01  default 1.80 label "RAINFALL a"
@@ -86,8 +85,7 @@ stamp irrigate "Add water" {
 }
 
 scenario bands "Tiger-bush bands" {
-  set slopeU = 1
-  set slopeV = 0
+  set slope = vec2(1, 0)
   set w = 1
   set n = 0
   for each cell {
@@ -98,8 +96,7 @@ scenario bands "Tiger-bush bands" {
 }
 
 scenario spots "Turing spots (no slope)" {
-  set slopeU = 0
-  set slopeV = 0
+  set slope = vec2(0, 0)
   set w = 1
   for each cell {
     set n = cellRand(11) * 0.15 + 0.05
@@ -107,8 +104,7 @@ scenario spots "Turing spots (no slope)" {
 }
 
 scenario desertEdge "Edge of vegetation" {
-  set slopeU = 1
-  set slopeV = 0
+  set slope = vec2(1, 0)
   set w = 1
   set n = 0
   for each cell {
@@ -119,12 +115,15 @@ scenario desertEdge "Edge of vegetation" {
 }
 
 step {
-  // Advection is a v2 legacy primitive (will become \`w@(self - vec(slopeU,
-  // slopeV) * dt)\` once continuous-position coordinate queries land).
+  // Advect carries the water field downhill along the slope vec2.
+  // Will eventually become \`w@(self - slope * dt)\` once continuous-
+  // position coordinate queries land — but right now \`advect\` is
+  // a real v2 stage primitive (it owns the semi-Lagrangian sample
+  // kernel that doesn't yet fold into a cell expression).
   stage waterFlow "Water advects downhill" {
-    reads w, slopeU, slopeV
+    reads w, slope
     writes w
-    advect w by slopeU, slopeV dt flowSpeed * dt * rate * 0.001
+    advect w by slope dt flowSpeed * dt * rate * 0.001
   }
 
   stage biomassDiffuse "Biomass spatial spread" {

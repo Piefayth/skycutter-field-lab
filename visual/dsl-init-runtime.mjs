@@ -1,6 +1,28 @@
 import { TAU, clamp, hashNoise, smoothstep, spatialNoise } from "../kernel/kernel.mjs";
 import { evalExpression } from "../dsl/expression-runtime.mjs";
 
+// Number of components per cell for FIELD in STATE. f32 fields hold one
+// scalar per cell; vec2 fields hold two. Derived from the typed-array
+// length / grid cell count — avoids needing a separate type registry.
+function fieldComponents(state, fieldName) {
+  const arr = state.fields?.[fieldName];
+  const cells = state.grid?.cells ?? 0;
+  if (!arr || cells === 0) return 1;
+  const components = arr.length / cells;
+  return components === 2 ? 2 : 1;
+}
+
+// Tagged vec2 value used inside the JS-side init evaluator. evalInitCall
+// returns this for `vec2(x, y)`; member access (`.x` / `.y`) reads the
+// components. Stays runtime-only — when written to a field, it's
+// expanded into two consecutive Float32 slots.
+function makeVec2(x, y) {
+  return { __vec2: true, x: Number(x), y: Number(y) };
+}
+function isVec2(v) {
+  return v && typeof v === "object" && v.__vec2 === true;
+}
+
 export function buildDslPresetDecls(presets, dsl, getParam) {
   return presets.map((preset) => ({
     id: preset.id,
@@ -52,7 +74,7 @@ function initContext(dsl, getParam) {
 
 function runPresetAction(state, action, cell) {
   if (action.type === "fill") {
-    fieldArray(state, action.field, "fill").fill(evalInitExpr(action.value, state, cell));
+    fillField(state, action.field, evalInitExpr(action.value, state, cell));
     return;
   }
   if (action.type === "spot") {
@@ -118,13 +140,15 @@ function runPresetCellActions(state, actions, cell) {
     } else if (action.type === "add") {
       const arr = fieldArray(state, action.field, "add");
       const value = evalInitExpr(action.expr, state, cell);
-      arr[cell.i] += value;
-      cell.field[action.field] = arr[cell.i];
+      const components = fieldComponents(state, action.field);
+      writeCellComponents(arr, cell.i, value, action.field, "add", components, "add");
+      cell.field[action.field] = readCellComponents(arr, cell.i, components);
     } else if (action.type === "set") {
       const arr = fieldArray(state, action.field, "set");
       const value = evalInitExpr(action.expr, state, cell);
-      arr[cell.i] = value;
-      cell.field[action.field] = value;
+      const components = fieldComponents(state, action.field);
+      writeCellComponents(arr, cell.i, value, action.field, "set", components, "set");
+      cell.field[action.field] = readCellComponents(arr, cell.i, components);
     } else if (action.type === "when") {
       if (evalInitExpr(action.condition, state, cell)) {
         runPresetCellActions(state, action.actions ?? [], {
@@ -135,6 +159,62 @@ function runPresetCellActions(state, actions, cell) {
     } else {
       throw new Error(`unknown preset cell action ${action.type}`);
     }
+  }
+}
+
+// Write a value into the cell's slot of a typed field.
+//   components === 1 (f32):
+//     value must be a number; arr[cellIdx] is set/added.
+//   components === 2 (vec2):
+//     value must be a vec2 (from `vec2(x, y)`); arr[cellIdx*2 ... +1]
+//     are set/added per-component.
+// `mode` is "set" or "add".
+function writeCellComponents(arr, cellIdx, value, fieldName, label, components, mode) {
+  if (components === 1) {
+    if (isVec2(value)) {
+      throw new Error(`${label} ${fieldName}: scalar field can't be assigned a vec2`);
+    }
+    if (mode === "add") arr[cellIdx] += Number(value);
+    else arr[cellIdx] = Number(value);
+    return;
+  }
+  // vec2
+  if (!isVec2(value)) {
+    throw new Error(`${label} ${fieldName}: vec2 field requires a vec2 value (use \`vec2(x, y)\`)`);
+  }
+  const base = cellIdx * 2;
+  if (mode === "add") {
+    arr[base + 0] += value.x;
+    arr[base + 1] += value.y;
+  } else {
+    arr[base + 0] = value.x;
+    arr[base + 1] = value.y;
+  }
+}
+
+function readCellComponents(arr, cellIdx, components) {
+  if (components === 1) return arr[cellIdx];
+  return makeVec2(arr[cellIdx * 2], arr[cellIdx * 2 + 1]);
+}
+
+// Fill every cell of FIELD with VALUE. Scalar / vec2 dispatch on the
+// field's actual width.
+function fillField(state, fieldName, value) {
+  const arr = fieldArray(state, fieldName, "fill");
+  const components = fieldComponents(state, fieldName);
+  if (components === 1) {
+    if (isVec2(value)) throw new Error(`fill ${fieldName}: scalar field can't be filled with a vec2`);
+    arr.fill(Number(value));
+    return;
+  }
+  if (!isVec2(value)) {
+    throw new Error(`fill ${fieldName}: vec2 field requires \`vec2(x, y)\` (got scalar)`);
+  }
+  const x = value.x;
+  const y = value.y;
+  for (let i = 0; i < arr.length; i += 2) {
+    arr[i + 0] = x;
+    arr[i + 1] = y;
   }
 }
 
@@ -170,7 +250,12 @@ function evalInitIdentifier(name, state, cell) {
   if (cell?.params && Object.hasOwn(cell.params, name)) return cell.params[name];
   if (cell?.field && Object.hasOwn(cell.field, name)) return cell.field[name];
   const arr = state.fields?.[name];
-  if (arr && cell) return arr[cell.i];
+  if (arr && cell) {
+    const components = fieldComponents(state, name);
+    return components === 2
+      ? makeVec2(arr[cell.i * 2], arr[cell.i * 2 + 1])
+      : arr[cell.i];
+  }
   throw new Error(`unknown init identifier ${name}`);
 }
 
@@ -187,6 +272,15 @@ function evalInitCall(name, args, cell) {
   if (name === "exp") return Math.exp(args[0]);
   if (name === "sqrt") return Math.sqrt(args[0]);
   if (name === "pow") return Math.pow(args[0], args[1]);
+  if (name === "vec2") {
+    if (args.length !== 2) throw new Error(`vec2(x, y) takes exactly 2 args; got ${args.length}`);
+    return makeVec2(args[0], args[1]);
+  }
+  if (name === "length") {
+    const v = args[0];
+    if (isVec2(v)) return Math.hypot(v.x, v.y);
+    return Math.abs(Number(v));
+  }
   if (name === "cellNoise") {
     const seed = args[0] ?? 0;
     const scale = args.length >= 2 ? args[1] : 1;
@@ -240,6 +334,15 @@ function addGeodesicSpot(state, fieldName, lon, lat, radius, amount) {
 
 function addGeodesicBlobAtVector(state, fieldName, center, radius, amount) {
   const field = fieldArray(state, fieldName, "spot");
+  const components = fieldComponents(state, fieldName);
+  if (components === 1 && isVec2(amount)) {
+    throw new Error(`spot ${fieldName}: scalar field can't take a vec2 amount`);
+  }
+  if (components === 2 && !isVec2(amount)) {
+    throw new Error(`spot ${fieldName}: vec2 field requires a vec2 amount (use \`vec2(x, y)\`)`);
+  }
+  const ax = components === 2 ? amount.x : Number(amount);
+  const ay = components === 2 ? amount.y : 0;
   const grid = geodesicGrid(state, "spot");
   const centerCell = nearestGeodesicCell(grid, center);
   const ringRadius = Math.max(1, Math.round(Math.abs(radius) / averageNeighborAngle(grid, centerCell)));
@@ -249,7 +352,14 @@ function addGeodesicBlobAtVector(state, fieldName, center, radius, amount) {
   for (let head = 0; head < queue.length; head++) {
     const { cell, depth } = queue[head];
     const t = depth / Math.max(1, ringRadius);
-    field[cell] += amount * Math.max(0, 1 - t * t);
+    const falloff = Math.max(0, 1 - t * t);
+    if (components === 1) {
+      field[cell] += ax * falloff;
+    } else {
+      const base = cell * 2;
+      field[base + 0] += ax * falloff;
+      field[base + 1] += ay * falloff;
+    }
     if (depth >= ringRadius) continue;
     const count = grid.neighborCounts[cell] ?? 0;
     for (let slot = 0; slot < count; slot++) {
@@ -307,6 +417,15 @@ function addGeodesicEllipseAtLonLat(state, fieldName, lon, lat, rx, ry, amount, 
 
 function addGeodesicEllipseAtVector(state, fieldName, center, rx, ry, amount, angle = 0) {
   const field = fieldArray(state, fieldName, "ellipse");
+  const components = fieldComponents(state, fieldName);
+  if (components === 1 && isVec2(amount)) {
+    throw new Error(`ellipse ${fieldName}: scalar field can't take a vec2 amount`);
+  }
+  if (components === 2 && !isVec2(amount)) {
+    throw new Error(`ellipse ${fieldName}: vec2 field requires a vec2 amount`);
+  }
+  const ax = components === 2 ? amount.x : Number(amount);
+  const ay = components === 2 ? amount.y : 0;
   const grid = geodesicGrid(state, "ellipse");
   const basis = tangentBasis(center);
   const sx = Math.max(0.0001, Math.abs(rx));
@@ -332,12 +451,27 @@ function addGeodesicEllipseAtVector(state, fieldName, center, rx, ry, amount, an
     const v = (-east * sa + south * ca) / sy;
     const g = Math.exp(-(u * u + v * v));
     if (g < 0.0001) continue;
-    field[cell] += amount * g;
+    if (components === 1) {
+      field[cell] += ax * g;
+    } else {
+      const base = cell * 2;
+      field[base + 0] += ax * g;
+      field[base + 1] += ay * g;
+    }
   }
 }
 
 function setGeodesicRegion(state, fieldName, lonMin, lonMax, latMin, latMax, amount) {
   const field = fieldArray(state, fieldName, "region");
+  const components = fieldComponents(state, fieldName);
+  if (components === 1 && isVec2(amount)) {
+    throw new Error(`region ${fieldName}: scalar field can't take a vec2 amount`);
+  }
+  if (components === 2 && !isVec2(amount)) {
+    throw new Error(`region ${fieldName}: vec2 field requires a vec2 amount`);
+  }
+  const ax = components === 2 ? amount.x : Number(amount);
+  const ay = components === 2 ? amount.y : 0;
   const grid = geodesicGrid(state, "region");
   const loLat = Math.min(latMin, latMax);
   const hiLat = Math.max(latMin, latMax);
@@ -347,7 +481,14 @@ function setGeodesicRegion(state, fieldName, lonMin, lonMax, latMin, latMax, amo
     const inLon = lonMin <= lonMax
       ? lon >= lonMin && lon <= lonMax
       : lon >= lonMin || lon <= lonMax;
-    if (inLon) field[cell] = amount;
+    if (!inLon) continue;
+    if (components === 1) {
+      field[cell] = ax;
+    } else {
+      const base = cell * 2;
+      field[base + 0] = ax;
+      field[base + 1] = ay;
+    }
   }
 }
 

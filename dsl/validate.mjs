@@ -438,8 +438,14 @@ function validateStatement(statement, stage, reads, writes, declares, visibleFie
     case "advect":
       requireImport(imports, "sim", "advect", stage.id);
       requireVisibleField(statement.field, visibleFields, stage.id, "advect field");
-      requireVisibleField(statement.windU, visibleFields, stage.id, "advect windU");
-      requireVisibleField(statement.windV, visibleFields, stage.id, "advect windV");
+      // Two surface forms: vec2 wind field (`statement.wind`) or two
+      // scalar windU/windV fields. The parser surfaces exactly one shape.
+      if (statement.wind) {
+        requireVisibleField(statement.wind, visibleFields, stage.id, "advect wind");
+      } else {
+        requireVisibleField(statement.windU, visibleFields, stage.id, "advect windU");
+        requireVisibleField(statement.windV, visibleFields, stage.id, "advect windV");
+      }
       requireWrite(statement.field, writes, stage.id);
       validateUniformExpr(statement.dt, `${stage.id} advect dt`, declaredParams, declaredConstants, declaredPlanet, imports);
       break;

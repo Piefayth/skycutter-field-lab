@@ -9,6 +9,19 @@
 const WORKGROUP_SIZE = 128;
 const PARAMS_BUFFER_SIZE = 4096;
 
+// Bytes per cell for each field type. f32 = 1 component × 4 bytes;
+// vec2 = 2 components × 4 bytes. Future vec3 will be 16 (WGSL pads
+// vec3 to vec4 alignment in storage buffers).
+const FIELD_TYPE_BYTES = {
+  f32: 4,
+  vec2: 8,
+};
+function fieldTypeBytes(type) {
+  const bytes = FIELD_TYPE_BYTES[type];
+  if (!bytes) throw new Error(`unsupported field type "${type}"`);
+  return bytes;
+}
+
 export function webgpuSupported() {
   if (!globalThis.navigator?.gpu) return { ok: false, reason: "navigator.gpu unavailable" };
   const hostname = globalThis.location?.hostname;
@@ -19,21 +32,25 @@ export function webgpuSupported() {
   return { ok: true, reason: "ok" };
 }
 
-export async function createWebGpuGeodesicRuntime({ grid, fieldNames = [] }) {
+export async function createWebGpuGeodesicRuntime({ grid, fieldNames = [], fieldTypes = {} }) {
   const support = webgpuSupported();
   if (!support.ok) throw new Error(`WebGPU unavailable: ${support.reason}`);
   const adapter = await navigator.gpu.requestAdapter();
   if (!adapter) throw new Error("WebGPU unavailable: no adapter");
   const device = await adapter.requestDevice();
-  return new WebGpuGeodesicRuntime({ device, grid, fieldNames });
+  return new WebGpuGeodesicRuntime({ device, grid, fieldNames, fieldTypes });
 }
 
 export class WebGpuGeodesicRuntime {
-  constructor({ device, grid, fieldNames = [] }) {
+  constructor({ device, grid, fieldNames = [], fieldTypes = {} }) {
     this.device = device;
     this.grid = grid;
     this.cellCount = grid.cellCount;
     this.dispatchCount = Math.ceil(this.cellCount / WORKGROUP_SIZE);
+    // fieldTypes: name → "f32" | "vec2". Defaults to f32 for unlisted
+    // names. Used by ensureField to size storage buffers correctly
+    // (f32 = 4 bytes/cell, vec2 = 8).
+    this.fieldTypes = fieldTypes;
     this.fields = new Map();
     this.eventCounters = new Map();
     this.pipelines = new Map();
@@ -46,8 +63,11 @@ export class WebGpuGeodesicRuntime {
       size: PARAMS_BUFFER_SIZE,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
+    // Sized to the largest possible field type (vec2 = 8 bytes/cell).
+    // Shared across all field readbacks; the readField call writes
+    // only as many bytes as the field actually uses.
     this.readbackBuffer = device.createBuffer({
-      size: this.byteLength,
+      size: alignTo(this.cellCount * fieldTypeBytes("vec2"), 4),
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     });
     this.eventCounterReadbackBuffer = device.createBuffer({
@@ -58,8 +78,19 @@ export class WebGpuGeodesicRuntime {
     for (const name of fieldNames) this.ensureField(name);
   }
 
+  // Default scalar (f32) byte length. For typed fields use
+  // `fieldByteLength(name)` which sizes by the field's actual type.
   get byteLength() {
     return alignTo(this.cellCount * 4, 4);
+  }
+
+  fieldByteLength(name) {
+    const type = this.fieldTypes[name] ?? "f32";
+    return alignTo(this.cellCount * fieldTypeBytes(type), 4);
+  }
+
+  fieldType(name) {
+    return this.fieldTypes[name] ?? "f32";
   }
 
   ensureField(name) {
@@ -68,10 +99,13 @@ export class WebGpuGeodesicRuntime {
     // Non-history fields use 2-buffer ping-pong: index toggles each
     // swap, current = buffers[index], next = buffers[1-index]. History
     // fields upgrade to a 3-buffer rotation in ensureHistory below.
+    const bytes = this.fieldByteLength(name);
     const entry = {
+      type: this.fieldType(name),
+      bytes,
       buffers: [
-        this.device.createBuffer({ size: this.byteLength, usage: fieldUsage() }),
-        this.device.createBuffer({ size: this.byteLength, usage: fieldUsage() }),
+        this.device.createBuffer({ size: bytes, usage: fieldUsage() }),
+        this.device.createBuffer({ size: bytes, usage: fieldUsage() }),
       ],
       history: false,
       index: 0,
@@ -101,7 +135,7 @@ export class WebGpuGeodesicRuntime {
     const field = this.ensureField(name);
     if (field.history) return field;
     field.buffers.push(
-      this.device.createBuffer({ size: this.byteLength, usage: fieldUsage() }),
+      this.device.createBuffer({ size: field.bytes, usage: fieldUsage() }),
     );
     field.history = true;
     field.prevIdx = 0;
@@ -189,7 +223,7 @@ export class WebGpuGeodesicRuntime {
       encoder.copyBufferToBuffer(
         field.buffers[field.currentIdx], 0,
         field.buffers[field.prevIdx], 0,
-        this.byteLength,
+        field.bytes,
       );
       didCopy = true;
     }
@@ -200,12 +234,16 @@ export class WebGpuGeodesicRuntime {
     for (const name of names) this.uploadField(name, state.fields[name]);
   }
 
-  async readField(name, out = new Float32Array(this.cellCount)) {
+  async readField(name, out) {
+    const field = this.ensureField(name);
+    const components = field.bytes / 4 / this.cellCount; // 1 for f32, 2 for vec2
+    const totalFloats = this.cellCount * components;
+    if (!out) out = new Float32Array(totalFloats);
     const encoder = this.device.createCommandEncoder();
-    encoder.copyBufferToBuffer(this.currentBuffer(name), 0, this.readbackBuffer, 0, this.cellCount * 4);
+    encoder.copyBufferToBuffer(this.currentBuffer(name), 0, this.readbackBuffer, 0, field.bytes);
     this.device.queue.submit([encoder.finish()]);
     await this.readbackBuffer.mapAsync(GPUMapMode.READ);
-    out.set(new Float32Array(this.readbackBuffer.getMappedRange(), 0, this.cellCount));
+    out.set(new Float32Array(this.readbackBuffer.getMappedRange(), 0, totalFloats));
     this.readbackBuffer.unmap();
     return out;
   }
@@ -323,7 +361,15 @@ export class WebGpuGeodesicRuntime {
     if (lift) this.runLift({ windU, windV, lift });
   }
 
-  runAdvect({ field, windU, windV, dt }) {
+  runAdvect({ field, windU, windV, wind, dt }) {
+    // Two binding shapes:
+    //   - legacy: two scalar wind fields (windU, windV).
+    //   - v2 vec2: a single vec2 wind field that bundles east/north.
+    // The kernels are functionally identical; the bindings + sample
+    // path differ. v2 recipes use the vec2 form via
+    // `advect FIELD by WINDVEC dt EXPR`; v1 recipes (weather) keep the
+    // two-scalar `advect FIELD by U, V dt EXPR`.
+    if (wind) return this.runAdvectVec2({ field, wind, dt });
     const pipeline = this.pipeline("advect", ADVECT_WGSL);
     this.writeUniforms(new Float32Array([dt, this.cellCount, 0, 0]));
     const bindGroup = this.device.createBindGroup({
@@ -337,6 +383,25 @@ export class WebGpuGeodesicRuntime {
         { binding: 5, resource: { buffer: this.neighborCountsBuffer } },
         { binding: 6, resource: { buffer: this.positionsBuffer } },
         { binding: 7, resource: { buffer: this.paramsBuffer } },
+      ],
+    });
+    this.dispatch(pipeline, bindGroup);
+    this.swap(field);
+  }
+
+  runAdvectVec2({ field, wind, dt }) {
+    const pipeline = this.pipeline("advectVec2", ADVECT_VEC2_WGSL);
+    this.writeUniforms(new Float32Array([dt, this.cellCount, 0, 0]));
+    const bindGroup = this.device.createBindGroup({
+      layout: pipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: this.currentBuffer(field) } },
+        { binding: 1, resource: { buffer: this.currentBuffer(wind) } },
+        { binding: 2, resource: { buffer: this.nextBuffer(field) } },
+        { binding: 3, resource: { buffer: this.neighborsBuffer } },
+        { binding: 4, resource: { buffer: this.neighborCountsBuffer } },
+        { binding: 5, resource: { buffer: this.positionsBuffer } },
+        { binding: 6, resource: { buffer: this.paramsBuffer } },
       ],
     });
     this.dispatch(pipeline, bindGroup);
@@ -655,6 +720,69 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     divergence = divergence + dot(neighborVelocity - centerVelocity, tangent) / len2;
   }
   liftField[cell] = clamp(-(divergence / f32(count)) * 0.7, -1.0, 1.0);
+}
+`;
+
+// Vec2 variant of the advect kernel — single wind buffer storing east
+// (.x) and north (.y) components per cell. Identical math to
+// ADVECT_WGSL, just with different bindings + sample path.
+const ADVECT_VEC2_WGSL = `
+struct Params {
+  dt: f32,
+  cellCount: f32,
+  pad0: f32,
+  pad1: f32,
+};
+
+@group(0) @binding(0) var<storage, read> inputField: array<f32>;
+@group(0) @binding(1) var<storage, read> windField: array<vec2<f32>>;
+@group(0) @binding(2) var<storage, read_write> outputField: array<f32>;
+@group(0) @binding(3) var<storage, read> neighbors: array<i32>;
+@group(0) @binding(4) var<storage, read> neighborCounts: array<u32>;
+@group(0) @binding(5) var<storage, read> positions: array<f32>;
+@group(0) @binding(6) var<uniform> params: Params;
+
+fn position(cell: u32) -> vec3<f32> {
+  let offset = cell * 3u;
+  return vec3<f32>(positions[offset + 0u], positions[offset + 1u], positions[offset + 2u]);
+}
+
+fn eastBasis(p: vec3<f32>) -> vec3<f32> {
+  let e = vec3<f32>(-p.z, 0.0, p.x);
+  let len = length(e);
+  if (len < 0.0001) {
+    return vec3<f32>(1.0, 0.0, 0.0);
+  }
+  return e / len;
+}
+
+@compute @workgroup_size(${WORKGROUP_SIZE})
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let cell = id.x;
+  if (cell >= u32(params.cellCount)) {
+    return;
+  }
+  let p = position(cell);
+  let east = eastBasis(p);
+  let north = normalize(cross(p, east));
+  let w = windField[cell];
+  let velocity = east * w.x + north * w.y;
+  let back = normalize(p - velocity * params.dt * 15.0);
+  var weightSum = 0.0;
+  var valueSum = 0.0;
+  let selfD2 = max(0.000001, 2.0 * (1.0 - dot(back, p)));
+  let selfWeight = 1.0 / (selfD2 * selfD2);
+  weightSum = weightSum + selfWeight;
+  valueSum = valueSum + inputField[cell] * selfWeight;
+  let count = neighborCounts[cell];
+  for (var slot = 0u; slot < count; slot = slot + 1u) {
+    let neighbor = u32(neighbors[cell * 6u + slot]);
+    let d2 = max(0.000001, 2.0 * (1.0 - dot(back, position(neighbor))));
+    let weight = 1.0 / (d2 * d2);
+    weightSum = weightSum + weight;
+    valueSum = valueSum + inputField[neighbor] * weight;
+  }
+  outputField[cell] = valueSum / weightSum;
 }
 `;
 

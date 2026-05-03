@@ -52,15 +52,25 @@ export function createState({ fields } = {}) {
 // ownership). Called by recipes.mjs's `applyRecipe()` immediately after
 // dynamic-importing the recipe.
 //
+// Component count for a field type. f32 is 1 component per cell; vec2
+// is 2; future vec3 will be 3 (with 1 word of WGSL padding handled at
+// the GPU layer, not here). Used by the kernel state allocator and by
+// any consumer that needs the typed-array length.
+function fieldComponents(type) {
+  if (type === "vec2") return 2;
+  return 1; // f32 default
+}
+
 // `fields` is an array of declarations: either bare strings (`"A"`) or
-// objects (`{ name: "A", default: 0.2 }`).
+// objects (`{ name: "A", type: "f32"|"vec2", default: 0.2 }`).
 export function reallocateState(state, { fields = [] } = {}) {
   const cells = state.grid?.cells ?? DEFAULT_CELL_COUNT;
   state.fields = {};
   for (const decl of fields) {
     const name = typeof decl === "string" ? decl : decl?.name;
     if (!name) continue;
-    const arr = new Float32Array(cells);
+    const type = typeof decl === "object" ? (decl.type ?? "f32") : "f32";
+    const arr = new Float32Array(cells * fieldComponents(type));
     const dflt = typeof decl === "object" ? Number(decl.default) : 0;
     if (Number.isFinite(dflt) && dflt !== 0) arr.fill(dflt);
     state.fields[name] = arr;
@@ -80,7 +90,8 @@ export function addField(state, decl) {
   const name = typeof decl === "string" ? decl : decl?.name;
   if (!name || state.fields[name]) return;
   const cells = state.grid?.cells ?? DEFAULT_CELL_COUNT;
-  const arr = new Float32Array(cells);
+  const type = typeof decl === "object" ? (decl.type ?? "f32") : "f32";
+  const arr = new Float32Array(cells * fieldComponents(type));
   const dflt = typeof decl === "object" ? Number(decl.default) : 0;
   if (Number.isFinite(dflt) && dflt !== 0) arr.fill(dflt);
   state.fields[name] = arr;

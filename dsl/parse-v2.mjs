@@ -307,8 +307,8 @@ function parseField(ctx) {
   if (!["f32", "vec2", "vec3", "u32"].includes(type)) {
     throw new Error(`v2 parse: unknown field type "${type}" (allowed: f32, vec2, vec3, u32)`);
   }
-  if (type !== "f32") {
-    throw new Error(`v2 parse: field type "${type}" is reserved but not yet implemented; use f32`);
+  if (type === "vec3" || type === "u32") {
+    throw new Error(`v2 parse: field type "${type}" is reserved but not yet implemented; use f32 or vec2`);
   }
   // Optional `derived` annotation.
   skipInlineWs(ctx);
@@ -662,15 +662,26 @@ function parseStagePrimitive(ctx, stageId) {
     return { type: "wind", pressure, windU, windV, lift, strength };
   }
   if (kw === "advect") {
+    // Two surface forms:
+    //   advect FIELD by WINDVEC dt EXPR        — vec2 wind field (v2 idiom)
+    //   advect FIELD by U, V dt EXPR           — two scalar fields
+    // The disambiguator is the comma after the first wind field name.
     consumeKeyword(ctx, "advect");
     const field = readIdent(ctx, "advect field");
     consumeKeyword(ctx, "by");
-    const windU = readIdent(ctx, "advect windU");
-    consumeChar(ctx, ",");
-    const windV = readIdent(ctx, "advect windV");
+    const firstWind = readIdent(ctx, "advect wind field");
+    skipInlineWs(ctx);
+    if (ctx.source[ctx.i] === ",") {
+      ctx.i++;
+      const windV = readIdent(ctx, "advect windV");
+      consumeKeyword(ctx, "dt");
+      const dt = parseExpressionUntilLine(ctx);
+      return { type: "advect", field, windU: firstWind, windV, dt };
+    }
+    // Single vec2 wind field.
     consumeKeyword(ctx, "dt");
     const dt = parseExpressionUntilLine(ctx);
-    return { type: "advect", field, windU, windV, dt };
+    return { type: "advect", field, wind: firstWind, dt };
   }
   throw new Error(`v2 parse: stage ${stageId}: unknown stage primitive "${kw}"`);
 }

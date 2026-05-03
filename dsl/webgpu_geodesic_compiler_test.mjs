@@ -295,7 +295,7 @@ stage mark "Mark" {
   assert(pass.source.includes("var nr_0: f32 = -1.0e38;"), "max accumulator initialized to -infinity");
   assert(pass.source.includes("let nr_0_n: u32 = u32(neighbors[cell * 6u + nr_0_slot]);"), "neighbor index resolved once per slot");
   assert(pass.source.includes("let n: f32 = f_W[nr_0_n];"), "binding read from neighbor index");
-  assert(pass.source.includes("let v_W = f_W[cell];"), "read variable should avoid W constant collision");
+  assert(pass.source.includes("let v_W: f32 = f_W[cell];"), "read variable should avoid W constant collision");
 });
 
 test("weather cell stages compile to WebGPU geodesic WGSL", () => {
@@ -579,6 +579,38 @@ stage step "Step" {
     threw && threw.includes("cannot be written by clamp"),
     `expected non-cell-write error; got: ${threw}`,
   );
+});
+
+test("vec2 field emits array<vec2<f32>> bindings + typed read locals", async () => {
+  // Use the v2 path so vec2 field types and the vec2 builtin are wired
+  // through the modern stack — the v1 parser doesn't have typed field
+  // syntax and the v1 validator namespace-gates `vec2` differently.
+  const { compileV2 } = await import("./compile-v2.mjs");
+  const recipe = compileV2(`
+recipe "Vec"
+substrate geodesic frequency 16
+field pressure: f32
+field wind: vec2
+
+step {
+  stage compute "Compute wind" {
+    reads pressure
+    writes wind
+    cell {
+      set wind = vec2(pressure, pressure)
+    }
+  }
+}
+`);
+  const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
+  assert(pass.source.includes("var<storage, read> f_pressure: array<f32>"),
+    "pressure binding stays array<f32>");
+  assert(pass.source.includes("var<storage, read_write> outputField: array<vec2<f32>>"),
+    "wind output binding becomes array<vec2<f32>>");
+  assert(pass.source.includes("var outValue = vec2<f32>(0.0, 0.0)"),
+    "outValue inits as vec2<f32>(0.0, 0.0) for vec2 fields not in reads");
+  assert(pass.source.includes("vec2<f32>(v_pressure, v_pressure)"),
+    "vec2(...) call lowers to WGSL native constructor");
 });
 
 test("WGSL compiler emits f_<name>_prev binding for prev() reads", () => {
