@@ -82,6 +82,16 @@ test("CST annotates expression spans and expected cursor zones", () => {
   assertEq(expectedAt(cst, SOURCE.indexOf("u + lap")), ["expression"]);
 });
 
+test("CST expression spans record identifiers, coord reads, and reduction binders", () => {
+  const cst = parseDslCst(SOURCE);
+  const letStmt = statementAt(cst, SOURCE.indexOf("let lap"));
+  const expr = letStmt.expressions[0];
+  assertEq(expr.coordReads.map((read) => `${read.field}@${read.coord}`), ["u@n"]);
+  assertEq(expr.reductions.map((reduction) => `${reduction.op}:${reduction.binder}`), ["sum:n"]);
+  const ctx = cursorContextAt(cst, SOURCE.indexOf("u@n - u"));
+  assert(ctx.symbols.some((symbol) => symbol.kind === "binder" && symbol.name === "n"));
+});
+
 test("CST is tolerant of unclosed blocks", () => {
   const cst = parseDslCst("step {\\n  stage s {\\n    reads u\\n");
   assertEq(cst.errors.map((e) => e.type), ["UnclosedBlock", "UnclosedBlock"]);

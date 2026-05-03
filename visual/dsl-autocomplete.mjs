@@ -163,6 +163,7 @@ function roleToCmType(role) {
     case "source":
     case "declared":  return "variable";
     case "local":     return "variable";
+    case "binder":    return "variable";
     case "param":
     case "const":
     case "palette":
@@ -176,6 +177,7 @@ function declaredBoost(role) {
     case "field":
     case "param":     return 9;
     case "local":     return 10;
+    case "binder":    return 10;
     case "const":
     case "palette":
     case "planet":
@@ -303,6 +305,7 @@ function declaredFromContext(ctx, doc) {
     else if (symbol.kind === "const") out.push({ name: symbol.name, role: "const" });
     else if (symbol.kind === "palette") out.push({ name: symbol.name, role: "palette" });
     else if (symbol.kind === "local") out.push({ name: symbol.name, role: "local" });
+    else if (symbol.kind === "binder") out.push({ name: symbol.name, role: "binder" });
   }
   return out;
 }

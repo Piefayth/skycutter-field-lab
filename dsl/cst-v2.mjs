@@ -339,6 +339,7 @@ function annotateStatement(stmt) {
       to: base + to,
       text: stmt.text.slice(from, to),
     };
+    annotateExpression(expr);
     stmt.expressions.push(expr);
     addZone(from, to, "expression", kind);
   };
@@ -483,6 +484,81 @@ function firstPositive(values) {
   return Math.min(...values.filter((v) => Number.isFinite(v) && v >= 0));
 }
 
+function annotateExpression(expr) {
+  const text = expr.text;
+  const base = expr.from;
+  expr.tokens = expressionTokens(text, base);
+  expr.identifiers = expr.tokens.filter((token) => token.kind === "identifier");
+  expr.coordReads = coordReadsInExpression(text, base);
+  expr.reductions = reductionsInExpression(text, base);
+}
+
+function expressionTokens(text, base) {
+  const tokens = [];
+  const re = /\b[A-Za-z_][A-Za-z0-9_]*\b|(?:\d+\.\d+|\.\d+|\d+)|[@+\-*/%=<>!&|.,?:()[\]{}]/g;
+  for (const match of text.matchAll(re)) {
+    const value = match[0];
+    const from = base + match.index;
+    const kind = /^[A-Za-z_]/.test(value)
+      ? "identifier"
+      : /^\d|\./.test(value)
+        ? "number"
+        : "punct";
+    tokens.push({ type: "Token", kind, value, from, to: from + value.length });
+  }
+  return tokens;
+}
+
+function coordReadsInExpression(text, base) {
+  const reads = [];
+  for (const match of text.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\s*@\s*([A-Za-z_][A-Za-z0-9_]*)\b/g)) {
+    reads.push({
+      type: "CoordReadSpan",
+      field: match[1],
+      coord: match[2],
+      from: base + match.index,
+      to: base + match.index + match[0].length,
+      fieldFrom: base + match.index + match[0].indexOf(match[1]),
+      coordFrom: base + match.index + match[0].lastIndexOf(match[2]),
+    });
+  }
+  return reads;
+}
+
+function reductionsInExpression(text, base) {
+  const out = [];
+  const re = /\b(sum|mean|max|min)\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+neighbors\s*\{/g;
+  for (const match of text.matchAll(re)) {
+    const bodyOpenRel = match.index + match[0].length - 1;
+    const bodyCloseRel = findMatchingBraceInText(text, bodyOpenRel);
+    const binderOffset = match[0].indexOf(match[2]);
+    out.push({
+      type: "ReductionSpan",
+      op: match[1],
+      binder: match[2],
+      from: base + match.index,
+      to: base + (bodyCloseRel >= 0 ? bodyCloseRel + 1 : text.length),
+      binderFrom: base + match.index + binderOffset,
+      binderTo: base + match.index + binderOffset + match[2].length,
+      bodyFrom: base + bodyOpenRel + 1,
+      bodyTo: base + (bodyCloseRel >= 0 ? bodyCloseRel : text.length),
+    });
+  }
+  return out;
+}
+
+function findMatchingBraceInText(text, openRel) {
+  let depth = 0;
+  for (let i = openRel; i < text.length; i++) {
+    if (text[i] === "{") depth++;
+    else if (text[i] === "}") {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
 function computeLineRanges(source) {
   const ranges = [];
   let from = 0;
@@ -562,9 +638,8 @@ function namesFromSymbols(symbols) {
 }
 
 function visibleSymbolsAt(cst, pos) {
-  // First cut: recipe-scope declarations plus prior let-locals in the
-  // current block. Reduction binders need expression CST coverage and are
-  // intentionally left for the next parser slice.
+  // Recipe-scope declarations plus prior let-locals in the current block and
+  // active reduction binders inside expression bodies.
   const symbols = [...(cst?.symbols ?? [])].filter((symbol) => symbol.from <= pos);
   const currentBlock = blockStackAt(cst, pos, { knownOnly: false }).at(-1) ?? cst?.root;
   for (const stmt of currentBlock?.statements ?? []) {
@@ -580,6 +655,26 @@ function visibleSymbolsAt(cst, pos) {
       statement: stmt,
       block: currentBlock,
     });
+  }
+  for (const stmt of cst?.statements ?? []) {
+    for (const expr of stmt.expressions ?? []) {
+      for (const reduction of expr.reductions ?? []) {
+        if (reduction.bodyFrom <= pos && pos <= reduction.bodyTo) {
+          symbols.push({
+            type: "Symbol",
+            kind: "binder",
+            bucket: "locals",
+            name: reduction.binder,
+            from: reduction.binderFrom,
+            to: reduction.binderTo,
+            statement: stmt,
+            expression: expr,
+            reduction,
+            block: stmt.block,
+          });
+        }
+      }
+    }
   }
   return symbols;
 }
