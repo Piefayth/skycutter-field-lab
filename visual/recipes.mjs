@@ -566,7 +566,13 @@ export function initRecipes({
     const node = document.querySelector(`.lab-section[data-section="${sectionId}"]`);
     if (!node) return;
     node.classList.toggle("lab-section--locked", locked);
-    if (locked) node.classList.add("lab-section--collapsed");
+    // Lock implies collapse (the body is hidden anyway). Unlock
+    // implies UN-collapse so a recipe-with-parameters shows its
+    // parameters open by default — without this, switching from a
+    // no-params recipe (e.g. `blank`) to a recipe with parameters
+    // left the section in the collapsed state set by the previous
+    // recipe and the user had to manually expand it every time.
+    node.classList.toggle("lab-section--collapsed", locked);
   }
 
   // -----------------------------------------------------------------------

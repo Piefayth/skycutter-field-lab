@@ -429,17 +429,29 @@ function typeOfCall(ast, locals, ctx, label) {
   // cell-evaluable expression (lifted to an inline statement block
   // by emitDifferentialOnExpression). Both forms validate the
   // argument's *type*: gradient wants f32, divergence wants vec2.
+  // Expression args additionally have to be free of let-bound
+  // locals — the lift evaluates the expression at every neighbor,
+  // and a local would resolve to its cell-uniform value at every
+  // neighbor (silently wrong stencil result). If you need an
+  // intermediate, promote it to a derived field or inline the
+  // expression directly.
   if (name === GRADIENT_BUILTIN) {
     if (args.length !== 1) {
       throwTypeError(`${label}: gradient(...) expects 1 argument, got ${args.length}`);
     }
     if (args[0].type === "Identifier") {
-      const fname = args[0].name;
-      const ftype = ctx.fieldTypes.get(fname);
+      // Bare-field form. Identifier could be a local (rejected) or
+      // a declared field (the only sensible form).
+      const idName = args[0].name;
+      if (locals.has(idName)) {
+        throwTypeError(stencilLocalsError(label, "gradient", idName));
+      }
+      const ftype = ctx.fieldTypes.get(idName);
       if (ftype === "vec2") {
-        throwTypeError(`${label}: gradient(${fname}) — gradient is only defined on scalar (f32) fields`);
+        throwTypeError(`${label}: gradient(${idName}) — gradient is only defined on scalar (f32) fields`);
       }
     } else {
+      assertNoLocalsInStencilArg(args[0], locals, label, "gradient");
       const argType = typeOfExpr(args[0], locals, ctx, label);
       if (argType !== "f32" && argType !== "unknown") {
         throwTypeError(`${label}: gradient(...) expects a scalar (f32) argument, got ${argType}`);
@@ -452,12 +464,16 @@ function typeOfCall(ast, locals, ctx, label) {
       throwTypeError(`${label}: divergence(...) expects 1 argument, got ${args.length}`);
     }
     if (args[0].type === "Identifier") {
-      const fname = args[0].name;
-      const ftype = ctx.fieldTypes.get(fname);
+      const idName = args[0].name;
+      if (locals.has(idName)) {
+        throwTypeError(stencilLocalsError(label, "divergence", idName));
+      }
+      const ftype = ctx.fieldTypes.get(idName);
       if (ftype && ftype !== "vec2") {
-        throwTypeError(`${label}: divergence(${fname}) — divergence is only defined on vec2 fields`);
+        throwTypeError(`${label}: divergence(${idName}) — divergence is only defined on vec2 fields`);
       }
     } else {
+      assertNoLocalsInStencilArg(args[0], locals, label, "divergence");
       const argType = typeOfExpr(args[0], locals, ctx, label);
       if (argType !== "vec2" && argType !== "unknown") {
         throwTypeError(`${label}: divergence(...) expects a vec2 argument, got ${argType}`);
@@ -540,6 +556,42 @@ function typeOfNeighborReduce(ast, locals, ctx, label) {
 
 function throwTypeError(message) {
   throw new Error(message);
+}
+
+// Stencil-arg validation: gradient(...) and divergence(...) get
+// evaluated at every neighbor of the cell, so any free identifier
+// inside the argument expression has to make sense at neighbor
+// positions too. Local `let`-bindings DON'T — they're computed once
+// per cell and would resolve to the cell-uniform value at every
+// neighbor evaluation, silently producing the wrong stencil result.
+// Walk the argument expression and reject any reference to a name
+// that's currently in the locals scope.
+function assertNoLocalsInStencilArg(ast, locals, label, opName) {
+  if (!ast || typeof ast !== "object") return;
+  if (ast.type === "Identifier" && locals.has(ast.name)) {
+    throwTypeError(stencilLocalsError(label, opName, ast.name));
+  }
+  // NeighborReduce introduces its own bindings — stop descending so
+  // we don't complain about the reduction's own coord name. (And the
+  // user shouldn't be putting reductions inside stencil args anyway;
+  // that has its own validity issues.)
+  if (ast.type === "NeighborReduce") return;
+  for (const k of Object.keys(ast)) {
+    const v = ast[k];
+    if (Array.isArray(v)) v.forEach((c) => assertNoLocalsInStencilArg(c, locals, label, opName));
+    else if (v && typeof v === "object") assertNoLocalsInStencilArg(v, locals, label, opName);
+  }
+}
+
+function stencilLocalsError(label, opName, localName) {
+  return (
+    `${label}: ${opName}(...) argument references local "${localName}". ` +
+    `Locals are computed once per cell, so they'd evaluate to the same ` +
+    `value at every neighbor and produce a wrong stencil result. Either ` +
+    `inline the expression directly into ${opName}(...), or promote ` +
+    `"${localName}" to a derived field with its own stage so the value ` +
+    `exists per-neighbor.`
+  );
 }
 
 // Best-effort source-string for an expression — used to build helpful

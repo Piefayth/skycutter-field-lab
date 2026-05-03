@@ -75,10 +75,10 @@
       "summary": "Quantum particle on a sphere — i·dψ/dt = Ĥψ in real and imaginary parts, symplectic leapfrog time stepping. Default scenario releases an eastward Gaussian wavepacket at the equator; watch it disperse, traverse the sphere, hit its own backside, and fill the surface with self-interference caustics. Paint potentials with the WELL or BARRIER stamps to bend the wave."
     },
     {
-      "id": "conway-life",
-      "name": "Hex Life (example)",
-      "path": "recipes/conway-life.mjs",
-      "summary": "Cellular automaton on a sphere with a parameterized birth/survival rule. State is `u32` (alive=1, dead=0); each tick counts alive neighbors and applies B[birthMin..birthMax]/S[surviveMin..surviveMax]. Defaults to B2/S34 (sustains on 6-neighbor hex tilings, unlike vanilla Conway B3/S23 which dies fast). First v2 recipe to demo integer-storage field types."
+      "id": "cyclic-ca",
+      "name": "Cyclic CA (example)",
+      "path": "recipes/cyclic-ca.mjs",
+      "summary": "Each cell holds a state in [0, N). Every tick, if any neighbor is at state (self+1) mod N, the cell advances. Random initial state → self-organized rotating spirals across the whole sphere. The 12 pentagonal cells pin spiral cores, giving the dynamics a permanent topological signature of the substrate. First v2 demo of u32 field types."
     }
   ]
 }

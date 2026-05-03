@@ -699,6 +699,68 @@ step {
 // evaluator; some cell-stage grammar constructs aren't implemented there).
 // -----------------------------------------------------------------------------
 
+test("type-check rejects let-local inside gradient(...) arg", () => {
+  // gradient(local) silently produced wrong WGSL (the local
+  // resolved to its cell-uniform value at every neighbor in the
+  // emit). Validator now catches at recipe load.
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field c: f32
+field grad_out: vec2
+step {
+  stage s "S" {
+    reads c
+    writes grad_out
+    cell {
+      let mu = c * c - c
+      set grad_out = gradient(mu)
+    }
+  }
+}
+`), "references local \"mu\"");
+});
+
+test("type-check rejects let-local inside divergence(...) arg", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field wind: vec2
+field d: f32
+step {
+  stage s "S" {
+    reads wind
+    writes d
+    cell {
+      let local_w = wind
+      set d = divergence(local_w)
+    }
+  }
+}
+`), "references local \"local_w\"");
+});
+
+test("type-check accepts inline expression in gradient (no locals)", () => {
+  // The non-local form of the same intent — inlining the local —
+  // compiles fine. This is the suggested workaround in the error
+  // message.
+  compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field c: f32
+field grad_out: vec2
+step {
+  stage s "S" {
+    reads c
+    writes grad_out
+    cell {
+      set grad_out = gradient(c * c - c)
+    }
+  }
+}
+`);
+});
+
 test("for-each-cell where filter parses + type-checks as bool", () => {
   // Sanity: bool predicate compiles. Body runs only on the matching
   // cells; the runtime test for that semantics is at the integration
