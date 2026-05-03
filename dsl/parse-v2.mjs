@@ -176,14 +176,34 @@ function parseColorTriple(ctx, label) {
 function parseRangeLiteral(ctx) {
   consumeChar(ctx, "[");
   skipInlineWs(ctx);
-  const lo = readNumber(ctx);
+  const lo = parseRangeBound(ctx);
   skipInlineWs(ctx);
   consumeChar(ctx, ",");
   skipInlineWs(ctx);
-  const hi = readNumber(ctx);
+  const hi = parseRangeBound(ctx);
   skipInlineWs(ctx);
   consumeChar(ctx, "]");
   return [lo, hi];
+}
+
+// Range bounds accept either a numeric literal or a constant identifier
+// (a `const NAME = ...` declared earlier in the recipe, or `PI` / `TAU`).
+// Identifiers parse as `{ __ref: name }` placeholders that the validator
+// resolves once the full schema is known — handles the case where a
+// recipe references a const declared later in source order.
+function parseRangeBound(ctx) {
+  skipInlineWs(ctx);
+  const ch = ctx.source[ctx.i];
+  if (ch === "-" || ch === "+" || ch === "." || (ch >= "0" && ch <= "9")) {
+    return readNumber(ctx);
+  }
+  const tail = ctx.source.slice(ctx.i);
+  const m = IDENT_RE.exec(tail);
+  if (!m) {
+    throw new Error(`v2 parse: range bound expected number or identifier, got "${tail.slice(0, 24)}"`);
+  }
+  ctx.i += m[0].length;
+  return { __ref: m[0] };
 }
 
 // Top-level view declaration. Always block form — anticipates future

@@ -19,7 +19,7 @@ import { setControlHandlers } from "./controls.mjs";
 import { formModal, confirmModal } from "./modal.mjs";
 import { showToast } from "./toast.mjs";
 import { compileV2 as compileDsl } from "../dsl/compile-v2.mjs";
-import { gray, materializeView } from "../prims/colorers.mjs";
+import { materializeView, rampFromStops } from "../prims/colorers.mjs";
 import {
   downloadRecipeSnapshot,
   loadSavedRecipes,
@@ -774,10 +774,19 @@ function reconcileRecipeViews(recipe) {
     return !Array.isArray(required) || required.every((name) => fields.has(name));
   });
   if (compatible.length > 0) return compatible;
+  // Fallback only fires when a recipe has no views the renderer can
+  // satisfy — e.g. an in-progress recipe whose views were just
+  // edited out. Synthesize a black-to-white ramp per field so the
+  // user has *something* to render against. Authored recipes always
+  // declare their own `view` blocks and never hit this path.
+  const stops = [
+    { t: 0, color: [0, 0, 0] },
+    { t: 1, color: [255, 255, 255] },
+  ];
   return [...fields].map((name) => ({
     id: name,
     label: name.toUpperCase(),
-    color: gray(name),
+    color: rampFromStops(name, stops, [0, 1]),
   }));
 }
 
@@ -858,12 +867,12 @@ function applyDslRecipeMetadata(recipe, dsl, getParam) {
     ];
   }
 
-  // V2 DSL render decls: `palette` / `view` / `overlay`. If the
-  // recipe declares any `view` blocks in DSL, those are the
-  // authoritative views — the JS-export `views[]` is ignored. (We
-  // don't merge — a recipe that mixes both would be ambiguous.) If
-  // no DSL views exist, the JS-export views[] stays in effect for
-  // back-compat. Same fallback shape for overlays.
+  // V2 DSL render decls: `palette` / `view` / `overlay`. The DSL is
+  // the only authoring surface — the recipe module's `export const
+  // views` is no longer consulted. (`reconcileRecipeViews` later
+  // synthesizes a fallback grayscale ramp per field if a recipe
+  // somehow loads with zero compatible views, but every shipped
+  // recipe declares its own `view` blocks.)
   const dslViews = dsl.views ?? [];
   const dslPalettes = dsl.palettes ?? [];
   if (dslViews.length > 0) {

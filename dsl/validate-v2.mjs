@@ -79,7 +79,21 @@ function validateRenderDecls(schema) {
   const palettes = schema.palettes ?? [];
   const views = schema.views ?? [];
   const overlays = schema.overlays ?? [];
-  const fieldNames = new Set((schema.fields ?? []).map((d) => d.name));
+  const fieldDecls = schema.fields ?? [];
+  const fieldTypes = new Map(fieldDecls.map((d) => [d.name, d.type ?? "f32"]));
+  const fieldNames = new Set(fieldDecls.map((d) => d.name));
+  const paramNames = new Set((schema.parameters ?? schema.params ?? []).map((d) => d.name));
+  // Const map for resolving `range [PI, TAU]` / `range [a, b]` against
+  // numeric values. PI / TAU are predeclared; any user-declared
+  // `const NAME = VALUE` joins them.
+  const constValues = new Map([
+    ["PI", Math.PI],
+    ["TAU", Math.PI * 2],
+  ]);
+  for (const c of schema.constants ?? []) {
+    if (typeof c.value === "number") constValues.set(c.name, c.value);
+  }
+  const constNames = new Set(constValues.keys());
 
   // Palettes — uniqueness + stop shape.
   const paletteSet = new Set();
@@ -98,6 +112,11 @@ function validateRenderDecls(schema) {
       if (!fieldNames.has(v.field)) {
         throw new Error(`view "${v.id}": references unknown field "${v.field}"`);
       }
+      // Resolve const-identifier range bounds (parser emits {__ref})
+      // against the const map before validating the numeric pair.
+      // Mutates v.range in place so downstream materialization sees a
+      // plain [number, number].
+      v.range = resolveRangeBounds(v.range, constValues, `view "${v.id}" range`);
       validateRange(v.range, `view "${v.id}" range`);
     }
     if (v.kind === "ramp") {
@@ -112,7 +131,9 @@ function validateRenderDecls(schema) {
       }
     }
     if (v.kind === "expr") {
-      validateExprViewBody(v.actions ?? [], `view "${v.id}" expr`);
+      validateExprViewBody(v.actions ?? [], `view "${v.id}" expr`, {
+        fieldTypes, paramNames, constNames,
+      });
     }
   }
 
@@ -125,6 +146,23 @@ function validateRenderDecls(schema) {
     if (overlaySet.has(o.name)) throw new Error(`overlay "${o.name}" declared more than once`);
     overlaySet.add(o.name);
   }
+}
+
+function resolveRangeBounds(range, constValues, label) {
+  if (!Array.isArray(range) || range.length !== 2) {
+    throw new Error(`${label}: range must be [a, b]`);
+  }
+  return range.map((bound) => {
+    if (typeof bound === "number") return bound;
+    if (bound && typeof bound === "object" && typeof bound.__ref === "string") {
+      const value = constValues.get(bound.__ref);
+      if (typeof value !== "number") {
+        throw new Error(`${label}: unknown constant "${bound.__ref}" — use a numeric literal, a declared \`const\`, or PI / TAU`);
+      }
+      return value;
+    }
+    throw new Error(`${label}: range bound must be a number or constant identifier`);
+  });
 }
 
 function validateStops(stops, label) {
@@ -160,79 +198,198 @@ function validateRange(range, label) {
   }
 }
 
-// view's `color expr { ... }` body has tighter restrictions than a
-// stage cell. View bodies run at render time on the JS side (no GPU
-// stencil topology), so neighbor reductions, history reads, and
-// stencil ops are all out. The body's only legal effects are setting
-// the three color outputs.
-function validateExprViewBody(actions, label, seenOutputs = null) {
-  const isRoot = seenOutputs === null;
-  const outputs = seenOutputs ?? new Set();
-  for (const action of actions ?? []) {
-    if (!action) continue;
-    if (action.type === "let") {
-      if (action.expr) walkViewExprForBannedOps(action.expr, label);
-      continue;
+// `color expr { ... }` body validation.
+//
+// View bodies run at render time on a tiny JS evaluator (see
+// prims/colorers.mjs::evalViewExpr), so the legal surface is much
+// narrower than a stage cell:
+//   - identifiers must resolve at validate time to a declared field
+//     (scalar f32 — vec2 only via .x/.y/length()), declared param,
+//     declared const, declared `let` local, or PI / TAU / true / false
+//   - calls are restricted to the runtime's whitelist (math fns +
+//     length); gradient/divergence/cellNoise/etc. are stage-only
+//   - no @prev / @n / @upstream coord reads, no neighbor reductions,
+//     no field writes
+//   - only `set red`, `set green`, `set blue` (no `add`, no other
+//     targets); reading a channel is illegal too
+//   - red, green, AND blue must each be assigned at the body's root
+//     level (not inside a `when`); an unassigned channel is the
+//     runtime's silent default-to-zero, which means a "view that
+//     forgot blue" reads as a believable greenish-yellow until you
+//     squint. Surface that as an error at recipe load.
+//
+// If a recipe legitimately wants to default a channel, it can write
+// `set blue = 0` at the root and override inside a `when`. Trivial,
+// and the explicit form documents intent.
+const VIEW_EXPR_CALLS = new Set([
+  "clamp", "min", "max", "abs", "sin", "cos", "asin", "atan2",
+  "exp", "sqrt", "pow", "hypot", "wrapAngle", "smoothstep", "length",
+]);
+
+function validateExprViewBody(actions, label, scope) {
+  // Locals are tracked as a flat set — matches the runtime, which
+  // shares `cell.locals` across nested when-blocks. A `let` declared
+  // inside a falsy `when` therefore "exists" in the static view but
+  // evaluates to undefined at runtime; we accept that footgun for now
+  // (matches stage cells, which the WGSL emitter doesn't scope either).
+  const locals = new Set();
+  const rootOutputs = new Set();
+  walkActions(actions, label, /* isRoot */ true);
+  for (const channel of VIEW_EXPR_OUTPUTS) {
+    if (!rootOutputs.has(channel)) {
+      throw new Error(
+        `${label}: missing top-level \`set ${channel} = ...\`. ` +
+        `red, green, and blue must each be assigned at the body's root ` +
+        `(assignments inside \`when\` don't count — pair them with a ` +
+        `default \`set ${channel} = ...\` at the root).`,
+      );
     }
-    if (action.type === "set" || action.type === "add") {
-      if (!VIEW_EXPR_OUTPUTS.has(action.field)) {
-        throw new Error(`${label}: only \`red\` / \`green\` / \`blue\` are valid \`set\` targets in a view body — saw "${action.field}"`);
+  }
+
+  function walkActions(actions, ctxLabel, isRoot) {
+    for (const action of actions ?? []) {
+      if (!action) continue;
+      if (action.type === "let") {
+        if (action.expr) walkExpr(action.expr, ctxLabel);
+        // Add after walking — `let x = x + 1` should NOT see the new x
+        // (matches stage cell semantics, where the WGSL emit also
+        // sees the rhs before the binding).
+        locals.add(action.name);
+        continue;
+      }
+      if (action.type === "set") {
+        if (!VIEW_EXPR_OUTPUTS.has(action.field)) {
+          throw new Error(`${ctxLabel}: only \`red\` / \`green\` / \`blue\` are valid \`set\` targets in a view body — saw "${action.field}"`);
+        }
+        if (isRoot) rootOutputs.add(action.field);
+        if (action.expr) walkExpr(action.expr, ctxLabel);
+        continue;
       }
       if (action.type === "add") {
-        throw new Error(`${label}: use \`set ${action.field} = ...\`, not \`add\` (view bodies are pure render expressions, no per-tick accumulation)`);
+        throw new Error(`${ctxLabel}: use \`set ${action.field} = ...\`, not \`add\` — view bodies are pure render expressions, no per-tick accumulation`);
       }
-      outputs.add(action.field);
-      if (action.expr) walkViewExprForBannedOps(action.expr, label);
-      continue;
+      if (action.type === "when") {
+        if (action.condition) walkExpr(action.condition, ctxLabel);
+        walkActions(action.actions ?? [], `${ctxLabel} when`, /* isRoot */ false);
+        continue;
+      }
+      throw new Error(`${ctxLabel}: unsupported action "${action.type}" in view body`);
     }
-    if (action.type === "when") {
-      if (action.condition) walkViewExprForBannedOps(action.condition, label);
-      validateExprViewBody(action.actions ?? [], `${label} when`, outputs);
-      continue;
-    }
-    throw new Error(`${label}: unsupported action "${action.type}" in view body`);
   }
-  if (isRoot) {
-    for (const channel of VIEW_EXPR_OUTPUTS) {
-      if (!outputs.has(channel)) {
-        throw new Error(`${label}: missing \`set ${channel} = ...\` (every code path must assign red, green, and blue)`);
+
+  function walkExpr(ast, ctxLabel) {
+    if (!ast || typeof ast !== "object") return;
+
+    if (ast.type === "CoordRead") {
+      const kind = ast.coord?.kind ?? "?";
+      throw new Error(
+        `${ctxLabel}: \`${ast.field}@${kind}\` is not allowed in a view body. ` +
+        `Views are evaluated at render time without GPU stencil topology — ` +
+        `read the field at the cell directly with bare \`${ast.field}\`.`,
+      );
+    }
+    if (ast.type === "NeighborReduce") {
+      throw new Error(
+        `${ctxLabel}: neighbor reductions aren't allowed in a view body. ` +
+        `Promote the reduction to a derived field, then read the derived ` +
+        `field at this cell.`,
+      );
+    }
+
+    if (ast.type === "Identifier") {
+      const name = ast.name;
+      if (name === "true" || name === "false") return;
+      if (locals.has(name)) return;
+      if (scope.paramNames.has(name)) return;
+      if (scope.constNames.has(name)) return;
+      if (VIEW_EXPR_OUTPUTS.has(name)) {
+        throw new Error(
+          `${ctxLabel}: \`${name}\` is an output channel — write it with ` +
+          `\`set ${name} = ...\`; reading it isn't supported. ` +
+          `(Stash the value in a \`let\` if you need to refer to it.)`,
+        );
       }
+      if (scope.fieldTypes.has(name)) {
+        const ftype = scope.fieldTypes.get(name);
+        if (ftype === "vec2") {
+          throw new Error(
+            `${ctxLabel}: vec2 field \`${name}\` can't be used as a scalar — ` +
+            `read \`${name}.x\` / \`${name}.y\` or \`length(${name})\`.`,
+          );
+        }
+        return;
+      }
+      throw new Error(
+        `${ctxLabel}: unknown identifier "${name}" — view bodies see fields, ` +
+        `params, consts, PI/TAU, true/false, and \`let\`-locals declared ` +
+        `above. Per-cell builtins like \`lon\`/\`lat\`/\`frame\`/\`cellRand\` ` +
+        `are stage-only; promote them to a derived field if you need them ` +
+        `at render time.`,
+      );
+    }
+
+    if (ast.type === "Member") {
+      // Only `.x` / `.y` on a vec2 field is meaningful.
+      const obj = ast.object;
+      if (obj?.type === "Identifier" && scope.fieldTypes.get(obj.name) === "vec2") {
+        if (ast.prop !== "x" && ast.prop !== "y") {
+          throw new Error(`${ctxLabel}: vec2 \`${obj.name}\` only has \`.x\` and \`.y\` — saw \`.${ast.prop}\``);
+        }
+        return;
+      }
+      throw new Error(`${ctxLabel}: \`.${ast.prop}\` access is only valid on a vec2 field — got ${describeAstSource(obj)}`);
+    }
+
+    if (ast.type === "Call") {
+      const name = ast.callee?.type === "Identifier" ? ast.callee.name : null;
+      if (!name) throw new Error(`${ctxLabel}: only direct named calls are allowed in a view body`);
+      if (name === "gradient" || name === "divergence") {
+        throw new Error(
+          `${ctxLabel}: \`${name}(...)\` is a tangent-frame stencil and only ` +
+          `works inside a stage cell. Compute it there into a derived ` +
+          `field and read the derived field here.`,
+        );
+      }
+      if (name === "vec2" || name === "vec3" || name === "vec4") {
+        throw new Error(
+          `${ctxLabel}: \`${name}(...)\` constructors aren't supported in view bodies — ` +
+          `views produce a scalar RGB output, not vector intermediates.`,
+        );
+      }
+      if (!VIEW_EXPR_CALLS.has(name)) {
+        throw new Error(
+          `${ctxLabel}: unsupported call \`${name}(...)\` in a view body. ` +
+          `Allowed: ${[...VIEW_EXPR_CALLS].sort().join(", ")}.`,
+        );
+      }
+      // `length(vec2-field)` is the one place a vec2-typed expression
+      // is legal in a view body — the runtime's evalViewCall handles
+      // both vec2 and scalar args. Allow a bare vec2 field as the
+      // single argument; everything else routes through the strict
+      // walk where vec2 used as a scalar is rejected.
+      if (name === "length") {
+        const arg = ast.args?.[0];
+        if (arg?.type === "Identifier" && scope.fieldTypes.get(arg.name) === "vec2") {
+          return;
+        }
+      }
+      for (const arg of ast.args ?? []) walkExpr(arg, ctxLabel);
+      return;
+    }
+
+    // Generic recursion for {Number, Unary, Binary, Conditional, ...}
+    for (const k of Object.keys(ast)) {
+      const v = ast[k];
+      if (Array.isArray(v)) v.forEach((c) => walkExpr(c, ctxLabel));
+      else if (v && typeof v === "object") walkExpr(v, ctxLabel);
     }
   }
 }
 
-function walkViewExprForBannedOps(ast, label) {
-  if (!ast || typeof ast !== "object") return;
-  if (ast.type === "CoordRead") {
-    const kind = ast.coord?.kind ?? "?";
-    throw new Error(
-      `${label}: \`${ast.field}@${kind}\` is not allowed in a view body. ` +
-      `Views are evaluated at render time without GPU stencil topology — ` +
-      `read the field at the cell directly with bare \`${ast.field}\`.`,
-    );
-  }
-  if (ast.type === "NeighborReduce") {
-    throw new Error(
-      `${label}: neighbor reductions aren't allowed in a view body. ` +
-      `Promote the reduction to a derived field, then read the derived ` +
-      `field at this cell.`,
-    );
-  }
-  if (ast.type === "Call" && ast.callee?.type === "Identifier") {
-    const name = ast.callee.name;
-    if (name === "gradient" || name === "divergence") {
-      throw new Error(
-        `${label}: \`${name}(...)\` is a tangent-frame stencil and only ` +
-        `works inside a stage cell. Compute it there into a derived ` +
-        `field and read the derived field here.`,
-      );
-    }
-  }
-  for (const k of Object.keys(ast)) {
-    const v = ast[k];
-    if (Array.isArray(v)) v.forEach((c) => walkViewExprForBannedOps(c, label));
-    else if (v && typeof v === "object") walkViewExprForBannedOps(v, label);
-  }
+function describeAstSource(ast) {
+  if (!ast) return "?";
+  if (ast.type === "Identifier") return `\`${ast.name}\``;
+  return ast.type ?? "expression";
 }
 
 // =============================================================================

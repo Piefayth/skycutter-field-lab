@@ -666,6 +666,12 @@ export const DECL_DIRECTIVES = [
     doc: "Scalar reduction over post-step state. op ∈ {sum, max, min, mean, count}. count takes only a `where` clause (no body — the body is implicitly 1). Other reductions take a body expression. The body uses the full cell-expression grammar (math fns, neighbor reductions, coordinate queries). Computed on the GPU each tick (per-cell pass + workgroup tree-reduce); async readback populates the metrics panel via `dsl:<id>` sources.",
     example: "metric peak   = max cells { abs(u) }\nmetric active = count cells where abs(u) > 0.1\nmetric energy = sum cells { 0.5*v*v + 0.5*c*c * sum n in neighbors { (u@n - u)*(u@n - u) } }",
   },
+  {
+    name: "overlay",
+    signature: "overlay NAME",
+    doc: "Toggleable visual overlay. One declaration per name. Currently only `grid` is registered (the geodesic graticule); future overlays (poles, lat/lon ticks, vector glyphs) will register the same way. Recipes don't author overlay content — they pick from the registered set.",
+    example: "overlay grid",
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -695,6 +701,18 @@ export const BLOCK_KEYWORDS = [
     signature: 'stamp NAME [\"Label\"] { ... }',
     doc: "A paint-brush composite. User clicks the canvas with this stamp selected to apply. Body uses init verbs scoped to the click position via `brush.pos` and `brush.r`. Stamps cannot write `derived` fields. Stamps deliberately leave the prev buffer of history fields untouched — the asymmetry between current and prev is the launch velocity.",
     example: 'stamp ripple "Drop ripple" {\n  spot u at brush.pos, radius=brush.r, amount=1\n}',
+  },
+  {
+    name: "palette",
+    signature: "palette NAME { stop T color [R, G, B] ... }",
+    doc: "A reusable color ramp. Body lists ≥2 stops in ascending t order, with t in [0, 1] and r/g/b each in [0, 255]. Referenced by name from `view` blocks. Palettes are render-only — never read inside stage cells.",
+    example: 'palette HEAT {\n  stop 0    color [12, 14, 30]\n  stop 0.5  color [240, 110, 40]\n  stop 1    color [255, 220, 90]\n}',
+  },
+  {
+    name: "view",
+    signature: 'view ID [\"Label\"] { color KIND ... }',
+    doc: "A render selectable from the panel. Body has exactly one `color KIND ...` clause. Three kinds: `color ramp FIELD range [a, b] palette NAME` (linear lookup against a named palette or inline `stops { ... }`); `color wheel FIELD range [a, b]` (cyclic HSV cycle, range defaults to [0, 2π]); `color expr { let ... ; set red = ... ; set green = ... ; set blue = ... }` (per-cell programmable RGB — must assign all three channels at the body's root level). Range bounds accept numbers, declared `const`s, or PI / TAU.",
+    example: 'view temperature "Temperature" {\n  color ramp T range [-0.8, 1.5] palette TEMP\n}\nview phase "Phase" {\n  color wheel theta range [0, TAU]\n}\nview composite "S / I / R" {\n  color expr {\n    let total = max(S + I + R, 0.000001)\n    set red   = (S / total) * 255\n    set green = (I / total) * 255\n    set blue  = (R / total) * 255\n  }\n}',
   },
 ];
 
@@ -776,6 +794,15 @@ export const MODIFIERS = [
   { name: "label",    signature: 'param ... label "DISPLAY LABEL"',              doc: "Display label shown next to the control in the side panel." },
   { name: "step",     signature: "param ... step EXPR",                          doc: "Slider step size — granularity of slider drags. Also the v2 tick-block keyword (`step { ... }`); context disambiguates." },
   { name: "default",  signature: "param ... default V",                          doc: "Default value at recipe load. Numeric for sliders, true/false for toggles." },
+  // View-block modifiers — interior of `view ... { ... }`.
+  { name: "color",    signature: "color KIND ...",                                doc: "Introduces the color clause inside a view. Followed by a `ramp` / `wheel` / `expr` kind plus its arguments." },
+  { name: "ramp",     signature: "color ramp FIELD range [a, b] palette NAME",   doc: "Color a scalar field by remapping `range [a, b]` into a palette lookup. Range bounds accept numbers, consts, or PI / TAU. Palette is either a named `palette NAME` or an inline `stops { ... }` block." },
+  { name: "wheel",    signature: "color wheel FIELD [range [a, b]]",             doc: "Color a scalar field by treating it as an angle and rotating through HSV. Range defaults to `[0, 2π]`. Use for phase / orientation / cyclic-state fields." },
+  { name: "expr",     signature: "color expr { ... set red ... set green ... set blue ... }", doc: "Programmable per-cell RGB. Body uses the cell-expression grammar minus stage-only ops (no @prev/@n/@upstream, no neighbor reductions, no gradient/divergence). Must assign red, green, AND blue at the body's root level — `when`-conditional assignments aren't enough on their own." },
+  { name: "range",    signature: "range [LO, HI]",                                doc: "Inclusive range for ramp/wheel mapping. Bounds accept numeric literals, declared consts, or PI / TAU. LO must differ from HI." },
+  { name: "stops",    signature: "stops { stop T color [R, G, B] ... }",         doc: "Inline stop list — alternative to a named palette inside a `color ramp ... stops { ... }` clause. Same shape rules as a top-level `palette` block." },
+  { name: "stop",     signature: "stop T color [R, G, B]",                       doc: "A single palette stop. T is in [0, 1] (ascending across the palette); colors are in 0..255." },
+  { name: "palette",  signature: "color ramp FIELD ... palette NAME",            doc: "Inside a `color ramp` clause, references a top-level `palette NAME` declaration. Mutually exclusive with inline `stops { ... }`." },
 ];
 
 // ---------------------------------------------------------------------------
@@ -811,6 +838,9 @@ export const GRID_KEYWORDS = [
 const DUAL_USE_NAMES = new Set([
   // `step` opens a tick-block AND modifies a param slider's granularity.
   "step",
+  // `palette` declares a top-level palette block AND appears as a
+  // modifier inside a `color ramp ... palette NAME` clause.
+  "palette",
 ]);
 
 (function assertSpecUnique() {

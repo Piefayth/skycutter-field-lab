@@ -791,7 +791,133 @@ view custom "Custom" {
   }
 }
 step { stage s { reads h; writes h; cell { set h = h } } }
-`), "missing `set blue");
+`), "missing top-level `set blue");
+});
+
+test("render DSL: expr view rejects red/green/blue assigned only inside when", () => {
+  // Default-black silently masking a missing assignment was the
+  // pre-fix bug — the validator counted assignments inside any branch.
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field h: f32
+view custom "Custom" {
+  color expr {
+    set red = 100
+    set green = 200
+    when h > 0 {
+      set blue = 250
+    }
+  }
+}
+step { stage s { reads h; writes h; cell { set h = h } } }
+`), "missing top-level `set blue");
+});
+
+test("render DSL: expr view rejects unknown identifier", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field h: f32
+view custom "Custom" {
+  color expr {
+    set red   = nope
+    set green = 0
+    set blue  = 0
+  }
+}
+step { stage s { reads h; writes h; cell { set h = h } } }
+`), 'unknown identifier "nope"');
+});
+
+test("render DSL: expr view rejects vec2 field used as scalar", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field h: f32
+field wind: vec2
+view custom "Custom" {
+  color expr {
+    set red   = wind * 100
+    set green = 0
+    set blue  = 0
+  }
+}
+step { stage s { reads h, wind; writes h; cell { set h = h + wind.x } } }
+`), "vec2 field `wind` can't be used as a scalar");
+});
+
+test("render DSL: expr view rejects unsupported call", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field h: f32
+view custom "Custom" {
+  color expr {
+    set red   = cellNoise(7)
+    set green = 0
+    set blue  = 0
+  }
+}
+step { stage s { reads h; writes h; cell { set h = h } } }
+`), "unsupported call `cellNoise");
+});
+
+test("render DSL: expr view accepts allowed math + length(vec2)", () => {
+  // Positive case: every legal feature exercised in one body.
+  const out = compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+const SCALE = 2.5
+field h: f32
+field wind: vec2
+param k slider 0..1 step 0.01 default 0.5 label "K"
+view custom "Custom" {
+  color expr {
+    let mag = length(wind)
+    let lit = clamp(h * SCALE * k, 0, 1)
+    set red   = sin(lit * PI) * 200 + 40
+    set green = mag * 100 + wind.x * 5
+    set blue  = sqrt(max(lit, 0)) * 255
+  }
+}
+step { stage s { reads h, wind; writes h; cell { set h = h + wind.x } } }
+`);
+  assert(out.dsl.views[0].kind === "expr", "expr view present");
+});
+
+test("render DSL: range accepts const identifiers + PI / TAU", () => {
+  const out = compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+const HOT = 1.5
+field theta: f32
+field h: f32
+view phaseV "Phase" {
+  color wheel theta range [0, TAU]
+}
+view heatV "Heat" {
+  color ramp h range [0, HOT] stops {
+    stop 0 color [0, 0, 0]
+    stop 1 color [255, 80, 0]
+  }
+}
+step { stage s { reads h, theta; writes h; cell { set h = h } } }
+`);
+  assert(out.dsl.views[0].range[1] > 6 && out.dsl.views[0].range[1] < 7, "TAU resolved");
+  assert(out.dsl.views[1].range[1] === 1.5, "HOT resolved");
+});
+
+test("render DSL: range rejects unknown const identifier", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field theta: f32
+view phaseV "Phase" {
+  color wheel theta range [0, NOPE]
+}
+step { stage s { reads theta; writes theta; cell { set theta = theta } } }
+`), 'unknown constant "NOPE"');
 });
 
 test("render DSL: expr view rejects non-channel set targets", () => {
