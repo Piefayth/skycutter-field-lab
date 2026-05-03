@@ -796,6 +796,9 @@ function exprUsesNeighborReduce(expr) {
       && (expr.callee.name === "gradient" || expr.callee.name === "divergence")) {
     return true;
   }
+  // Continuous-position CoordRead (`field@upstream(...)`) gathers from
+  // self + neighbors via inverse-distance weighting.
+  if (expr.type === "CoordRead" && expr.coord?.kind === "upstream") return true;
   if (expr.type === "Member") return exprUsesNeighborReduce(expr.object);
   if (expr.type === "Unary") return exprUsesNeighborReduce(expr.expr);
   if (expr.type === "Binary") return exprUsesNeighborReduce(expr.left) || exprUsesNeighborReduce(expr.right);
@@ -811,7 +814,8 @@ function exprUsesNeighborReduce(expr) {
 function emitStencilHelpers(ctx, typeOf) {
   const grads = [...(ctx.usedGradients ?? [])];
   const divs = [...(ctx.usedDivergences ?? [])];
-  if (grads.length === 0 && divs.length === 0) return "";
+  const upstreams = [...(ctx.usedUpstreams ?? [])];
+  if (grads.length === 0 && divs.length === 0 && upstreams.length === 0) return "";
   const blocks = [];
   // Shared helpers — emitted once per shader.
   blocks.push(`
@@ -852,6 +856,46 @@ fn _gradient_${fieldName}(cell: u32) -> vec2<f32> {
   }
   acc = acc / f32(count);
   return vec2<f32>(dot(acc, east), dot(acc, north));
+}
+`.trim());
+  }
+  // Per-(field) upstream-sample helper — semi-Lagrangian backwards
+  // walk along the cell's tangent velocity. Input field must be f32
+  // for now (vec2 sampling is a future extension).
+  for (const fieldName of upstreams) {
+    const t = typeOf(fieldName);
+    if (t !== "f32") {
+      throw new Error(`${fieldName}@upstream(...) requires a scalar (f32) field; got ${t}`);
+    }
+    blocks.push(`
+fn _upstream_${fieldName}(cell: u32, velX: f32, velY: f32, dt: f32) -> f32 {
+  let p = _stencil_position(cell);
+  let east = _stencil_eastBasis(p);
+  let north = normalize(cross(p, east));
+  let velocity = east * velX + north * velY;
+  // Walk backward along velocity, project back to the unit sphere.
+  // The 15.0 factor matches the legacy advect kernel's tuning so
+  // velocity*dt magnitudes feel the same to recipe authors who
+  // ported from \`advect\`.
+  let back = normalize(p - velocity * dt * 15.0);
+  // Inverse-distance² weighting over self + neighbors. Same shape
+  // as the legacy ADVECT_WGSL kernel.
+  var weightSum = 0.0;
+  var valueSum = 0.0;
+  let selfD2 = max(0.000001, 2.0 * (1.0 - dot(back, p)));
+  let selfWeight = 1.0 / (selfD2 * selfD2);
+  weightSum = weightSum + selfWeight;
+  valueSum = valueSum + f_${fieldName}[cell] * selfWeight;
+  let count = neighborCounts[cell];
+  for (var slot: u32 = 0u; slot < count; slot = slot + 1u) {
+    let n = u32(neighbors[cell * 6u + slot]);
+    let q = _stencil_position(n);
+    let d2 = max(0.000001, 2.0 * (1.0 - dot(back, q)));
+    let weight = 1.0 / (d2 * d2);
+    weightSum = weightSum + weight;
+    valueSum = valueSum + f_${fieldName}[n] * weight;
+  }
+  return valueSum / weightSum;
 }
 `.trim());
   }
@@ -1111,6 +1155,18 @@ function compileCoordRead(ast, ctx) {
         );
       }
       return local;
+    }
+    case "upstream": {
+      // Continuous-position semi-Lagrangian sample. The compiler emits
+      // a per-(field) helper function in the prelude (see
+      // emitStencilHelpers); the call site passes the back-walk
+      // parameters (east-velocity, north-velocity, dt).
+      ctx.usedUpstreams ??= new Set();
+      ctx.usedUpstreams.add(ast.field);
+      const vx = compileExpr(coord.velX, ctx);
+      const vy = compileExpr(coord.velY, ctx);
+      const dt = compileExpr(coord.dt, ctx);
+      return `_upstream_${ast.field}(cell, ${vx}, ${vy}, ${dt})`;
     }
     default:
       throw new Error(`compileCoordRead: unsupported coord kind "${coord.kind}"`);

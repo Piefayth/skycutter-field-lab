@@ -115,15 +115,18 @@ scenario desertEdge "Edge of vegetation" {
 }
 
 step {
-  // Advect carries the water field downhill along the slope vec2.
-  // Will eventually become \`w@(self - slope * dt)\` once continuous-
-  // position coordinate queries land — but right now \`advect\` is
-  // a real v2 stage primitive (it owns the semi-Lagrangian sample
-  // kernel that doesn't yet fold into a cell expression).
+  // Water flows downhill along the slope vec2. \`@upstream(velX, velY, dt)\`
+  // is a continuous-position coordinate query — it samples the field
+  // at the cell's position walked backward \`dt\` along the tangent
+  // velocity. Replaces the v1-era \`advect\` stage primitive entirely;
+  // the kernel that primitive owned is now a per-(field) WGSL helper
+  // emitted on demand.
   stage waterFlow "Water advects downhill" {
     reads w, slope
     writes w
-    advect w by slope dt flowSpeed * dt * rate * 0.001
+    cell {
+      set w = w@upstream(slope.x, slope.y, flowSpeed * dt * rate * 0.001)
+    }
   }
 
   stage biomassDiffuse "Biomass spatial spread" {

@@ -399,22 +399,18 @@ export const STAMP_EXTRAS = [
 // entry powers tooltips / docs / autocomplete + serves as documentation.
 // ---------------------------------------------------------------------------
 
-export const PIPELINE_PRIMITIVES = [
-  {
-    name: "advect",
-    importNamespace: "sim",
-    signature: "advect FIELD by VEC dt EXPR    // (or `by U, V dt EXPR` legacy)",
-    doc: "Semi-Lagrangian transport of FIELD along a vec2 velocity field. Per-tick displacement = velocity·EXPR. The last remaining v2 stage primitive — kept until continuous-position coordinate queries land (`field@(self - velocity*dt)`), at which point it'll fold into a cell expression.",
-    example: "field slope: vec2\nfield w: f32\nstage flow {\n  reads w, slope\n  writes w\n  advect w by slope dt flowSpeed * dt\n}",
-  },
-  // wind / diffuse / clamp / normalize are deliberately ABSENT from
-  // the v2 surface. Redirects (rejected by the parser):
-  //   diffuse  → `add field = (mean n in neighbors { field@n } - field) * <amount>`
-  //   clamp    → `set field = clamp(field, <lo>, <hi>)` inside cell { }
-  //   wind     → `gradient(pressure)` + vec2 wind field. See dsl-spec
-  //              MATH_FUNCTIONS for `gradient` / `divergence`.
-  //   normalize → no v2 equivalent yet (needs scalar reduction + broadcast)
-];
+// V2 has no stage primitives. Every kernel operation is expressible as
+// a cell stage; the parser rejects stage-level v1 primitives with a
+// redirect to the cell-stage equivalent:
+//   diffuse  → `add field = (mean n in neighbors { field@n } - field) * <amount>`
+//   clamp    → `set field = clamp(field, <lo>, <hi>)` inside cell { }
+//   wind     → `gradient(pressure)` + vec2 wind field. See dsl-spec
+//              MATH_FUNCTIONS for `gradient` / `divergence`.
+//   advect   → `set u = u@upstream(velX, velY, dt)` continuous-position
+//              CoordRead. See "Coordinate queries" in dsl-spec for
+//              the @-coord family.
+//   normalize → no v2 equivalent yet (needs scalar reduction + broadcast)
+export const PIPELINE_PRIMITIVES = [];
 
 // ---------------------------------------------------------------------------
 // Stage body block keywords — control-flow heads inside a stage.

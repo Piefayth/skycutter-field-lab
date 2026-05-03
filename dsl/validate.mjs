@@ -609,6 +609,14 @@ function validateCoordRead(ast, visibleFields, locals, label, imports) {
     requireImport(imports, "core", "neighbor", label);
     return;
   }
+  if (ast.coord.kind === "upstream") {
+    // Continuous-position semi-Lagrangian sample. Self + neighbors are
+    // gathered with inverse-distance weighting (see emitStencilHelpers
+    // in webgpu-geodesic-compiler.mjs). Needs the same neighbor
+    // topology binding NeighborReduce uses.
+    requireImport(imports, "core", "neighbor", label);
+    return;
+  }
   throw new Error(`${label}: unsupported coord kind "${ast.coord.kind}"`);
 }
 

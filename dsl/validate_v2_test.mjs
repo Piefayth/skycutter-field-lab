@@ -254,9 +254,8 @@ step {
 `);
 });
 
-test("`advect` as a stage primitive is accepted (kept until continuous-pos CoordRead lands)", () => {
-  // klausmeier still uses advect; it stays a real v2 primitive.
-  compileV2(`
+test("`advect` as a stage primitive is rejected (use @upstream cell stage)", () => {
+  expectThrow(() => compileV2(`
 recipe "X"
 substrate geodesic frequency 16
 field u: f32
@@ -267,6 +266,26 @@ step {
     reads u, windU, windV
     writes u
     advect u by windU, windV dt 0.1
+  }
+}
+`), "no longer a stage primitive in v2");
+});
+
+test("@upstream coord query compiles and emits the per-field sample helper", () => {
+  // Replacement for the advect primitive: cell stage that samples a
+  // field at the back-position computed from velocity*dt.
+  compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+field slope: vec2
+step {
+  stage flow {
+    reads u, slope
+    writes u
+    cell {
+      set u = u@upstream(slope.x, slope.y, 0.1)
+    }
   }
 }
 `);

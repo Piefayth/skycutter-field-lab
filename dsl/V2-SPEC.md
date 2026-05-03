@@ -559,6 +559,13 @@ Reserved in grammar, not implemented in v2 first cut:
   recipe's `views[]` / paint stamp list. **Pending evidence** — only
   Kuramoto's `cosTheta` is currently derived, so the UI gap isn't yet
   user-visible.
+- `advect` retired as a stage primitive — **DONE**. Recipes use the
+  `field@upstream(velX, velY, dt)` continuous-position coordinate
+  query, which lowers to a per-(field) WGSL helper that does the
+  same inverse-distance-weighted gather over self + neighbors that
+  the v1 ADVECT_WGSL kernel did. Klausmeier ported to the cell-stage
+  form. PIPELINE_PRIMITIVES is now empty — every kernel operation is
+  expressible as a cell stage. Parser rejects `advect` with a redirect.
 - `wind` retired as a stage primitive — **DONE**. Recipes now express
   pressure-driven wind as a regular cell stage using two new tangent-frame
   builtins: `gradient(scalarField)` returns a vec2 of the field's

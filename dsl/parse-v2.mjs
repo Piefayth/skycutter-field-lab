@@ -587,9 +587,18 @@ function parseStage(ctx) {
       const cellActions = parseCellActions(cellBody, `stage ${id} cell`);
       statements.push({ type: "cell", actions: cellActions });
     } else if (kw === "advect") {
-      // advect is the last remaining v2 stage primitive — kept until
-      // continuous-position CoordRead lands (`u@(self - wind*dt)`).
-      statements.push(parseStagePrimitive(inner, id));
+      // `advect` was a v1 primitive that bundled the semi-Lagrangian
+      // sample into one statement. v2 expresses this as a cell stage
+      // using the `field@upstream(velX, velY, dt)` coordinate query.
+      throw new Error(
+        `v2 parse: stage ${id}: \`advect\` is no longer a stage primitive in v2. ` +
+        `Express it as a cell stage:\n` +
+        `  stage flow {\n` +
+        `    reads w, slope\n` +
+        `    writes w\n` +
+        `    cell { set w = w@upstream(slope.x, slope.y, dt * scale) }\n` +
+        `  }`,
+      );
     } else if (kw === "wind") {
       // `wind` was a v1 primitive that bundled pressure-gradient +
       // Coriolis + tangent-frame projection into one kernel. v2
@@ -1064,6 +1073,35 @@ function parseV2Postfix(parser) {
       const fieldName = expr.name;
       if (coord === "prev") {
         expr = { type: "CoordRead", field: fieldName, coord: { kind: "prev" } };
+      } else if (coord === "upstream") {
+        // Continuous-position coordinate query for semi-Lagrangian
+        // advection: `field@upstream(velX, velY, dt)` samples FIELD at
+        // the cell's position walked backward `dt` along the tangent
+        // velocity (velX = east, velY = north). Replaces the v2-era
+        // `advect` stage primitive — the kernel that primitive
+        // encapsulated is now a per-(field) WGSL helper emitted on
+        // demand by the compiler.
+        if (parser.tokens[parser.index]?.value !== "(") {
+          throw new Error(`v2 parse: \`${fieldName}@upstream\` requires \`(velX, velY, dt)\` arguments`);
+        }
+        parser.index++; // consume "("
+        const args = [];
+        if (parser.tokens[parser.index]?.value !== ")") {
+          do {
+            args.push(parseV2Conditional(parser));
+          } while (parser.tokens[parser.index].value === "," && (parser.index++, true));
+        }
+        expectV2(parser, ")");
+        if (args.length !== 3) {
+          throw new Error(
+            `v2 parse: \`${fieldName}@upstream\` takes exactly 3 args (velX, velY, dt); got ${args.length}`,
+          );
+        }
+        expr = {
+          type: "CoordRead",
+          field: fieldName,
+          coord: { kind: "upstream", velX: args[0], velY: args[1], dt: args[2] },
+        };
       } else {
         // Neighbor read: validates against the enclosing reduction frame.
         // The frame's `coord` must match the binding name used here.
