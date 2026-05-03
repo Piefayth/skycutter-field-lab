@@ -312,20 +312,20 @@ function declaredFromContext(ctx, doc) {
 }
 
 const TOP_LEVEL_COMPLETIONS = [
-  keywordOption("recipe", "recipe \"Name\""),
-  keywordOption("summary", "summary \"Short description\""),
+  structuralOption("recipe", "recipe \"Name\"", 30, "recipe \"${Name}\""),
+  structuralOption("summary", "summary \"Short description\"", 30, "summary \"${Short description}\""),
   keywordOption("recommendedPreset", "recommendedPreset scenarioId"),
-  keywordOption("substrate", "substrate geodesic frequency 64"),
-  keywordOption("field", "field name: f32"),
+  structuralOption("substrate", "substrate geodesic frequency 64", 30, "substrate geodesic frequency ${frequency}"),
+  structuralOption("field", "field name: f32", 30, "field ${name}: ${f32}"),
   keywordOption("source", "source name: vec2"),
-  keywordOption("const", "const NAME = value"),
+  structuralOption("const", "const NAME = value", 30, "const ${NAME} = ${value}"),
   keywordOption("import", "import builtinName"),
-  keywordOption("param", "param name slider lo..hi default value"),
-  keywordOption("metric", "metric name = reduction cells { expr }"),
-  keywordOption("step", "step { stage ... }"),
-  keywordOption("views", "views { ... }"),
-  keywordOption("stamps", "stamps { ... }"),
-  keywordOption("scenarios", "scenarios { ... }"),
+  structuralOption("param", "param name slider lo..hi default value", 30, "param ${name} slider ${lo}..${hi} default ${default} label \"${LABEL}\""),
+  structuralOption("metric", "metric name = reduction cells { expr }", 30, "metric ${name} = ${mean} cells { ${field} }"),
+  structuralOption("step", "step { stage ... }", 30, "step {\n  stage ${id} \"${Label}\" {\n    reads ${field}\n    writes ${field}\n    cell {\n      ${}\n    }\n  }\n}"),
+  structuralOption("views", "views { ... }", 30, "views {\n  ${}\n}"),
+  structuralOption("stamps", "stamps { ... }", 30, "stamps {\n  ${}\n}"),
+  structuralOption("scenarios", "scenarios { ... }", 30, "scenarios {\n  ${}\n}"),
 ];
 
 const FIELD_TYPE_COMPLETIONS = [
