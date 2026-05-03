@@ -56,7 +56,12 @@ recommendedPreset turbulent
 substrate geodesic frequency 32
 
 field x: f32
-field xVar: f32 derived  // local variance for visualization
+field xAvg: f32           // exponential moving average of x — slow envelope
+                          // for the "structure" view (NOT derived: it has to
+                          // persist across ticks since stage avg reads its
+                          // own previous value).
+field xVar: f32 derived   // local variance — high in chaotic patches, low
+                          // in synchronised ones.
 
 // r is the logistic-map parameter. r ∈ [3.57, 4] is the chaotic regime;
 // 3.8 is a reasonable default well inside chaos. r=3 marks the onset
@@ -65,8 +70,15 @@ field xVar: f32 derived  // local variance for visualization
 param R           slider 2..4    step 0.005 default 3.8  label "r (LOGISTIC)"
 // ε is the coupling strength. 0 = isolated maps; 0.5 = strong
 // homogenisation. The interesting regime is ε ∈ [0.05, 0.3].
-param EPS         slider 0..0.5  step 0.005 default 0.10 label "ε (COUPLING)"
-param simRateHz   slider 0..240  step 1     default 60   label "SIM RATE"
+param EPS         slider 0..0.5  step 0.005 default 0.20 label "ε (COUPLING)"
+// Default simRateHz is intentionally LOW (8 Hz). The logistic map at
+// r=3.8 has no slow timescale — every iteration is a complete state
+// change with |Δx| ~ 0.4 — so running at 60 Hz produces TV static
+// regardless of coupling. At 8 Hz the spatial pattern at each
+// iteration is on screen long enough to read; the eye also picks up
+// the temporal evolution of patches across iterations. Crank
+// simRateHz back up if you want raw chaos.
+param simRateHz   slider 0..240  step 1     default 8    label "SIM RATE"
 
 step {
   // Stage 1 — One logistic-map iteration plus diffusive mix. The map
@@ -87,10 +99,21 @@ step {
     }
   }
 
-  // Stage 2 — Local variance for visualisation. (mean of x²) − (mean
-  // of x)². On a uniformly synchronised cell the local variance is
-  // zero; in chaotic patches it's near 0.05 (the average squared
-  // deviation of independent logistic-map samples).
+  // Stage 2 — Slow envelope. Exponential moving average of x with
+  // half-life ~10 ticks. Hides per-iteration chaos and surfaces the
+  // slowly-evolving patch structure that's the actual point of CML.
+  stage avg "Slow envelope (EMA)" {
+    reads x, xAvg
+    writes xAvg
+    cell {
+      set xAvg = xAvg * 0.93 + x * 0.07
+    }
+  }
+
+  // Stage 3 — Local variance. (mean of x²) − (mean of x)². On a
+  // uniformly synchronised cell the local variance is zero; in
+  // chaotic patches it's near 0.05 (the average squared deviation of
+  // independent logistic-map samples).
   stage diagnostics "Local variance" {
     reads x
     writes xVar
@@ -106,25 +129,47 @@ metric meanX = mean cells { x }
 metric varX  = mean cells { xVar }
 
 views {
-  // Phase-style ramp: chaos shows as a colorful jumble, sync as a
-  // single solid colour shifting over time.
-  palette CHAOS {
-    stop 0    color [12, 18, 36]
-    stop 0.25 color [60, 80, 200]
-    stop 0.5  color [240, 220, 60]
-    stop 0.75 color [240, 90, 60]
-    stop 1    color [255, 240, 220]
+  // Single-hue brightness ramp. Logistic-map jumps from x=0.3 to x=0.9
+  // produce dim-to-bright transitions instead of cycling through
+  // multiple colours — far less strobe-y at any frame rate. Tuned for
+  // dark substrate so the chaotic peaks pop without burning the eyes.
+  palette EMBER {
+    stop 0   color [10, 8, 14]
+    stop 0.4 color [80, 30, 40]
+    stop 0.7 color [200, 90, 60]
+    stop 1   color [255, 220, 160]
   }
 
-  // Variance colorer — high-coupling synced regions go dark; chaotic
-  // patches glow.
+  // Cool ramp for the slow envelope. xAvg stays in [0.3, 0.7]-ish so
+  // the palette range is set tighter; patches that drift slowly read
+  // as different shades of teal/cyan.
+  palette FROST {
+    stop 0   color [12, 16, 28]
+    stop 0.3 color [40, 80, 110]
+    stop 0.7 color [80, 180, 200]
+    stop 1   color [200, 240, 240]
+  }
+
+  // Variance colorer — synced regions go dark; chaotic patches glow.
   palette VAR {
     stop 0 color [10, 12, 18]
     stop 1 color [80, 230, 180]
   }
 
-  view value "x value" {
-    color ramp x range [0, 1] palette CHAOS
+  // Default view: slow envelope. This is the one view that's stable
+  // enough to actually read patterns at standard frame rates. The raw
+  // x view is included for users who want to watch the chaos directly.
+  // Range is tight ([0.6, 0.72]) because xAvg's per-cell spread is
+  // narrow — every cell's long-run logistic-map mean is the same
+  // (~0.65), so cell-to-cell xAvg differences come from recent
+  // history. The narrow range maximises contrast over those subtle
+  // recent-history differences.
+  view envelope "Slow envelope (xAvg)" {
+    color ramp xAvg range [0.6, 0.72] palette FROST
+  }
+
+  view value "x value (raw chaos — best at low SIM RATE)" {
+    color ramp x range [0, 1] palette EMBER
   }
 
   view variance "Local variance" {
@@ -148,10 +193,14 @@ stamps {
 }
 
 scenarios {
+  // xAvg is seeded with the long-run logistic-map mean (~0.65 at r=3.8)
+  // in every scenario so the envelope view doesn't darkly fade in over
+  // the first 30 ticks while the EMA converges from 0.
   scenario turbulent "Random initial chaos (default)" {
     // Every cell starts at a random x ∈ [0.1, 0.9]. With default
     // (ε, r) the system stays chaotic — the spatial pattern shifts
     // every tick but never settles.
+    set xAvg = 0.65
     for each cell {
       let r = cellRand(11) * 0.5 + 0.5
       set x = 0.1 + r * 0.8
@@ -167,6 +216,7 @@ scenarios {
     // state. Nudge ε down to 0 and one cell with the kick stamp to
     // watch the perturbation propagate.
     set x = 0.4
+    set xAvg = 0.4
   }
 
   scenario hemisphere "Two-domain initial split" {
@@ -175,7 +225,8 @@ scenarios {
     // coupling) or freezes into permanent stripes (low coupling) is
     // a function of ε.
     for each cell {
-      set x = lat > 0 ? 0.2 : 0.7
+      set x    = lat > 0 ? 0.2 : 0.7
+      set xAvg = lat > 0 ? 0.2 : 0.7
     }
   }
 }
