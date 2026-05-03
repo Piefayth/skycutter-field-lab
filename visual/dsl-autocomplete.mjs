@@ -372,6 +372,17 @@ function constantsFromAst(ctx) {
   ];
 }
 
+function coordOptionsFromContext(ctx) {
+  const binders = (ctx.cursor?.symbols ?? [])
+    .filter((symbol) => symbol.kind === "binder")
+    .map((symbol) => declaredCompletion(symbol.name, "binder"));
+  return [
+    ...binders,
+    structuralOption("prev", "previous tick"),
+    structuralOption("upstream", "upstream(velX, velY, dt)"),
+  ];
+}
+
 function filterOptions(options, prefix) {
   const q = String(prefix ?? "").toLowerCase();
   const seen = new Set();
@@ -407,6 +418,7 @@ function optionsForExpectedContext(ctx, prefix) {
   if (expected.has("paletteName")) return structural(palettesFromAst(ctx));
   if (expected.has("scenarioName")) return structural(scenariosFromAst(ctx));
   if (expected.has("fieldType")) return structural(FIELD_TYPE_COMPLETIONS);
+  if (expected.has("coordName")) return structural(coordOptionsFromContext(ctx));
   if (expected.has("colorKind")) {
     return structural([
       structuralOption("ramp", "color ramp field palette PALETTE"),

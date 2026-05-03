@@ -72,11 +72,13 @@ export function statementAt(cst, pos) {
 }
 
 export function expectedAt(cst, pos) {
-  const stmt = statementAt(cst, pos);
-  if (!stmt) return [];
-  const zones = stmt.expectedZones ?? [];
-  return zones
+  const zones = (cst?.statements ?? [])
+    .filter((stmt) => stmt.from <= pos && pos <= stmt.to)
+    .flatMap((stmt) => stmt.expectedZones ?? [])
     .filter((zone) => zone.from <= pos && pos <= zone.to)
+    .sort((a, b) => (a.to - a.from) - (b.to - b.from));
+  const precise = zones.filter((zone) => !zone.expected.includes("expression"));
+  return (precise.length > 0 ? precise : zones)
     .flatMap((zone) => zone.expected);
 }
 
@@ -344,6 +346,9 @@ function annotateStatement(stmt) {
     annotateExpression(expr);
     stmt.expressions.push(expr);
     addZone(from, to, "expression", kind);
+    for (const zone of expr.expectedZones ?? []) {
+      stmt.expectedZones.push(zone);
+    }
   };
   const firstTokenEnd = line.search(/\s/);
   const afterKeyword = firstTokenEnd < 0 ? line.length : firstTokenEnd;
@@ -493,6 +498,7 @@ function annotateExpression(expr) {
   expr.identifiers = expr.tokens.filter((token) => token.kind === "identifier");
   expr.coordReads = coordReadsInExpression(text, base);
   expr.reductions = reductionsInExpression(text, base);
+  expr.expectedZones = coordExpectedZonesInExpression(text, base, expr.coordReads);
 }
 
 function expressionTokens(text, base) {
@@ -547,6 +553,31 @@ function reductionsInExpression(text, base) {
     });
   }
   return out;
+}
+
+function coordExpectedZonesInExpression(text, base, coordReads) {
+  const zones = [];
+  for (const read of coordReads) {
+    zones.push({
+      type: "ExpectedZone",
+      kind: "coordName",
+      expected: ["coordName"],
+      from: read.coordFrom,
+      to: read.to,
+    });
+  }
+  for (const match of text.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\s*@\s*([A-Za-z_][A-Za-z0-9_]*)?/g)) {
+    if (match[1]) continue;
+    const at = match[0].indexOf("@");
+    zones.push({
+      type: "ExpectedZone",
+      kind: "coordName",
+      expected: ["coordName"],
+      from: base + match.index + at + 1,
+      to: base + match.index + match[0].length,
+    });
+  }
+  return zones;
 }
 
 function findMatchingBraceInText(text, openRel) {
