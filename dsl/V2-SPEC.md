@@ -380,35 +380,59 @@ Allowed calls: `clamp`, `min`, `max`, `abs`, `sin`, `cos`, `asin`,
 `lat`, `frame`, `dt`) are stage-only — promote them to a derived
 field if the view needs them.
 
-### Arrows (vec2 glyph overlay)
+### Glyph overlay
 
-A view block may carry an optional `arrows` clause alongside its
-`color` clause. The named vec2 field is projected onto each cell's
-east/north tangent basis and rendered as oriented line segments
-overlaid on the colored sphere.
+A view block may carry an optional `glyph` clause alongside its
+`color` clause. Each cell gets a small shape — `arrow`, `dot`,
+`ring`, `square`, or `plus` — drawn on top of the tile, with
+optional rotation and size driven by recipe fields.
 
 ```
 view flow "Velocity" {
   color ramp speed range [0, 0.25] palette SPEED
-  arrows m length=0.6 stride=2
+  glyph arrow rotate=m length=0.6 stride=2
+}
+
+view density "Density dots" {
+  color ramp rho range [0, 1] palette MONO
+  glyph dot size=rho length=0.4
+}
+
+view phase "Phase markers" {
+  color wheel theta
+  glyph plus length=0.3
 }
 ```
 
-- `arrows FIELD` — bare field reference; the field must be declared
-  as `vec2`.
-- `length=N` — scalar multiplier on rendered arrow length, in units
-  of the mesh's mean cell-radius. Default `0.5`. Larger values
-  produce longer arrows that overlap with neighbours; smaller
-  values produce a denser look.
-- `stride=N` — render every Nth cell only. Default `1` (one arrow
-  per cell). Higher values produce sparser glyph fields, useful
-  when mesh resolution outruns visual density.
+Surface:
 
-The `color` clause and the `arrows` clause are independent — the
-color can come from any kind (`ramp` / `wheel` / `expr`) and the
-arrows can name any vec2 field, regardless of which fields the color
-references. Common pattern: color the magnitude scalar, arrow the
-direction vector.
+```
+glyph KIND [rotate=VEC2_FIELD] [size=SCALAR_FIELD] [length=N] [stride=N]
+```
+
+- `KIND` — one of `arrow`, `dot`, `ring`, `square`, `plus`.
+- `rotate=FIELD` (optional) — vec2 field whose `atan2(y, x)` sets
+  glyph orientation in the cell's east/north tangent plane. Required
+  in spirit for `arrow` (otherwise the arrow points north uniformly);
+  meaningless for symmetric shapes (`dot`, `square`, `plus`).
+- `size=FIELD` (optional) — scalar field that multiplies glyph
+  size per cell. Cells whose size-field is zero are skipped
+  entirely. Useful for "density dots" where the dot diameter is
+  the field magnitude.
+- `length=N` (default `0.5`) — base size in units of mesh mean
+  cell-radius. The total per-cell size is `length × size_field
+  × baseScale`.
+- `stride=N` (default `1`) — render every Nth cell only.
+
+Glyphs are auto-shaded for contrast against the underlying tile
+color: bright tiles get dark glyphs, dark tiles get bright ones. The
+shading uses a comet-tail gradient (tile-tinted base → contrast
+tip), which makes oriented `arrow` glyphs read as directional
+streaks rather than flat triangles.
+
+The `color` clause and the `glyph` clause are independent — common
+pattern: color the magnitude scalar, glyph the direction vector or
+mark cells of interest.
 
 ### Overlay
 

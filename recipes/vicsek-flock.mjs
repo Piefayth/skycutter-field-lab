@@ -157,12 +157,12 @@ views {
 
   view dir "Heading direction" {
     color wheel dir
-    arrows heading length=0.7 stride=2
+    glyph arrow rotate=heading length=0.7 stride=2
   }
 
   view align "Local alignment" {
     color ramp align range [0, 0.833] palette ALIGN
-    arrows heading length=0.5 stride=3
+    glyph arrow rotate=heading length=0.5 stride=3
   }
 }
 

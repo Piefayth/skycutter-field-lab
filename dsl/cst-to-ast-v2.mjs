@@ -197,7 +197,7 @@ function validatePaletteBlock(block) {
 }
 
 function validateViewBlock(block) {
-  const allowed = new Set(["color", "arrows", "let", "set", "when", "stop"]);
+  const allowed = new Set(["color", "glyph", "let", "set", "when", "stop"]);
   for (const stmt of sorted(block.statements)) {
     if (!allowed.has(stmt.keyword)) throw new Error(`v2 parse: view ${block.id}: unknown declaration "${stmt.keyword}"`);
   }
@@ -497,8 +497,8 @@ function viewCstToAst(cst, block) {
   if (!colorStmt) throw new Error(`v2 CST projection: view ${block.id} missing color declaration`);
   const words = wordsFrom(colorStmt.cleanText);
   const kind = words[1] ?? null;
-  const arrows = arrowsFromViewBlock(block);
-  const base = { id: block.id, label: blockLabel(cst, block) ?? block.id, arrows };
+  const glyph = glyphFromViewBlock(block);
+  const base = { id: block.id, label: blockLabel(cst, block) ?? block.id, glyph };
   if (kind === "ramp") {
     const range = rangeFromColorStatement(colorStmt) ?? [0, 1];
     const paletteName = /\bpalette\s+([A-Za-z_][A-Za-z0-9_]*)\b/.exec(colorStmt.cleanText)?.[1] ?? null;
@@ -528,34 +528,52 @@ function viewCstToAst(cst, block) {
   throw new Error(`v2 CST projection: unsupported view color kind ${kind ?? ""}`);
 }
 
-// `arrows` is a sibling clause to `color` inside a `view` block —
-// renders the named vec2 field as oriented line segments overlaid on
-// the colored sphere. Not all views have arrows; absence is fine.
+// `glyph` is a sibling clause to `color` inside a `view` block —
+// renders a small per-cell shape (arrow / dot / ring / square / plus)
+// overlaid on the colored sphere, with optional rotation and size
+// driven by recipe fields. Generalises the earlier `arrows`-only
+// surface: any glyph shape, rotated by any vec2 field, scaled by any
+// scalar field.
 //
-//   view flow "Velocity" {
+//   view flow "Velocity field" {
 //     color ramp speed range [0, 1] palette HEAT
-//     arrows wind length=0.6 stride=2
+//     glyph arrow rotate=wind size=length(wind) length=0.6 stride=2
 //   }
 //
-// length: scalar multiplier on the rendered arrow length (default 0.5,
-// units of cell-radius). stride: render every Nth cell (default 1 =
-// one arrow per cell). Both are optional named args.
-function arrowsFromViewBlock(block) {
-  const stmt = sorted(block.statements).find((s) => s.keyword === "arrows");
+//   view density "Density dots" {
+//     color ramp rho range [0, 1] palette MONO
+//     glyph dot size=rho length=0.4
+//   }
+//
+// `KIND` is one of: arrow, dot, ring, square, plus.
+// `rotate=FIELD` (optional, vec2) — orient glyph by atan2(field.y, field.x).
+// `size=FIELD` (optional, scalar) — scale glyph by field magnitude.
+// `length=N` (default 0.5) — base size, units of cell-radius.
+// `stride=N` (default 1) — render every Nth cell only.
+function glyphFromViewBlock(block) {
+  const stmt = sorted(block.statements).find((s) => s.keyword === "glyph");
   if (!stmt) return null;
   const text = stmt.cleanText;
-  // arrows FIELD [name=value]*
-  const match = /\barrows\s+([A-Za-z_][A-Za-z0-9_]*)/.exec(text);
-  if (!match) throw new Error(`v2 CST projection: view ${block.id}: arrows clause missing field reference`);
-  const field = match[1];
-  const named = {};
-  for (const m of text.matchAll(/(\w+)\s*=\s*(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)/g)) {
-    named[m[1]] = Number(m[2]);
+  // First word after `glyph` is the KIND.
+  const head = /\bglyph\s+([A-Za-z_][A-Za-z0-9_]*)/.exec(text);
+  if (!head) throw new Error(`v2 CST projection: view ${block.id}: glyph clause missing kind`);
+  const kind = head[1];
+  // `name=identifier` (rotate / size — field references)
+  const fieldArgs = {};
+  for (const m of text.matchAll(/\b(rotate|size)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)/g)) {
+    fieldArgs[m[1]] = m[2];
+  }
+  // `name=number` (length / stride)
+  const numericArgs = {};
+  for (const m of text.matchAll(/\b(length|stride)\s*=\s*(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)/g)) {
+    numericArgs[m[1]] = Number(m[2]);
   }
   return {
-    field,
-    length: Number.isFinite(named.length) ? named.length : 0.5,
-    stride: Number.isFinite(named.stride) ? Math.max(1, Math.round(named.stride)) : 1,
+    kind,
+    rotate: fieldArgs.rotate ?? null,
+    size:   fieldArgs.size   ?? null,
+    length: Number.isFinite(numericArgs.length) ? numericArgs.length : 0.5,
+    stride: Number.isFinite(numericArgs.stride) ? Math.max(1, Math.round(numericArgs.stride)) : 1,
   };
 }
 

@@ -74,6 +74,9 @@ export function validateV2(schema) {
 //   - overlay names are in the registered set (`grid` for now).
 const REGISTERED_OVERLAYS = new Set(["grid"]);
 const VIEW_EXPR_OUTPUTS = new Set(["red", "green", "blue"]);
+// Glyph kinds the renderer supports — adding a new shape means adding
+// a base geometry in geodesic-preview.mjs's GLYPH_GEOMETRIES table.
+const GLYPH_KINDS = new Set(["arrow", "dot", "ring", "square", "plus"]);
 
 function validateRenderDecls(schema) {
   const palettes = schema.palettes ?? [];
@@ -135,23 +138,42 @@ function validateRenderDecls(schema) {
         fieldTypes, paramNames, constNames,
       });
     }
-    // Optional `arrows FIELD ...` overlay clause. Field must be a
-    // vec2 declared field (the renderer projects (x, y) onto the
-    // cell's east/north tangent basis to produce an oriented line).
-    // Length / stride are positive numbers.
-    if (v.arrows) {
-      const a = v.arrows;
-      if (!fieldNames.has(a.field)) {
-        throw new Error(`view "${v.id}": arrows references unknown field "${a.field}"`);
+    // Optional `glyph KIND [rotate=F] [size=F] [length=N] [stride=N]`
+    // overlay clause. KIND ∈ {arrow, dot, ring, square, plus}.
+    // - rotate=FIELD (optional): vec2 — glyph orientation (in
+    //   tangent plane). Required only for `arrow` kind, which is
+    //   inherently directional; without rotate the arrow points east.
+    // - size=FIELD (optional): scalar — multiplier on glyph size.
+    //   Magnitude > 0 required at runtime; the validator just checks
+    //   the field exists and is f32.
+    // - length / stride: positive numbers (length is also "base size"
+    //   for non-arrow kinds).
+    if (v.glyph) {
+      const g = v.glyph;
+      if (!GLYPH_KINDS.has(g.kind)) {
+        throw new Error(`view "${v.id}": unknown glyph kind "${g.kind}" (allowed: ${[...GLYPH_KINDS].join(", ")})`);
       }
-      if (fieldTypes.get(a.field) !== "vec2") {
-        throw new Error(`view "${v.id}": arrows requires a vec2 field — "${a.field}" is ${fieldTypes.get(a.field) ?? "?"}`);
+      if (g.rotate) {
+        if (!fieldNames.has(g.rotate)) {
+          throw new Error(`view "${v.id}": glyph rotate=${g.rotate} references unknown field`);
+        }
+        if (fieldTypes.get(g.rotate) !== "vec2") {
+          throw new Error(`view "${v.id}": glyph rotate must reference a vec2 field — "${g.rotate}" is ${fieldTypes.get(g.rotate) ?? "?"}`);
+        }
       }
-      if (!(a.length > 0)) {
-        throw new Error(`view "${v.id}": arrows length must be positive — got ${a.length}`);
+      if (g.size) {
+        if (!fieldNames.has(g.size)) {
+          throw new Error(`view "${v.id}": glyph size=${g.size} references unknown field`);
+        }
+        if (fieldTypes.get(g.size) === "vec2") {
+          throw new Error(`view "${v.id}": glyph size must reference a scalar field — "${g.size}" is vec2 (use length(${g.size}) via a derived field)`);
+        }
       }
-      if (!Number.isInteger(a.stride) || a.stride < 1) {
-        throw new Error(`view "${v.id}": arrows stride must be a positive integer — got ${a.stride}`);
+      if (!(g.length > 0)) {
+        throw new Error(`view "${v.id}": glyph length must be positive — got ${g.length}`);
+      }
+      if (!Number.isInteger(g.stride) || g.stride < 1) {
+        throw new Error(`view "${v.id}": glyph stride must be a positive integer — got ${g.stride}`);
       }
     }
   }
