@@ -25,6 +25,21 @@ import { compileV2 } from "../dsl/compile-v2.mjs";
 
 export const overlays = [];
 
+// Hexagonal Turing spots grow exponentially from a tiny perturbation;
+// the recipe's own scenario comment notes "30-60 wall-seconds at
+// default rate" for visible patterns. Even at 1500 ticks / freq=32
+// (the audit ceiling that runs in reasonable time) the cellNoise
+// seed's spatial spectrum is too narrow to excite the Turing-unstable
+// wavenumber, so b / sigma / Du / Dv all collapse to the homogeneous
+// fixed point in the audit window. They're real params with real
+// effect in the live app — call out as dead-at-audit until the
+// scenario seeds broader-spectrum noise.
+export const audit = {
+  ticks: 1500,
+  frequency: 32,
+  allowedDeadParams: ["b", "sigma", "Du", "Dv"],
+};
+
 export const metrics = [
   { id: "meanU", label: "MEAN U", source: "dsl:meanU", spark: true, precision: 3 },
   { id: "meanV", label: "MEAN V", source: "dsl:meanV", spark: true, precision: 3 },

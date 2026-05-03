@@ -14,6 +14,14 @@ import { compileV2 } from "../dsl/compile-v2.mjs";
 
 export const overlays = [];
 
+// diffW (slow inhibitor diffusion) is wired up but barely shifts the
+// global stats at the default scenario — w is the slowest field and
+// its diffusion only affects sphere-scale recovery patterns that
+// don't show in min/max/mean.
+export const audit = {
+  allowedDeadParams: ["diffW"],
+};
+
 export const metrics = [
   { id: "u", label: "U", source: "u", spark: true, precision: 3 },
   { id: "v", label: "V", source: "v", spark: true, precision: 3 },

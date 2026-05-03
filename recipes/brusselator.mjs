@@ -19,6 +19,22 @@ import { compileV2 } from "../dsl/compile-v2.mjs";
 
 export const overlays = [];
 
+// Turing patterns DO emerge in the live app, but neither 1500 ticks
+// nor freq=32 are enough for the audit to see them: the cellNoise
+// scenario seed is low-spatial-frequency, so the Turing-unstable
+// wavenumber gets vanishingly small initial amplitude and takes minutes
+// of simulation time to grow into the visible regime. Bumping noise
+// amplitude to seed broader-spectrum kicks runs into the explicit-Euler
+// blowup mode (see scenario comment). The Du/Dv sliders are wired up,
+// they just don't move global stats at any audit window we can afford
+// — call out as dead-at-audit until someone reseeds with a broader
+// initial spectrum.
+export const audit = {
+  ticks: 1500,
+  frequency: 32,
+  allowedDeadParams: ["Du", "Dv"],
+};
+
 export const metrics = [
   { id: "meanU", label: "MEAN U", source: "dsl:meanU", spark: true, precision: 3 },
   { id: "meanV", label: "MEAN V", source: "dsl:meanV", spark: true, precision: 3 },

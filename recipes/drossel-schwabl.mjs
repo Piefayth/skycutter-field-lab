@@ -37,6 +37,13 @@ import { compileV2 } from "../dsl/compile-v2.mjs";
 
 export const overlays = [];
 
+// stateNorm = state * 0.5 maps the discrete u32 alphabet {0, 1, 2}
+// into the f32 ramp {0, 0.5, 1}; the {0, 1} boundary pinning is
+// definitional, not dynamic saturation.
+export const audit = {
+  allowedClampPins: ["stateNorm"],
+};
+
 export const metrics = [
   { id: "burning",  label: "BURNING", source: "dsl:burning",  spark: true, precision: 0 },
   { id: "trees",    label: "TREES",   source: "dsl:trees",    spark: true, precision: 0 },
