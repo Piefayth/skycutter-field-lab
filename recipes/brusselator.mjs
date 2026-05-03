@@ -61,7 +61,7 @@ field v: f32
 // Turing-unstable defaults: D_v / D_u = 15. Bumping Dv past ~1.5 or
 // lowering Du below ~0.02 picks shorter wavelengths (denser spots).
 param simRateHz slider 0..360 step 1     default 60   label "SIM RATE"
-param rate      slider 1..60  step 1     default 20   label "RATE"
+param rate      slider 1..60  step 1     default 10   label "RATE"
 param A         slider 0.5..4 step 0.05  default 2.0  label "A (FEED)"
 param B         slider 0..8   step 0.05  default 3.0  label "B (RATIO)"
 param Du        slider 0..0.2 step 0.005 default 0.04 label "Du"
@@ -129,17 +129,17 @@ stamps {
 
 scenarios {
   scenario stripes "Random near-steady seed" {
-    // Seed both noise (broadband) and a structured sin/cos modulation
-    // at roughly the most-unstable Turing wavelength (~5 modes around
-    // the sphere, λ_pattern ≈ 1.3 rad). Pure cellNoise tends to
-    // concentrate energy at high spatial frequencies that the Turing
-    // mechanism damps; the structured term puts a measurable seed at
-    // exactly the wavelength the instability wants to amplify, so
-    // patterns crystallize in ~1 second instead of slow-growing from
-    // numerical roundoff.
+    // Tiny noise seed only — the Brusselator's u²·v kinetics are
+    // violently nonlinear, so any per-cell perturbation larger than
+    // ~0.1 puts the Forward-Euler step outside its linear regime.
+    // With overlarge seeds the local trajectory shoots far from
+    // (u*, v*), diffusion homogenizes the overshoots, and the field
+    // collapses to a uniform sphere before the Turing instability
+    // can re-grow the pattern. Tiny noise + slow rate is the safe
+    // path: patterns take a few seconds to crystallize but they do.
     for each cell {
-      set u = 2.0 + cellNoise(11, 1.0) * 0.4 + sin(lon * 5) * cos(lat * 4) * 0.3
-      set v = 1.5 + cellNoise(13, 1.0) * 0.25
+      set u = 2.0 + cellNoise(11, 1.2) * 0.05
+      set v = 1.5 + cellNoise(13, 1.2) * 0.03
     }
   }
 

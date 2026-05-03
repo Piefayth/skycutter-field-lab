@@ -41,6 +41,7 @@ A v2 recipe is a sequence of top-level declarations in any order:
 ```
 recipe "Wave equation"
 summary "Hyperbolic wave on a sphere — leapfrog integration."
+recommendedPreset droplet
 
 substrate geodesic frequency 64
 
@@ -50,9 +51,6 @@ field abs_u: f32 derived
 param speed   slider 0..0.29 default 0.25 label "WAVE SPEED"
 param damping slider 0..0.05 default 0    label "DAMPING γ"
 
-scenario droplet "Single droplet" { ... }
-stamp ripple "Drop ripple"        { ... }
-
 step {
   stage propagate { ... }
   stage derive_abs { ... }
@@ -60,7 +58,35 @@ step {
 
 metric peak   = max cells { abs_u }
 metric active = count cells where abs_u > 0.1
+
+views {
+  palette WAVE { stop 0 color [40, 90, 200]   stop 1 color [200, 50, 30] }
+  view amp "Amplitude" {
+    color ramp u range [-1, 1] palette WAVE
+  }
+}
+
+stamps {
+  stamp ripple "Drop ripple" { spot u at brush.pos, radius=brush.r, amount=1 }
+}
+
+scenarios {
+  scenario droplet "Single droplet" { ... }
+  scenario standing "Standing wave" { ... }
+}
 ```
+
+Three things group: every `scenario` lives inside a single
+`scenarios { ... }` block; every `stamp` inside a single `stamps { ... }`
+block; every `palette` / `view` / `overlay` inside a single
+`views { ... }` block. The grouped containers are themselves top-level
+and may appear in any order relative to other top-level decls. The
+parser rejects bare top-level `scenario` / `stamp` / `palette` /
+`view` / `overlay` declarations — they have to live inside their
+group.
+
+Everything else (recipe identity, `substrate`, `field`, `const`,
+`param`, `step`, `metric`, `import`) stays bare top-level.
 
 ### Recipe metadata
 
@@ -159,15 +185,20 @@ expressions. `const` declarations are compile-time scalars.
 
 ## Scenarios
 
-```
-scenario droplet "Single droplet" {
-  set u = 0
-  spot u at lon=0, lat=0, radius=0.08, amount=1
-}
+All `scenario` blocks live inside a single top-level `scenarios { ... }`
+container:
 
-scenario standing "Standing wave" {
-  for each cell {
-    set u = cos(lon * 2) * 0.6
+```
+scenarios {
+  scenario droplet "Single droplet" {
+    set u = 0
+    spot u at lon=0, lat=0, radius=0.08, amount=1
+  }
+
+  scenario standing "Standing wave" {
+    for each cell {
+      set u = cos(lon * 2) * 0.6
+    }
   }
 }
 ```
@@ -184,23 +215,181 @@ scenario dropdown. Initialization actions:
 
 Scenarios CANNOT write derived fields (validator rejects).
 
+The init-context expression subset is stricter than the cell-stage
+grammar: no `@prev` / `@n` / `@upstream` (scenarios run once at start,
+no previous tick exists; stamps run on click without GPU stencil
+topology), no neighbor reductions, no `gradient` / `divergence`. Use
+bare-field reads + math functions only. The validator emits clear
+errors with redirect hints if you reach for a stage-only construct.
+
 ## Stamps
 
-Kept as v1's stamp construct (no `on click` unification in v2 first cut):
+All `stamp` blocks live inside a single top-level `stamps { ... }`
+container:
 
 ```
-stamp ripple "Drop ripple" {
-  spot u at brush.pos, radius=brush.r, amount=1
-}
+stamps {
+  stamp ripple "Drop ripple" {
+    spot u at brush.pos, radius=brush.r, amount=1
+  }
 
-stamp impulse "Impulse" {
-  spot v at brush.pos, radius=brush.r, amount=1
+  stamp impulse "Impulse" {
+    spot v at brush.pos, radius=brush.r, amount=1
+  }
 }
 ```
 
 Available bindings in stamp body: `brush.pos` (current paint center as
 {lon, lat}), `brush.r` (current paint radius). Stamps can target multiple
-fields. Stamps CANNOT write derived fields.
+fields. Stamps CANNOT write derived fields. Same expression-subset
+restrictions as scenarios.
+
+## Render: palettes, views, overlays
+
+All render-side declarations live inside a single top-level
+`views { ... }` container. The container holds three kinds of decls
+in any order: `palette`, `view`, `overlay`.
+
+```
+views {
+  palette HEAT {
+    stop 0    color [12, 14, 30]
+    stop 0.5  color [240, 110, 40]
+    stop 1    color [255, 220, 90]
+  }
+
+  view temperature "Temperature" {
+    color ramp T range [-0.8, 1.5] palette HEAT
+  }
+
+  view phase "Phase (θ)" {
+    color wheel theta
+  }
+
+  view composite "S / I / R" {
+    color expr {
+      let total = max(S + I + R, 0.000001)
+      set red   = (S / total) * 255
+      set green = (I / total) * 255
+      set blue  = (R / total) * 255
+    }
+  }
+
+  overlay grid
+}
+```
+
+The render layer materializes at recipe load — palettes resolve, views
+are routed to the right per-cell colorer, the result populates the view
+selector in the panel. Authoring is DSL-only; recipe `.mjs` files no
+longer export a `views[]` array.
+
+### Palette
+
+```
+palette NAME {
+  stop T color [R, G, B]
+  stop T color [R, G, B]
+  ...
+}
+```
+
+Two or more stops, each on its own line. `T` is in `[0, 1]` and stops
+must appear in ascending `T` order. `R`, `G`, `B` are in `[0, 255]`.
+Names are unique within a recipe.
+
+Each stop becomes an interpolation knot for ramp views that reference
+this palette by name.
+
+### View
+
+```
+view ID "Display label" { color KIND ARGUMENTS }
+```
+
+Three view kinds:
+
+**`color ramp FIELD range [LO, HI] palette NAME`** — scalar field, mapped
+through a piecewise-linear lookup against the named palette. The
+input value is remapped via `t = clamp((value - LO) / (HI - LO), 0, 1)`
+before sampling the palette. `LO` must differ from `HI`. Range bounds
+accept numeric literals, declared `const`s, or `PI` / `TAU`. The
+palette can also be inlined as `stops { ... }` — same shape as a
+top-level `palette` block — when you don't want to name and reuse
+it.
+
+```
+view amp "Amplitude" {
+  color ramp u range [-1, 1] palette WAVE
+}
+
+view density "Density" {
+  color ramp rho range [0, 1] stops {
+    stop 0 color [0, 0, 0]
+    stop 1 color [255, 80, 0]
+  }
+}
+```
+
+**`color wheel FIELD [range [LO, HI]]`** — scalar field treated as an
+angle, rotated through HSV. Default range is `[0, 2π]` (canonical
+phase semantics). Use for fields that are inherently cyclic — phase
+oscillators, heading angles, cyclic-CA states.
+
+```
+view phase "Phase (θ)" {
+  color wheel theta range [0, TAU]
+}
+```
+
+**`color expr { ... }`** — programmable per-cell RGB. Body uses a
+restricted subset of the cell-expression grammar: no `@prev` / `@n` /
+`@upstream` coord queries, no neighbor reductions, no `gradient` /
+`divergence`, no field writes (only `set red = ...` / `set green =
+...` / `set blue = ...`), no `add` (`set` only). Each of the three
+channels must be assigned at the body's *root level* — assignments
+inside a `when` don't satisfy the requirement on their own (the
+runtime defaults unset channels to zero, which silently masks bugs).
+
+```
+view composite "Composite" {
+  color expr {
+    let mag = length(wind)
+    let lit = clamp(h, 0, 1)
+    set red   = sin(lit * PI) * 200 + 40
+    set green = mag * 100 + wind.x * 5
+    set blue  = sqrt(max(lit, 0)) * 255
+  }
+}
+```
+
+Allowed identifiers in expr-view bodies:
+
+- declared `field`s (scalar `f32` directly; `vec2` only via `.x` /
+  `.y` or as the bare argument of `length(...)`)
+- declared `param`s and `const`s
+- `let`-locals declared earlier in the same body
+- `PI`, `TAU`, `true`, `false`
+- `red`, `green`, `blue` only as `set` targets — reading them is
+  rejected
+
+Allowed calls: `clamp`, `min`, `max`, `abs`, `sin`, `cos`, `asin`,
+`atan2`, `exp`, `sqrt`, `pow`, `hypot`, `wrapAngle`, `smoothstep`,
+`length`. Per-cell stage builtins (`cellNoise`, `cellRand`, `lon`,
+`lat`, `frame`, `dt`) are stage-only — promote them to a derived
+field if the view needs them.
+
+### Overlay
+
+```
+overlay NAME
+```
+
+One-line declaration. `NAME` must be in the registered set; currently
+only `grid` (the geodesic graticule) is registered. Future overlays
+(poles, lat/lon ticks, vector glyphs) will register the same way.
+Recipes don't author overlay content — they pick from the registered
+catalog.
 
 ## Step block and stages
 
@@ -474,6 +663,19 @@ explicit-previous-reads), and `dsl/typecheck-v2.mjs` (assignment-shape
 - Metric body must produce `f32` (vec2 in a scalar reduction errors
   out), bool top-level rejected with a redirect to `count cells
   where ...`. *(validate-v2 + typecheck-v2)*
+- Render: `palette` names unique within the recipe; ≥2 stops; stops
+  in ascending `T` order with `T ∈ [0, 1]`; `R`, `G`, `B` in
+  `[0, 255]`. *(validate-v2)*
+- Render: `view` ids unique. Ramp/wheel views reference a declared
+  field; ramp views reference a declared palette OR carry inline
+  `stops { ... }` (not both). Range bounds resolve to numbers via
+  consts ∪ `{PI, TAU}`. Range `LO != HI`. *(validate-v2)*
+- Render: expr-view bodies validated against the runtime's identifier
+  + call whitelist; vec2 fields only through `.x` / `.y` or
+  `length(...)`; `red` / `green` / `blue` must each be assigned at
+  the body root (not under a `when`). *(validate-v2)*
+- Render: overlay names in the registered catalog (currently
+  `{grid}`); each registered name appears at most once. *(validate-v2)*
 
 Still TODO — partially-enforced or not yet:
 
@@ -549,13 +751,19 @@ Reserved in grammar, not implemented:
 
 ## Open questions
 
-- Derived field UI: paint panel needs to auto-hide derived fields; views
-  panel should show them. Editor concern, not DSL — wires through the
-  recipe's `views[]` / paint stamp list. **Pending evidence** — only
-  Kuramoto's `cosTheta` is currently derived, so the UI gap isn't yet
-  user-visible.
 - The historyFields side-channel still travels via `schema.imports`
   (a leftover from the v1 namespace-import object). It should be
   promoted to a proper top-level field on the parsed schema, after
   which the `imports` parameter can be removed from the shape
   validators entirely.
+- Derived-field UI nuance: the paint panel currently lists every
+  field as a stamp target; derived fields should be hidden (they're
+  computed by stages, not paintable). Low-impact today since most
+  recipes don't expose paint UI for their derived fields, but worth
+  formalizing.
+- Render escape hatches: `color expr` covers programmable scalar →
+  RGB but assumes a single-layer view. Future render layers (vector
+  glyphs, contour overlays, sparse markers) likely want a different
+  shape inside `view { ... }` — additive layers or alternative
+  `glyph` / `arrows` clauses alongside `color`. Grammar leaves room
+  but no consumer exists yet.
