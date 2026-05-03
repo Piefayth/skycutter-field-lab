@@ -838,7 +838,11 @@ function applyDslRecipeMetadata(recipe, dsl, getParam) {
       label: m.id.toUpperCase(),
       source: `dsl:${m.id}`,
       mini: true,
-      precision: 3,
+      // count metrics produce integer-valued counts (0.0, 1.0, 2.0, ...
+      // — see V2-SPEC.md note on count's f32 implementation). Display
+      // with no decimals; other reductions get the standard 3-digit
+      // precision the metrics panel uses by default.
+      precision: m.op === "count" ? 0 : 3,
     }));
     const existing = Array.isArray(recipe.metrics) ? recipe.metrics : [];
     const existingIds = new Set(existing.map((d) => d?.id));

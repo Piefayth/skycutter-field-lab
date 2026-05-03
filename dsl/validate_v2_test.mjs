@@ -258,6 +258,99 @@ metric bad = sum cells where missing > 0 { u }
 `), "unknown identifier");
 });
 
+// -----------------------------------------------------------------------------
+// Metric expression validation — bool body, import constraint coverage
+// -----------------------------------------------------------------------------
+
+test("mean cells { u > 0 } rejected (bool body)", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+step { stage s { reads u; writes u; cell { set u = u } } }
+metric frac = mean cells { u > 0 }
+`), "boolean (comparison");
+});
+
+test("sum cells { u && u } rejected (logical body)", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+step { stage s { reads u; writes u; cell { set u = u } } }
+metric weird = sum cells { u && u }
+`), "boolean (comparison");
+});
+
+test("mean cells { u > 0 ? 1 : 0 } accepted (conditional → numeric)", () => {
+  // The bool happens INSIDE a conditional, so the top-level expression
+  // is a Conditional that produces a numeric. Allowed.
+  compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+step { stage s { reads u; writes u; cell { set u = u } } }
+metric active_frac = mean cells { u > 0 ? 1 : 0 }
+`);
+});
+
+test("explicit imports — metric body using lon without import errors", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+import sin
+field u: f32
+step { stage s { reads u; writes u; cell { set u = u } } }
+metric weighted = sum cells { sin(u) * lon }
+`), "geo.lon is not imported");
+});
+
+test("explicit imports — metric body using TAU without import errors", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+import abs
+field u: f32
+step { stage s { reads u; writes u; cell { set u = u } } }
+metric scaled = sum cells { abs(u) * TAU }
+`), "geo.TAU is not imported");
+});
+
+test("explicit imports — metric body using neighbor reduction without import errors", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+import abs
+field u: f32
+step { stage s { reads u; writes u; cell { set u = u } } }
+metric grad = max cells { sum n in neighbors { u@n - u } }
+`), "core.neighbor is not imported");
+});
+
+test("explicit imports — metric body using @prev without import errors", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+import abs
+field u: f32
+step {
+  stage s { reads u; writes u; cell { set u = u + u@prev } }
+}
+metric drift = max cells { abs(u@prev - u) }
+`), "clock.prev is not imported");
+});
+
+test("explicit imports — metric body using only imported names compiles", () => {
+  compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+import abs, sin, lon
+field u: f32
+step { stage s { reads u; writes u; cell { set u = u } } }
+metric weighted = sum cells { abs(u) * sin(lon) }
+`);
+});
+
 test("metric reduction op must be one of the five", () => {
   expectThrow(() => compileV2(`
 recipe "X"

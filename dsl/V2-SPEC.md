@@ -341,7 +341,11 @@ metric active = count cells where abs_u > 0.1
 
 ### Reduction semantics
 
-- Result type: `f32` for sum/mean/max/min; `u32` for count.
+- Result type: `f32` for sum/mean/max/min/count. Count is implemented
+  in the f32 reduction pipeline (each cell contributes 0.0 or 1.0)
+  rather than a separate u32 path — at typical geodesic resolutions
+  (≤ ~16M cells), f32's 24-bit mantissa is exact. The metrics panel
+  renders count metrics as integers via `Math.round` at display time.
 - Empty result (no cells matching `where`): `sum`/`count` → 0; `max` →
   `-FLT_MAX`; `min` → `+FLT_MAX`; `mean` → NaN. Document; UI renders NaN as
   "—".
@@ -448,35 +452,53 @@ Still TODO — partially-enforced or not yet:
   level. *(currently lenient: last-write-wins matches v1 semantics; the
   recipe author can still do `when A { set u = X } when B { set u = Y }`
   for mutually-exclusive branches, which we want.)*
-- Reductions numeric-only; `mean cells { bool }` rejected. *(no implicit
-  bool→f32 cast; type checking is informal until a typer lands.)*
-- Metric expressions produce `f32` scalar (or `u32` for count). *(no
-  type system yet; arity checks only.)*
+- Metric expressions produce `f32` scalar. *(top-level boolean
+  expressions are now rejected — `mean cells { u > 0 }` errors with a
+  redirect to `count cells where ...` or
+  `mean cells { u > 0 ? 1 : 0 }`. Deep type checking inside arithmetic
+  will need a real typer.)*
 - Substrate-specific helpers gated by substrate type. *(only `geodesic`
   exists; non-issue until a second substrate lands.)*
 
 ## Compiler architecture
 
-v2 lowers to v1's existing AST shape, then v1's `webgpu-geodesic-compiler`
-emits WGSL. This means:
+The v2 surface produces v2 AST nodes that flow through to the WGSL
+compiler unchanged. Some v1 AST shapes (NeighborReduce, stage cell
+actions) are reused as-is — they predate v2 but model the same
+concepts. The compile path is:
 
-- v2 parser produces a v2-shaped AST.
-- `compile-v2.mjs` lowers v2 AST → v1 stage AST.
-- Existing `webgpu-geodesic-compiler.mjs` and `webgpu-geodesic-runtime.mjs`
-  consume the lowered AST unchanged.
+- `parse-v2.mjs` produces a v2 AST: CoordRead nodes for `field@coord`,
+  NeighborReduce nodes carrying a `coord` binding name, plus the
+  shared cell-action types (`set`, `add`, `let`, `when`).
+- `compile-v2.mjs` runs validators (v1 layer for shared shape rules,
+  v2 layer for v2-specific rules) and emits a recipe object the
+  runtime + WGSL compiler consume.
+- `webgpu-geodesic-compiler.mjs`'s `compileExpr` dispatches on
+  `CoordRead.coord.kind` directly — no Call-based lowering. New coord
+  kinds extend by adding cases here.
+- The metric kernel pipeline (per-cell pass + workgroup tree-reduce)
+  lives in `webgpu-geodesic-compiler.mjs` (`compileWebGpuMetric`,
+  `metricReduceShader`) and `visual/webgpu-metric-runtime.mjs`.
 
-Lowering rules:
-- v2 `u@prev` → v1 `Call { callee: Identifier("prev"), args: [Identifier("u")] }`
-- v2 `sum n in neighbors { u@n - u }` (single field) → v1 `NeighborReduce {
-  bindings: [{ name: "n_u", field: "u" }], body: rewritten n→n_u }`
-- v2 `sum n in neighbors { u@n - u + v@n }` (multi-field) → v1
-  `NeighborReduce { bindings: [{ name: "n_u", field: "u" }, { name: "n_v",
-  field: "v" }], body: rewritten u@n→n_u, v@n→n_v }`. Requires extending v1's
-  WGSL emitter to handle multi-binding (currently only emits bindings[0]).
-- v2 `metric x = ...` → no v1 equivalent; handled by a new metric-runtime
-  layer that owns reduction kernels.
-- v2 `derived` annotation → v1 field plus bookkeeping in the recipe metadata
-  for the UI (metrics panel auto-displays, paint UI auto-hides).
+Concrete shapes:
+- v2 `u@prev` → `CoordRead { field: "u", coord: { kind: "prev" } }`.
+  WGSL: `f_u_prev[cell]`.
+- v2 `sum n in neighbors { u@n - u }` →
+  `NeighborReduce { op: "sum", coord: "n", body: ... }` where the body
+  contains `CoordRead { field: "u", coord: { kind: "neighbor", binding: "n" } }`.
+  `emitReduction` walks the body to derive per-field bindings,
+  synthesizes `let _n_u: f32 = f_u[neighborIdx]`, then compiles the
+  body with the locals in scope.
+- v2 multi-field reductions (`sum n in neighbors { u@n + v@n - u - v }`)
+  emit one local per coord-bound field; the WGSL emitter loops over
+  neighbors once and reads each field at the resolved neighbor index.
+- v2 `metric x = max cells { abs(u) }` → `compileWebGpuMetric` emits a
+  per-cell shader writing scratch + a reduction shader; the runtime
+  ping-pongs reduce passes until length is 1; `mean` decomposes into
+  [sum, count] primitives and the readback layer divides.
+- v2 `field x: f32 derived` → ordinary field plus a `derived: true`
+  flag the validator gates against (no scenario/stamp writes; must
+  have stage writer).
 
 ## Migration from v1
 

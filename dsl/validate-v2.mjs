@@ -228,6 +228,19 @@ function validateMetrics(schema) {
       throw new Error(`metric "${metric.id}": ${metric.op} requires a body \`{ ... }\``);
     }
 
+    // Body must be numeric. WGSL distinguishes bool from f32; mixing
+    // them silently is a footgun (`mean cells { u > 0.1 }` compiles to
+    // a shader that errors at GPU upload time with a confusing
+    // type-mismatch message). Catch the common cases here — top-level
+    // comparison / logical / negation — and redirect to the right form.
+    if (metric.body && metric.op !== "count" && expressionTopLevelIsBool(metric.body)) {
+      throw new Error(
+        `metric "${metric.id}": ${metric.op} body produces a boolean (comparison / logical / not). ` +
+        `Use \`count cells where <pred>\` for "fraction of cells matching", or \`mean cells { <pred> ? 1 : 0 }\` ` +
+        `if you really want to average a boolean as 0/1.`,
+      );
+    }
+
     // Body must be pure: no set/add/spot/etc. (`emit` can't appear; the
     // parser already rejects it inside cell actions and metric bodies
     // are parsed as expressions, not action lists.)
@@ -248,11 +261,23 @@ function validateMetrics(schema) {
   }
 }
 
-const METRIC_BUILTIN_IDENTIFIERS = new Set([
-  "true", "false", "null", "undefined",
-  "dt", "frame", "PI", "TAU", "N",
-  "lon", "lat", "x", "y", "z", "u", "v", "px", "py", "pz", "i",
+// Builtins that resolve as bare identifiers in metric expressions.
+// Tagged with namespace so the import check can route to the right v1
+// namespace when the recipe declares explicit imports.
+const METRIC_BUILTIN_NAMESPACE = new Map([
+  ["true", null], ["false", null], ["null", null], ["undefined", null],
+  ["dt", "clock"], ["frame", "clock"],
+  ["PI", "geo"], ["TAU", "geo"], ["N", "geo"],
+  ["lon", "geo"], ["lat", "geo"], ["x", "geo"], ["y", "geo"],
+  ["z", "geo"], ["u", "geo"], ["v", "geo"],
+  ["px", "geo"], ["py", "geo"], ["pz", "geo"], ["i", "geo"],
 ]);
+const METRIC_BUILTIN_IDENTIFIERS = new Set(METRIC_BUILTIN_NAMESPACE.keys());
+
+function metricImportError(name, namespace, label) {
+  if (!namespace) return null;
+  return new Error(`${label}: ${namespace}.${name} is not imported`);
+}
 
 function validateMetricIdentifiers(metric, schema) {
   const fieldNames = new Set((schema.fields ?? []).map((d) => d.name).filter(Boolean));
@@ -274,12 +299,14 @@ function validateMetricIdentifiers(metric, schema) {
         if (constNames.has(name)) return;
         if (planetNames.has(name)) return;
         if (METRIC_BUILTIN_IDENTIFIERS.has(name)) {
-          // If imports are explicit, builtin clock / geo identifiers
-          // still need to be imported. Otherwise allow.
-          if (importedNames && (name === "dt" || name === "frame")) {
-            if (!importedNames.includes(name)) {
-              throw new Error(`${label}: clock.${name} is not imported`);
-            }
+          // Explicit imports constrain ALL builtins (geo position
+          // helpers, clock, math constants), not just clock — using
+          // `lon`, `TAU`, `PI`, `frame`, `dt`, etc. without importing
+          // them is an error when an `import` line is declared.
+          if (importedNames && !importedNames.includes(name)) {
+            const ns = METRIC_BUILTIN_NAMESPACE.get(name);
+            const err = metricImportError(name, ns, label);
+            if (err) throw err;
           }
           return;
         }
@@ -326,9 +353,12 @@ function validateMetricIdentifiers(metric, schema) {
         return;
       }
       case "NeighborReduce": {
-        // V2 shape carries the binding coord on the node itself; CoordRead
-        // nodes inside the body reference the coord. Legacy v1 shape
-        // pre-bound { name, field } pairs — handle both.
+        // Cell-level reduction inside a metric expression — needs the
+        // `neighbor` core helper to be imported when imports are
+        // explicit. The body opens a new local scope for the binding.
+        if (importedNames && !importedNames.includes("neighbor")) {
+          throw new Error(`${label}: core.neighbor is not imported (required for \`<op> n in neighbors { ... }\`)`);
+        }
         const bodyLocals = new Set(locals);
         for (const b of ast.bindings ?? []) {
           if (b.name) bodyLocals.add(b.name);
@@ -341,13 +371,14 @@ function validateMetricIdentifiers(metric, schema) {
       }
       case "CoordRead": {
         // `field@<coord>` reads `field`. Verify field exists; coord
-        // shape was enforced by the parser. (Inside a metric body we
-        // also still need to check that prev-coord fields are
-        // history-eligible — the v1 validator does that for stages,
-        // but metric expressions don't go through validateStages so
-        // we re-check here.)
+        // shape was enforced by the parser.
         if (!fieldNames.has(ast.field)) {
           throw new Error(`${label}: ${ast.field}@${ast.coord?.kind ?? "?"} — unknown field "${ast.field}"`);
+        }
+        // `field@prev` requires the `prev` clock helper to be imported
+        // when imports are explicit (mirrors the cell-stage rule).
+        if (ast.coord?.kind === "prev" && importedNames && !importedNames.includes("prev")) {
+          throw new Error(`${label}: clock.prev is not imported (required for \`field@prev\`)`);
         }
         return;
       }
@@ -377,6 +408,22 @@ function ensureNoSideEffects(ast, label) {
     if (Array.isArray(v)) v.forEach((c) => ensureNoSideEffects(c, label));
     else if (v && typeof v === "object") ensureNoSideEffects(v, label);
   }
+}
+
+// Heuristic: does the top-level node of EXPR produce a boolean? We
+// don't have a real typer, but the common gotcha is recipe authors
+// writing `mean cells { u > 0 }` expecting a fraction. Catch top-level
+// comparison ops, logical and/or, and unary not. Conditionals are
+// allowed (they may evaluate to numerics in their branches); deeply
+// nested booleans inside arithmetic are not flagged here because by
+// then the user has typically wrapped them in a conditional.
+const COMPARISON_OPS = new Set([">", ">=", "<", "<=", "==", "!=", "===", "!=="]);
+const LOGICAL_OPS = new Set(["&&", "||"]);
+function expressionTopLevelIsBool(ast) {
+  if (!ast || typeof ast !== "object") return false;
+  if (ast.type === "Binary" && (COMPARISON_OPS.has(ast.op) || LOGICAL_OPS.has(ast.op))) return true;
+  if (ast.type === "Unary" && ast.op === "!") return true;
+  return false;
 }
 
 function ensureNoNestedMetricReduce(ast, label) {

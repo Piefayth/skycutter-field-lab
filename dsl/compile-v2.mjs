@@ -35,12 +35,16 @@ import {
 } from "./dsl-spec.mjs";
 
 // Auto-imported v1 namespaces / names that v2 syntax doesn't expose
-// directly but that the v1 validator still checks against. cell { } is
-// the only stage block in v2 syntax, and the init verbs (fill / spot /
-// ellipse / region / eachCell) are the only scenario actions — so we
-// always inject them. v2 recipes never need to import these.
+// directly but that the v1 validator still checks against under the
+// hood. The user never imports these; they're internal routing.
+//
+// `fill` and `eachCell` aren't in v2's INIT_VERBS catalog (the user
+// writes `set f = 0` and `for each cell { ... }`), but the parser
+// lowers those to v1-shape `fill` / `eachCell` actions for the v1
+// validator. Hardcoded here rather than derived from INIT_VERBS so
+// the user-facing catalog can stay clean.
 const V2_AUTO_SIM = ["cell"];
-const V2_AUTO_INIT = INIT_VERBS.map((v) => v.name);
+const V2_AUTO_INIT = ["fill", "spot", "ellipse", "region", "eachCell"];
 
 // The maximal builtin list, used when a recipe declares no `import`
 // lines. Mirrors the union of every v1 namespace's allowed names.

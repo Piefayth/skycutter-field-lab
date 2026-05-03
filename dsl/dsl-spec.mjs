@@ -1,25 +1,39 @@
 // =============================================================================
-// Field Lab DSL — canonical surface specification.
+// Field Lab DSL — canonical v2 surface specification.
 //
 // Single source of truth for every keyword, primitive, math function,
-// builtin, and modifier the recipe DSL exposes. Every consumer
-// (parser, expression compiler, validator, editor highlighter, tooltip,
-// docs window, autocomplete) reads from this module — adding a new
+// builtin, and modifier the recipe DSL exposes. Every user-facing
+// consumer (editor highlighter, tooltips, docs window, autocomplete)
+// reads `allDslSymbolsFlat()` from this module — adding a new v2
 // symbol HERE makes it visible everywhere.
 //
-// Adding e.g. a new math function: append an entry to MATH_FUNCTIONS
-// with `name`, `target` (compile-time callee), `arity`, signature and
-// doc. The expression parser's lookup, the validator's reserved-name
-// check, and the visual catalog will all pick it up automatically.
+// V2 LANGUAGE SURFACE (what users see):
+//   substrate      — `substrate geodesic frequency 64`
+//   field          — `field u: f32 [derived]`
+//   param          — `param x slider 0..1 default 0.5 label "X"`
+//   const          — `const c = 2.998`
+//   import         — `import sin, cos, neighbor` (optional)
+//   scenario       — `scenario droplet "Single drop" { ... }`
+//   stamp          — `stamp ripple "Drop ripple" { ... }`
+//   step           — `step { stage propagate { reads ...; writes ...;
+//                                              cell { ... } } }`
+//   metric         — `metric peak = max cells [where pred] { expr }`
 //
-// Adding a new pipeline primitive: append to PIPELINE_PRIMITIVES, then
-// extend `parsePrimitiveLine` in `parse.mjs` and the WGSL compiler.
-// The spec entry doesn't auto-generate a parser regex (parsing each
-// primitive is bespoke), but the docs/tooltip/autocomplete infrastructure
-// will surface the symbol the moment it lives in the spec.
+// V2 EXPRESSION SURFACE:
+//   - bare identifiers resolve to fields, params, consts, locals, builtins
+//   - `field@prev` reads the previous-tick value (CoordRead)
+//   - `field@n` (inside `<op> n in neighbors { ... }`) reads at neighbor n
+//   - math fns, neighbor reductions, position helpers (lon/lat/x/y/...)
 //
-// Doc strings are intentionally rich — they're what the user reads in
-// the in-app docs window. Treat them as user-facing API documentation.
+// V2 STAGE PRIMITIVES (kept until coord-query / vec types replace them):
+//   wind, advect — encapsulate kernels that don't fold into cell { }
+//
+// LEGACY v1 KEEPS THE INTERNAL CATALOG (for parse.mjs / validate.mjs
+// that still serve weather.mjs), but those entries are tagged
+// `v1Only: true` and filtered out of the v2 user-facing projection.
+//
+// Doc strings are user-facing — what they read in the in-app docs
+// window. Treat as API documentation.
 // =============================================================================
 
 // ---------------------------------------------------------------------------
@@ -169,9 +183,13 @@ export const STENCIL_HELPERS = [
   {
     name: "neighbor",
     importNamespace: "core",
-    signature: "neighbor MOD BIND in FIELD { EXPR }",
-    doc: "Per-neighbor reduction. For each neighbor of the current cell, evaluate EXPR with the bound name BIND set to that neighbor's value of FIELD, then combine the per-neighbor values with MOD ∈ {sum, max, min, mean}. Reductions are neighbors-only — the center cell's value is not included. Use inside `cell` / `each` / `event` blocks. The classic Laplacian is `neighbor mean n in field { n } - field`; Kuramoto coupling is `neighbor sum n in theta { sin(n - theta - alpha) }`.",
-    example: "let coupling = K * neighbor sum n in theta { sin(n - theta - alpha) }\nlet onFire   = neighbor max n in burning { n } > 0.5\nlet lap      = neighbor mean n in field { n } - field",
+    // V2 surface: cell-centered neighbor reductions. The binding name
+    // is a neighbor coordinate; the body reads any field at that
+    // neighbor via `field@coord`. Replaces v1's field-centered
+    // `neighbor MOD BIND in FIELD { EXPR }` form.
+    signature: "<op> n in neighbors { EXPR with field@n }",
+    doc: "Per-neighbor reduction. For each neighbor cell of the current cell, evaluate EXPR (which reads any field at that neighbor via `field@n`), then combine via op ∈ {sum, max, min, mean}. Reductions are neighbors-only — the center cell is not included. Use inside `cell { }` blocks. Examples: discrete Laplacian `mean n in neighbors { u@n } - u`; Kuramoto coupling `sum n in neighbors { sin(theta@n - theta - alpha) }`; multi-field gradient `sum n in neighbors { u@n + v@n - u - v }`.",
+    example: "let lap      = mean n in neighbors { u@n } - u\nlet coupling = sum n in neighbors { sin(theta@n - theta - alpha) }\nlet onFire   = max n in neighbors { burning@n } > 0.5",
   },
 ];
 
@@ -205,9 +223,12 @@ export const CLOCK_HELPERS = [
     name: "prev",
     arity: 1,
     importNamespace: "clock",
-    signature: "prev(field)",
-    doc: "Reads FIELD as of the start of the current simulation tick. The argument must be a bare field identifier — \\`prev(u + v)\\`, \\`prev(3)\\`, etc. are rejected at compile time. The field must have been declared with \\`history\\` ≥ 1 (e.g. \\`field u history 1\\`). History advances exactly once per tick at the tick boundary; per-pass buffer swaps inside the tick don't disturb prev. Stamps update the current value only — recipe authors can mirror stamp deltas into history with an explicit stage if they want sync semantics. Use for second-order time integration: the wave equation lowers to \\`u_new = 2*u - prev(u) + c²·dt²·∇²u\\`.",
-    example: "field u history 1\nstage propagate \"Wave step\" {\n  reads u\n  writes u\n  cell {\n    let lap = neighbor sum n in u { n - u }\n    set u = 2 * u - prev(u) + c * c * dt * dt * lap\n  }\n}",
+    // V2 surface: `field@prev` is a CoordRead — a first-class
+    // temporal coordinate query, not a function call. The compiler
+    // emits f_<field>_prev[cell] in WGSL.
+    signature: "field@prev",
+    doc: "Reads FIELD's value as of the previous tick. History depth is inferred — using `u@prev` anywhere triggers triple-buffer rotation for u. History fields can be written by exactly one stage per step; the writer's value becomes the next tick's `current` after end-of-tick rotation. Stamps deliberately update the current buffer only — the asymmetry between current and prev is the launch velocity for stamps targeting wave-style fields. Use for second-order time integration: the wave equation reads `u_new = 2*u - u@prev + c²·dt²·∇²u`.",
+    example: "field u: f32\nstep {\n  stage propagate {\n    reads u\n    writes u\n    cell {\n      let lap = sum n in neighbors { u@n - u }\n      set u = 2 * u - u@prev + c * c * dt * dt * lap\n    }\n  }\n}",
   },
 ];
 
@@ -315,9 +336,14 @@ export const GEO_CONSTANTS = [
 export const STAMP_EXTRAS = [
   {
     name: "r",
-    importNamespace: null,  // Stamp-only — no `use` line needed.
-    signature: "r",
-    doc: "Brush angular radius in radians (stamp body only). Typed by the user via the RADIUS slider; multiply with `r * 1.4` etc. to size sub-spots.",
+    importNamespace: null,
+    // V2 form: `brush.r` reads the radius; the parser lowers it to
+    // bare `r` to match the v1 stamp environment that the runtime
+    // already binds. Recipe authors should write `brush.r` (and
+    // `brush.pos` for the position) — see stamp examples.
+    signature: "brush.r",
+    doc: "Brush angular radius in radians (stamp body only). Typed by the user via the RADIUS slider. Use as `brush.r` for clarity (`brush.r * 1.4` for sub-spots). The companion `brush.pos` shorthand expands to lon=brush.pos, lat=brush.pos in spot/ellipse `at` clauses.",
+    example: "spot u at brush.pos, radius=brush.r, amount=1\nspot v at brush.pos, radius=brush.r * 1.6, amount=0.4",
     stampOnly: true,
   },
 ];
@@ -332,32 +358,22 @@ export const PIPELINE_PRIMITIVES = [
   {
     name: "wind",
     importNamespace: "sim",
-    signature: "wind PRESSURE -> windU, windV, lift strength EXPR",
-    doc: "Pressure-gradient wind primitive. Reads PRESSURE; writes velocity (windU, windV) and divergence (lift) in tangent-frame coordinates. Includes Coriolis based on latitude.",
-    example: "wind pressure -> windU, windV, lift strength windStrength",
+    signature: "wind PRESSURE -> windU, windV[, lift] strength EXPR",
+    doc: "Pressure-gradient wind primitive. Reads PRESSURE; writes velocity (windU, windV) and divergence (lift) in tangent-frame coordinates. Includes a Coriolis term based on latitude. Stays as a v2 primitive until vector field types arrive — at which point it'll become a regular cell stage with `set wind = vec2(...)`.",
+    example: "stage compute_wind {\n  reads pressure\n  writes windU, windV, lift\n  wind pressure -> windU, windV, lift strength windStrength\n}",
   },
   {
     name: "advect",
     importNamespace: "sim",
     signature: "advect FIELD by windU, windV dt EXPR",
-    doc: "Semi-Lagrangian transport of FIELD by velocity (windU, windV). Per-tick displacement = velocity * EXPR.",
-    example: "advect moisture by windU, windV dt dt * 1.0",
+    doc: "Semi-Lagrangian transport of FIELD by velocity (windU, windV). Per-tick displacement = velocity·EXPR. Stays as a v2 primitive until continuous-position coordinate queries arrive (`field@(self - velocity*dt)`) — at which point it'll become a regular cell stage.",
+    example: "stage flow {\n  reads moisture, windU, windV\n  writes moisture\n  advect moisture by windU, windV dt dt * 1.0\n}",
   },
-  {
-    name: "diffuse",
-    importNamespace: "sim",
-    signature: "diffuse FIELD amount EXPR",
-    doc: "Laplacian smoothing — each cell averages with its neighbors weighted by EXPR. Stable for amount in [0, 1].",
-    example: "diffuse moisture amount diffusion * 0.34 * dt",
-  },
-  // `clamp` is also documented under MATH_FUNCTIONS with the dual-form
-  // signature so we don't list it twice. The catalog merges them.
-  {
-    name: "normalize",
-    importNamespace: "sim",
-    signature: "normalize FIELD damping EXPR when CONDITION",
-    doc: "Damping toward zero-mean. NOTE: not yet wired on geodesic — currently throws if the `when` condition fires. Track for the reductions roadmap.",
-  },
+  // diffuse / clamp / normalize are deliberately ABSENT from the v2
+  // surface. The parser rejects them with a redirect:
+  //   diffuse → `add field = (mean n in neighbors { field@n } - field) * <amount>`
+  //   clamp   → `set field = clamp(field, <lo>, <hi>)` inside cell { }
+  //   normalize → no v2 equivalent yet (needs scalar reduction + broadcast)
 ];
 
 // ---------------------------------------------------------------------------
@@ -369,21 +385,12 @@ export const STAGE_BLOCKS = [
     name: "cell",
     importNamespace: "sim",
     signature: "cell { ... per-cell math ... }",
-    doc: "Per-cell continuous math. Each cell runs the body in parallel; reads field values from the input snapshot, writes via `add` (accumulate) or `set` (overwrite). Use for reaction terms, growth, decay, etc.",
+    doc: "Per-cell continuous math. Each cell runs the body in parallel; reads field values from the start-of-stage snapshot, writes via `add` (accumulate) or `set` (overwrite). Use for reaction terms, growth, decay, neighbor reductions, coordinate queries — every per-cell computation in v2 lives here. v2 stages contain exactly one `cell { }` block; sequencing within the cell is via `let` locals.",
+    example: "cell {\n  let lap = mean n in neighbors { u@n } - u\n  let damp = damping * (u - u@prev)\n  set u = 2 * u - u@prev + speed*speed*lap - damp\n}",
   },
-  {
-    name: "event",
-    importNamespace: "sim",
-    signature: "event when CONDITION { ... }",
-    doc: "Discrete per-cell event. Body runs only on cells where CONDITION is true. Increments an atomic counter so the metric strip can show event rates.",
-    example: "event when tree > 0.5 and neighborMax(burning) > 0.5 {\n  set burning = 1\n  set tree = 0\n}",
-  },
-  {
-    name: "each",
-    importNamespace: "sim",
-    signature: "each { ... per-cell side-effect ... }",
-    doc: "Like `cell`, but for stages that READ neighbors via `neighborMax`. No event accounting — use for stencil reads that don't fire discrete events.",
-  },
+  // `each` and `event` are v1 block forms. v2 has only `cell { }` with
+  // optional `when` blocks for predicates; emit-style events are
+  // expressed as metrics instead (`metric x = count cells where ...`).
 ];
 
 // ---------------------------------------------------------------------------
@@ -391,46 +398,37 @@ export const STAGE_BLOCKS = [
 // ---------------------------------------------------------------------------
 
 export const INIT_VERBS = [
-  {
-    name: "fill",
-    importNamespace: "init",
-    signature: "fill FIELD VALUE",
-    doc: "Sets every cell of FIELD to VALUE. Runs at preset/stamp time. VALUE can be any constant expression.",
-    example: "fill u 0\nfill catalyst 0.5",
-  },
+  // Note: `set` and `add` are documented under ACTION_VERBS — they
+  // work the same way in scenario / stamp / cell bodies. The init-verb
+  // group contains only the verbs unique to scenarios and stamps
+  // (spot / ellipse / region / for).
   {
     name: "spot",
     importNamespace: "init",
-    signature: "spot FIELD lon LON lat LAT radius R amount A",
-    doc: "Adds a Gaussian spherical spot to FIELD centered at (LON, LAT). LON/LAT in radians. R is the angular radius in radians. A is the peak amount added at the center.",
-    example: "spot u lon 0 lat 0.5 radius 0.18 amount 1",
+    signature: "spot FIELD at lon=LON, lat=LAT, radius=R, amount=A",
+    doc: "Adds a Gaussian spherical spot to FIELD. Inside scenarios, lon/lat are explicit. Inside stamps, use `at brush.pos, radius=brush.r, amount=A` for the brush position shorthand. Named args after `at` — `lon=`, `lat=`, `radius=`, `amount=`.",
+    example: "spot u at lon=0, lat=0.5, radius=0.18, amount=1\n// stamp:\nspot u at brush.pos, radius=brush.r, amount=1",
   },
   {
     name: "ellipse",
     importNamespace: "init",
-    signature: "ellipse FIELD lon LON lat LAT rx RX ry RY amount A angle ANG",
-    doc: "Adds a Gaussian elliptical spot. Like `spot` but with separate semi-axes RX (along east) and RY (along north). ANG is rotation in radians.",
-    example: "ellipse pressure lon 0 lat 0 rx 0.4 ry 0.1 amount 1 angle 0.7",
+    signature: "ellipse FIELD at lon=LON, lat=LAT, rx=RX, ry=RY, amount=A, angle=ANG",
+    doc: "Adds a Gaussian elliptical spot. Like `spot` but with separate semi-axes rx (along east) and ry (along north). angle is rotation in radians.",
+    example: "ellipse pressure at lon=0, lat=0, rx=0.4, ry=0.1, amount=1, angle=0.7",
   },
   {
     name: "region",
     importNamespace: "init",
-    signature: "region FIELD lon LO..HI lat LO..HI amount A",
-    doc: "Hard-edged rectangular assign in lon/lat space. Sets every cell whose lon ∈ [LO_lon, HI_lon] AND lat ∈ [LO_lat, HI_lat] to AMOUNT (overwrite, not additive).",
-    example: "region u lon -0.6..0.6 lat 0..PI/2 amount 1",
+    signature: "region FIELD at lonMin=LO, lonMax=HI, latMin=LO, latMax=HI, amount=A",
+    doc: "Hard-edged rectangular assign in lon/lat space. Sets every cell whose lon ∈ [lonMin, lonMax] AND lat ∈ [latMin, latMax] to amount (overwrite, not additive).",
+    example: "region u at lonMin=-0.6, lonMax=0.6, latMin=0, latMax=PI/2, amount=1",
   },
   {
-    name: "copy",
+    name: "for",
     importNamespace: "init",
-    signature: "copy DESTINATION_FIELD from SOURCE_FIELD",
-    doc: "Copies one field's per-cell values into another at preset time.",
-  },
-  {
-    name: "eachCell",
-    importNamespace: "init",
-    signature: "eachCell { ... per-cell init math ... }",
-    doc: "Per-cell programmable init (presets only). Has access to position coords (lon, lat, x, y, etc.) for spatially-varying initialization.",
-    example: "eachCell {\n  let band = exp(-pow(sin(lon * 2), 2) / 0.018)\n  set moistureSource = band\n}",
+    signature: "for each cell { ... per-cell init math ... }",
+    doc: "Per-cell programmable init (scenario/stamp bodies). Has access to position coords (lon, lat, x, y, ...) for spatially-varying initialization. Inside the body use `let`, `set`, `add`, `when`. Replaces v1's `eachCell { }`.",
+    example: "scenario standing {\n  for each cell {\n    set u = cos(lon * 2) * 0.6\n  }\n}",
   },
 ];
 
@@ -478,51 +476,45 @@ export const DECL_DIRECTIVES = [
   },
   {
     name: "recommendedPreset",
-    signature: "recommendedPreset PRESET_ID",
-    doc: "Which preset to apply on first load. Must match a `preset X` declaration.",
-    example: "recommendedPreset spiral",
+    signature: "recommendedPreset SCENARIO_ID",
+    doc: "Which scenario to apply on first load. Must match a `scenario X` id.",
+    example: "recommendedPreset droplet",
   },
   {
-    name: "planet",
-    signature: "planet NAME VALUE",
-    doc: "Recipe-shipped planetary constant (gravity, radius, etc.). Read by bare name in stages — `gravity`, not `planet.gravity`.",
-    example: "planet gravity 9.81",
-  },
-  {
-    name: "const",
-    signature: "const NAME VALUE",
-    doc: "Recipe-shipped numeric constant. Stage-readable by bare name. Immutable.",
-    example: "const rainoutBase 0.024",
-  },
-  {
-    name: "use",
-    signature: "use NAMESPACE name1, name2, ...",
-    doc: "Imports identifiers from a namespace. Required for every primitive / math fn / builtin used in the recipe. Namespaces: `sim`, `init`, `core`, `clock`, `geo`.",
-    example: "use sim diffuse, clamp, cell\nuse core sin, cos, smoothstep",
+    name: "substrate",
+    signature: "substrate geodesic frequency N",
+    doc: "Defines the simulation substrate. Currently only `geodesic` is supported (icosahedron-subdivided sphere mesh). N is the subdivision frequency — N=64 produces ~40k cells. Future substrates (square, torus, voxel) reuse the same syntax with different topology.",
+    example: "substrate geodesic frequency 64",
   },
   {
     name: "field",
-    signature: "field name1, name2, ...",
-    doc: "Declares mutable persistent state — Float32 values per cell, allocated once at recipe load. Stages can `add`/`set` field values.",
-    example: "field pressure, moisture, cloud, temperature",
+    signature: "field NAME: TYPE [derived]",
+    doc: "Declares per-cell state. TYPE is `f32` for now (`vec2`, `vec3`, `u32` reserved). Optional `derived` annotation marks the field as computed-by-stage — derived fields must be written by ≥1 stage and cannot be written by scenarios or stamps. History is inferred: any `field@prev` read anywhere allocates triple-buffer rotation for that field.",
+    example: "field u: f32\nfield abs_u: f32 derived",
   },
   {
-    name: "source",
-    signature: "source name1, name2, ...",
-    doc: "Declares immutable forcing maps — populated by presets, read-only inside stages. Use for terrain, solar input, fixed boundary maps.",
-    example: "source moistureSource, heatSource",
+    name: "const",
+    signature: "const NAME = VALUE",
+    doc: "Recipe-shipped numeric constant. Stage-readable by bare name. Immutable. Use the `=` form (v1's `const NAME VALUE` no-equals form is rejected).",
+    example: "const c = 2.998\nconst PI_HALF = 1.5707963",
   },
   {
-    name: "setting",
-    signature: 'setting NAME slider min N max N step N default V label "L"',
-    doc: "Runtime knob — surfaces a slider in the side panel that the runtime reads (e.g. simRateHz). Not visible inside stage bodies.",
-    example: 'setting simRateHz slider min 0 max 360 step 1 default 60 label "SIM RATE"',
+    name: "import",
+    signature: "import name1, name2, ...",
+    doc: "Optional flat import list. When present, ONLY listed builtin names are accessible (math fns, neighbor reductions, clock helpers, position helpers). Unknown imports error fast. When the recipe declares no `import` line, all builtins are in scope by default — every shipped recipe takes that path.",
+    example: "import sin, cos, neighbor, prev, smoothstep",
   },
   {
     name: "param",
-    signature: 'param NAME slider min N max N step N default V label "L"',
-    doc: "Stage-readable knob. Renders as a slider (number) or checkbox (boolean). Read by bare name in stages.",
-    example: 'param windStrength slider min 0 max 8 step 0.05 default 2.6 label "WIND"',
+    signature: 'param NAME slider LO..HI [step S] default V label "L"',
+    doc: "Stage-readable knob. Numeric form: `slider LO..HI [step S] default V`. Boolean form: `toggle default true|false`. Renders in the side panel; read by bare name in stages and metric expressions.",
+    example: 'param speed slider 0..0.29 step 0.005 default 0.25 label "WAVE SPEED"\nparam enableForcing toggle default true label "FORCING"',
+  },
+  {
+    name: "metric",
+    signature: "metric NAME = <op> cells [where PRED] { EXPR }",
+    doc: "Scalar reduction over post-step state. op ∈ {sum, max, min, mean, count}. count takes only a `where` clause (no body — the body is implicitly 1). Other reductions take a body expression. The body uses the full cell-expression grammar (math fns, neighbor reductions, coordinate queries). Computed on the GPU each tick (per-cell pass + workgroup tree-reduce); async readback populates the metrics panel via `dsl:<id>` sources.",
+    example: "metric peak   = max cells { abs(u) }\nmetric active = count cells where abs(u) > 0.1\nmetric energy = sum cells { 0.5*v*v + 0.5*c*c * sum n in neighbors { (u@n - u)*(u@n - u) } }",
   },
 ];
 
@@ -532,19 +524,27 @@ export const DECL_DIRECTIVES = [
 
 export const BLOCK_KEYWORDS = [
   {
-    name: "stage",
-    signature: 'stage NAME "Display name" { reads ... writes ... cell { ... } }',
-    doc: "A pipeline stage. Runs once per tick in declaration order. Body is `cell {}`, `event when ... {}`, `each {}`, or one of the pipeline primitives (wind/advect/diffuse/clamp/normalize).",
+    name: "step",
+    signature: "step { stage X { ... } stage Y { ... } ... }",
+    doc: "Tick boundary. Runs every simulation tick; stages inside execute in declaration order. End-of-step is when history fields rotate and metrics dispatch their reduce passes. Multi-rate steps (`step at Nhz { ... }`) are reserved for future v2 work.",
   },
   {
-    name: "preset",
-    signature: 'preset NAME "Display name" { ... }',
-    doc: "An initial-state recipe. Fires on Reset / on first load (if recommended). Body uses init verbs (`fill`, `spot`, `ellipse`, `region`, `eachCell`).",
+    name: "stage",
+    signature: 'stage NAME [\"Label\"] { reads ... writes ... cell { ... } }',
+    doc: "A pipeline stage inside `step { }`. v2 stages contain exactly one `cell { }` block (plus `reads`/`writes` clauses). The legacy stage primitives `wind` and `advect` may also appear as the only body (for kernels that don't fold into cell expressions yet).",
+    example: 'stage propagate "Wave step" {\n  reads u\n  writes u\n  cell {\n    let lap = sum n in neighbors { u@n - u }\n    set u = 2*u - u@prev + speed*speed*lap\n  }\n}',
+  },
+  {
+    name: "scenario",
+    signature: 'scenario NAME [\"Label\"] { ... }',
+    doc: "An initial-state recipe. Fires on Reset / on first load (if `recommendedPreset` matches its id). Body uses init verbs (`set`, `spot`, `ellipse`, `region`, `for each cell`). Scenarios cannot write `derived` fields — derived fields are computed by stages.",
+    example: 'scenario droplet "Single droplet" {\n  set u = 0\n  spot u at lon=0, lat=0, radius=0.08, amount=1\n}',
   },
   {
     name: "stamp",
-    signature: 'stamp NAME "Display name" { ... }',
-    doc: "A paint-brush composite. User clicks the canvas with this stamp selected to apply. Body uses init verbs scoped to the click position via `lon`/`lat`/`r`.",
+    signature: 'stamp NAME [\"Label\"] { ... }',
+    doc: "A paint-brush composite. User clicks the canvas with this stamp selected to apply. Body uses init verbs scoped to the click position via `brush.pos` and `brush.r`. Stamps cannot write `derived` fields. Stamps deliberately leave the prev buffer of history fields untouched — the asymmetry between current and prev is the launch velocity.",
+    example: 'stamp ripple "Drop ripple" {\n  spot u at brush.pos, radius=brush.r, amount=1\n}',
   },
 ];
 
@@ -611,41 +611,47 @@ export const LITERALS = [
 // ---------------------------------------------------------------------------
 
 export const MODIFIERS = [
-  { name: "by",       signature: "advect FIELD by U, V dt EXPR",                doc: "Velocity-fields modifier on `advect`. Names the two scalar fields used as velocity components." },
-  { name: "amount",   signature: "spot ... amount EXPR",                         doc: "Magnitude modifier on init verbs (`spot`, `ellipse`, `region`) and `diffuse`. Negative amounts subtract." },
-  { name: "damping",  signature: "normalize FIELD damping EXPR",                 doc: "Damping factor on `normalize` (between 0 and 1)." },
+  // v2 stage I/O annotations
+  { name: "previous", signature: "reads u previous",                             doc: "Marks a `reads` entry as a previous-tick read. Optional — history depth is inferred from `field@prev` usage. Use the explicit form to document intent; when present, the validator checks the explicit list bidirectionally against inferred uses." },
+  { name: "derived",  signature: "field NAME: TYPE derived",                     doc: "Annotates a field as computed-by-stage. Derived fields must be in `writes` of ≥1 stage; cannot be written by scenarios or stamps. Used for fields that are pure functions of other state." },
+  // v2 metric reduction shape
+  { name: "cells",    signature: "metric x = <op> cells [where PRED] { EXPR }", doc: "Marks a grid-level reduction. Required after the reduction op in a metric declaration." },
+  { name: "where",    signature: "metric x = <op> cells where PRED { ... }",    doc: "Predicate that filters cells contributing to the reduction. Available on every metric op; for `count`, it's the only argument." },
+  // v2 init-verb arg keywords
+  { name: "at",       signature: "spot FIELD at lon=L, lat=L, radius=R, amount=A", doc: "Introduces named-arg position arguments to spot/ellipse/region. Inside stamps, also accepts `brush.pos` shorthand." },
+  // v2 stage primitive args
+  { name: "by",       signature: "advect FIELD by U, V dt EXPR",                doc: "Velocity-fields modifier on `advect`. Names the two scalar fields used as east/north components." },
   { name: "strength", signature: "wind ... strength EXPR",                       doc: "Multiplicative gain on the `wind` primitive." },
-  { name: "radius",   signature: "spot FIELD lon ... lat ... radius EXPR amount EXPR", doc: "Angular radius for `spot` in radians. With brush radius `r`, write e.g. `radius r * 1.4` for a brush-relative spot." },
-  { name: "rx",       signature: "ellipse ... rx EXPR ry EXPR",                  doc: "Semi-axis along the east direction for `ellipse` (radians)." },
-  { name: "ry",       signature: "ellipse ... rx EXPR ry EXPR",                  doc: "Semi-axis along the north direction for `ellipse` (radians)." },
-  { name: "angle",    signature: "ellipse ... amount EXPR angle EXPR",           doc: "Rotation of the ellipse in radians (0 = aligned to east)." },
-  { name: "slider",   signature: "param NAME slider min N max N step N default V", doc: "Renders the param as a numeric slider in the side panel." },
-  { name: "boolean",  signature: "param NAME boolean default V",                 doc: "Renders the param as a checkbox. Default is `true` or `false`." },
-  { name: "label",    signature: 'param ... label "DISPLAY LABEL"',              doc: "Display label shown next to the slider/checkbox in the side panel." },
-  { name: "step",     signature: "param ... step EXPR",                          doc: "Slider step size — the granularity of slider drags." },
-  { name: "default",  signature: "param ... default V",                          doc: "Default value for the param at recipe load. Numeric for sliders, true/false for booleans." },
+  // Spot/ellipse arg names (used as `name=value`)
+  { name: "amount",   signature: "spot ... amount=EXPR",                         doc: "Magnitude on init verbs. Negative amounts subtract." },
+  { name: "radius",   signature: "spot ... radius=EXPR",                         doc: "Angular radius for `spot` (radians). Use `brush.r` in stamps for the user-set brush radius." },
+  { name: "rx",       signature: "ellipse ... rx=EXPR ry=EXPR",                  doc: "Semi-axis along east for `ellipse` (radians)." },
+  { name: "ry",       signature: "ellipse ... rx=EXPR ry=EXPR",                  doc: "Semi-axis along north for `ellipse` (radians)." },
+  { name: "angle",    signature: "ellipse ... angle=EXPR",                       doc: "Rotation of the ellipse in radians (0 = aligned to east)." },
+  // Param decl modifiers
+  { name: "slider",   signature: "param NAME slider LO..HI default V",           doc: "Renders the param as a numeric slider. Range form is `LO..HI` (no `min`/`max` keywords)." },
+  { name: "toggle",   signature: "param NAME toggle default true|false",         doc: "Renders the param as a checkbox." },
+  { name: "label",    signature: 'param ... label "DISPLAY LABEL"',              doc: "Display label shown next to the control in the side panel." },
+  { name: "step",     signature: "param ... step EXPR",                          doc: "Slider step size — granularity of slider drags. Also the v2 tick-block keyword (`step { ... }`); context disambiguates." },
+  { name: "default",  signature: "param ... default V",                          doc: "Default value at recipe load. Numeric for sliders, true/false for toggles." },
 ];
 
 // ---------------------------------------------------------------------------
 // Grid declaration sub-keywords.
 // ---------------------------------------------------------------------------
 
+// V2 substrate sub-keywords. The top-level `substrate` directive lives
+// in DECL_DIRECTIVES; these are the trailing arg keywords that follow.
 export const GRID_KEYWORDS = [
   {
-    name: "grid",
-    signature: "grid geodesic tiles N",
-    doc: "Defines the simulation substrate. Geodesic grids subdivide an icosahedron N times — N=64 is ~40k cells.",
-    example: "grid geodesic tiles 64",
-  },
-  {
     name: "geodesic",
-    signature: "geodesic tiles N",
-    doc: "Geodesic substrate marker on a `grid` line. Currently the only supported substrate.",
+    signature: "substrate geodesic frequency N",
+    doc: "Geodesic substrate marker. Subdivides an icosahedron and welds shared cells. Cell count ≈ 10·N² + 2 — N=64 is ~40k cells.",
   },
   {
-    name: "tiles",
-    signature: "tiles N",
-    doc: "Subdivision frequency. Cell count ≈ 10·N² + 2.",
+    name: "frequency",
+    signature: "substrate geodesic frequency N",
+    doc: "Geodesic subdivision frequency. Higher = more cells, higher resolution, more compute.",
   },
 ];
 
@@ -655,14 +661,24 @@ export const GRID_KEYWORDS = [
 // or a typo in this file). Cheap; runs once on import.
 // ---------------------------------------------------------------------------
 
+// Names that legitimately appear in two groups because v2 syntax
+// reuses the keyword in different roles. The user sees them as one
+// concept; the catalog tracks them separately so docs can describe
+// both uses. Adding entries here is OK — but only when the dual role
+// is genuinely user-facing, not an internal accident.
+const DUAL_USE_NAMES = new Set([
+  // `step` opens a tick-block AND modifies a param slider's granularity.
+  "step",
+]);
+
 (function assertSpecUnique() {
   const seen = new Map();
   function track(group, items) {
     for (const item of items) {
       if (!item.name) throw new Error(`dsl-spec: ${group} entry missing name`);
       const prior = seen.get(item.name);
-      if (prior && prior !== group) {
-        throw new Error(`dsl-spec: name "${item.name}" appears in both "${prior}" and "${group}" — group lookup would be ambiguous`);
+      if (prior && prior !== group && !DUAL_USE_NAMES.has(item.name)) {
+        throw new Error(`dsl-spec: name "${item.name}" appears in both "${prior}" and "${group}" — group lookup would be ambiguous (add to DUAL_USE_NAMES if intentional)`);
       }
       seen.set(item.name, group);
     }
