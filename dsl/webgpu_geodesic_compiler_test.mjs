@@ -613,6 +613,90 @@ step {
     "vec2(...) call lowers to WGSL native constructor");
 });
 
+test("gradient(scalarField) emits a per-field tangent-frame helper + stencil helpers", async () => {
+  const { compileV2 } = await import("./compile-v2.mjs");
+  const recipe = compileV2(`
+recipe "WindCell"
+substrate geodesic frequency 16
+field pressure: f32
+field wind: vec2
+
+step {
+  stage compute "Compute wind" {
+    reads pressure
+    writes wind
+    cell {
+      let grad = gradient(pressure)
+      set wind = vec2(-grad.x, -grad.y)
+    }
+  }
+}
+`);
+  const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
+  assert(pass.needsNeighbors === true, "gradient triggers neighbor topology binding");
+  assert(pass.source.includes("fn _stencil_position(cell: u32) -> vec3<f32>"),
+    "stencil position helper emitted");
+  assert(pass.source.includes("fn _stencil_eastBasis(p: vec3<f32>) -> vec3<f32>"),
+    "stencil east-basis helper emitted");
+  assert(pass.source.includes("fn _gradient_pressure(cell: u32) -> vec2<f32>"),
+    "per-field gradient helper emitted");
+  assert(pass.source.includes("_gradient_pressure(cell)"),
+    "gradient call lowered to helper invocation");
+});
+
+test("divergence(vec2Field) emits the divergence helper", async () => {
+  const { compileV2 } = await import("./compile-v2.mjs");
+  const recipe = compileV2(`
+recipe "LiftCell"
+substrate geodesic frequency 16
+field wind: vec2
+field lift: f32 derived
+
+step {
+  stage compute "Compute lift" {
+    reads wind
+    writes lift
+    cell {
+      set lift = -divergence(wind)
+    }
+  }
+}
+`);
+  const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
+  assert(pass.needsNeighbors === true, "divergence triggers neighbor topology binding");
+  assert(pass.source.includes("fn _divergence_wind(cell: u32) -> f32"),
+    "per-vec2-field divergence helper emitted");
+  assert(pass.source.includes("_divergence_wind(cell)"),
+    "divergence call lowered to helper invocation");
+});
+
+test("gradient on a vec2 field is rejected at WGSL emit time", async () => {
+  const { compileV2 } = await import("./compile-v2.mjs");
+  let threw = null;
+  try {
+    const recipe = compileV2(`
+recipe "BadGrad"
+substrate geodesic frequency 16
+field wind: vec2
+field x: f32
+
+step {
+  stage s "S" {
+    reads wind
+    writes x
+    cell {
+      let g = gradient(wind)
+      set x = g.x
+    }
+  }
+}
+`);
+    compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
+  } catch (e) { threw = e.message; }
+  assert(threw && threw.includes("requires a scalar (f32) field"),
+    `expected gradient-on-vec2 error; got: ${threw}`);
+});
+
 test("WGSL compiler emits f_<name>_prev binding for prev() reads", () => {
   const recipe = compileDsl(`
 recipe "Hist"

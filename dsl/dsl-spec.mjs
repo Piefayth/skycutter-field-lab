@@ -192,6 +192,30 @@ export const MATH_FUNCTIONS = [
     doc: "Vector magnitude. WGSL-native — works on vec2 / vec3. For scalars, use `abs`.",
     example: "let speed = length(wind)",
   },
+  // Tangent-frame differential operators on the geodesic substrate.
+  // These are stencil reads (gather over neighbors) compiled to per-cell
+  // WGSL helpers — semantically the same as a neighbor reduction, but
+  // specialized for vector calculus on the sphere. The argument MUST be
+  // a bare field identifier (the compiler emits a per-(field, op)
+  // helper function).
+  {
+    name: "gradient",
+    target: null,
+    arity: [1],
+    importNamespace: "core",
+    signature: "gradient(scalarField)",
+    doc: "Tangent-frame gradient of a scalar field at the current cell, returned as `vec2(east, north)`. Computed from neighbor differences projected onto the local east/north basis. Use to express pressure-driven wind without a special primitive: `let grad = gradient(pressure); set wind = vec2(-grad.x, -grad.y) * strength`.",
+    example: "let grad = gradient(pressure)\nset wind = vec2(-grad.x + cor * grad.y, -grad.y - cor * grad.x) * strength",
+  },
+  {
+    name: "divergence",
+    target: null,
+    arity: [1],
+    importNamespace: "core",
+    signature: "divergence(vec2Field)",
+    doc: "Tangent-frame divergence of a vec2 field — sum of east/north partial derivatives along the local tangent basis. Returns a scalar. Use for things like vertical lift (negative divergence of horizontal wind).",
+    example: "set lift = -divergence(wind) * 0.7",
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -377,23 +401,18 @@ export const STAMP_EXTRAS = [
 
 export const PIPELINE_PRIMITIVES = [
   {
-    name: "wind",
-    importNamespace: "sim",
-    signature: "wind PRESSURE -> windU, windV[, lift] strength EXPR",
-    doc: "Pressure-gradient wind primitive. Reads PRESSURE; writes velocity (windU, windV) and divergence (lift) in tangent-frame coordinates. Includes a Coriolis term based on latitude. Stays as a v2 primitive until vector field types arrive — at which point it'll become a regular cell stage with `set wind = vec2(...)`.",
-    example: "stage compute_wind {\n  reads pressure\n  writes windU, windV, lift\n  wind pressure -> windU, windV, lift strength windStrength\n}",
-  },
-  {
     name: "advect",
     importNamespace: "sim",
-    signature: "advect FIELD by windU, windV dt EXPR",
-    doc: "Semi-Lagrangian transport of FIELD by velocity (windU, windV). Per-tick displacement = velocity·EXPR. Stays as a v2 primitive until continuous-position coordinate queries arrive (`field@(self - velocity*dt)`) — at which point it'll become a regular cell stage.",
-    example: "stage flow {\n  reads moisture, windU, windV\n  writes moisture\n  advect moisture by windU, windV dt dt * 1.0\n}",
+    signature: "advect FIELD by VEC dt EXPR    // (or `by U, V dt EXPR` legacy)",
+    doc: "Semi-Lagrangian transport of FIELD along a vec2 velocity field. Per-tick displacement = velocity·EXPR. The last remaining v2 stage primitive — kept until continuous-position coordinate queries land (`field@(self - velocity*dt)`), at which point it'll fold into a cell expression.",
+    example: "field slope: vec2\nfield w: f32\nstage flow {\n  reads w, slope\n  writes w\n  advect w by slope dt flowSpeed * dt\n}",
   },
-  // diffuse / clamp / normalize are deliberately ABSENT from the v2
-  // surface. The parser rejects them with a redirect:
-  //   diffuse → `add field = (mean n in neighbors { field@n } - field) * <amount>`
-  //   clamp   → `set field = clamp(field, <lo>, <hi>)` inside cell { }
+  // wind / diffuse / clamp / normalize are deliberately ABSENT from
+  // the v2 surface. Redirects (rejected by the parser):
+  //   diffuse  → `add field = (mean n in neighbors { field@n } - field) * <amount>`
+  //   clamp    → `set field = clamp(field, <lo>, <hi>)` inside cell { }
+  //   wind     → `gradient(pressure)` + vec2 wind field. See dsl-spec
+  //              MATH_FUNCTIONS for `gradient` / `divergence`.
   //   normalize → no v2 equivalent yet (needs scalar reduction + broadcast)
 ];
 

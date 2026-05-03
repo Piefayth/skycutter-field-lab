@@ -559,6 +559,13 @@ Reserved in grammar, not implemented in v2 first cut:
   recipe's `views[]` / paint stamp list. **Pending evidence** — only
   Kuramoto's `cosTheta` is currently derived, so the UI gap isn't yet
   user-visible.
+- `wind` retired as a stage primitive — **DONE**. Recipes now express
+  pressure-driven wind as a regular cell stage using two new tangent-frame
+  builtins: `gradient(scalarField)` returns a vec2 of the field's
+  east/north partial derivatives at the cell, and `divergence(vec2Field)`
+  returns the scalar divergence. Per-(field, op) helper functions are
+  emitted in the WGSL prelude when used. Parser rejects `wind` with a
+  clear redirect to the cell-stage pattern.
 - Editor / autocomplete v2-aware — **DONE**. Highlighter recognizes
   v2 keywords (substrate / scenario / step / for / metric / import /
   derived / previous / cells / where / at), drops v1-only ones (use /

@@ -586,15 +586,33 @@ function parseStage(ctx) {
       const cellBody = readBracedBlock(inner);
       const cellActions = parseCellActions(cellBody, `stage ${id} cell`);
       statements.push({ type: "cell", actions: cellActions });
-    } else if (kw === "advect" || kw === "wind") {
-      // Stage primitives that don't (yet) fold into cell { } expressions:
-      //   advect — semi-Lagrangian sample at a continuous upstream
-      //            position. Will retire when continuous-position
-      //            CoordRead lands (`u@(self - wind*dt)`).
-      //   wind   — pressure-gradient + Coriolis on the local sphere
-      //            tangent frame. Will retire when vector field types
-      //            and the gradient-stencil family land.
+    } else if (kw === "advect") {
+      // advect is the last remaining v2 stage primitive — kept until
+      // continuous-position CoordRead lands (`u@(self - wind*dt)`).
       statements.push(parseStagePrimitive(inner, id));
+    } else if (kw === "wind") {
+      // `wind` was a v1 primitive that bundled pressure-gradient +
+      // Coriolis + tangent-frame projection into one kernel. v2
+      // expresses this as a regular cell stage using gradient(field)
+      // (returns vec2 in tangent frame) and divergence(vec2_field)
+      // (returns scalar). See V2-SPEC.md / dsl-spec.mjs for the full
+      // pattern.
+      throw new Error(
+        `v2 parse: stage ${id}: \`wind\` is no longer a stage primitive in v2. ` +
+        `Express it as a cell stage:\n` +
+        `  field wind: vec2\n` +
+        `  field lift: f32 derived\n` +
+        `  stage compute_wind {\n` +
+        `    reads pressure\n` +
+        `    writes wind, lift\n` +
+        `    cell {\n` +
+        `      let grad = gradient(pressure)\n` +
+        `      let cor = clamp(py, -1, 1) * 0.65\n` +
+        `      set wind = vec2(-grad.x + cor*grad.y, -grad.y - cor*grad.x) * strength\n` +
+        `      set lift = -divergence(wind) * 0.7\n` +
+        `    }\n` +
+        `  }`,
+      );
     } else if (kw === "diffuse" || kw === "clamp" || kw === "normalize") {
       // V2 retires these — they're trivially expressible as cell-body
       // expressions (`add u = (mean n in neighbors { u@n } - u) *

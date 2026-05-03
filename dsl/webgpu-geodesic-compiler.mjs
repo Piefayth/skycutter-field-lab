@@ -450,32 +450,35 @@ struct EventCounter {
 };
 @group(0) @binding(${eventCounterBinding}) var<storage, read_write> eventCounter: EventCounter;
 ` : "";
-  // No per-field helper functions any more — `neighbor MOD ...` reductions
-  // emit their loops inline at the call site (see compileActions). The
-  // previous `neighborMax_${name}` global helpers became dead.
-  const neighborFns = "";
   // Initial value for the per-cell `outValue` accumulator. For vec2
   // fields not in reads, default to vec2<f32>(0.0, 0.0); for f32, 0.0.
   const fieldType = typeOf(field);
   const zeroLiteral = fieldType === "vec2" ? "vec2<f32>(0.0, 0.0)" : "0.0";
   const initial = reads.includes(field) ? readVar(field) : zeroLiteral;
-  // The buffer layout includes the neighbor arrays whenever needsNeighbors
-  // is true, but if the action body happens not to reference them in any
-  // emitted statement (e.g. the loop is conditional on `when`-stripped
-  // branches), WGSL would warn about unused bindings. The reduction
-  // emission unconditionally references both arrays, so no touch hack.
   const neighborTouch = "";
-  const body = compileActions(actions, {
+  // Compile the cell body. compileActions records gradient/divergence
+  // calls in ctx so we can emit the per-field helper functions
+  // afterwards in the prelude.
+  const ctx = {
     reads: new Set(reads),
     target: field,
     locals: new Set(),
     layout,
-  });
+    usedGradients: new Set(),
+    usedDivergences: new Set(),
+  };
+  const body = compileActions(actions, ctx);
+  // Tangent-frame stencil helpers are emitted only when the body uses
+  // gradient / divergence. eastBasis + position are shared helpers
+  // each operator depends on; emit once if either set is non-empty.
+  const stencilHelperSource = emitStencilHelpers(ctx, typeOf);
   const eventCount = eventCounter ? `  if (${compileExpr(eventCounter.condition, {
     reads: new Set(reads),
     target: field,
     locals: new Set(),
     layout,
+    usedGradients: new Set(),
+    usedDivergences: new Set(),
   })}) {
     atomicAdd(&eventCounter.value, 1u);
   }` : "";
@@ -549,7 +552,7 @@ fn spatialNoise(p: vec3<f32>, seed: f32) -> f32 {
   return lerpNoise(nxy0, nxy1, s.z);
 }
 
-${neighborFns}
+${stencilHelperSource}
 
 @compute @workgroup_size(128)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -787,12 +790,102 @@ function actionsUseNeighborReduce(actions) {
 function exprUsesNeighborReduce(expr) {
   if (!expr) return false;
   if (expr.type === "NeighborReduce") return true;
+  // gradient / divergence are stencil reads — they need the neighbor
+  // topology buffers for the same reason a NeighborReduce does.
+  if (expr.type === "Call" && expr.callee?.type === "Identifier"
+      && (expr.callee.name === "gradient" || expr.callee.name === "divergence")) {
+    return true;
+  }
   if (expr.type === "Member") return exprUsesNeighborReduce(expr.object);
   if (expr.type === "Unary") return exprUsesNeighborReduce(expr.expr);
   if (expr.type === "Binary") return exprUsesNeighborReduce(expr.left) || exprUsesNeighborReduce(expr.right);
   if (expr.type === "Conditional") return exprUsesNeighborReduce(expr.test) || exprUsesNeighborReduce(expr.consequent) || exprUsesNeighborReduce(expr.alternate);
   if (expr.type === "Call") return exprUsesNeighborReduce(expr.callee) || (expr.args ?? []).some(exprUsesNeighborReduce);
   return false;
+}
+
+// Tangent-frame stencil helpers — emitted only when the cell body
+// uses gradient(...) or divergence(...). Per-field functions look up
+// the WGSL storage type via `typeOf(name)` so a divergence helper for
+// a vec2 wind field reads `array<vec2<f32>>` correctly.
+function emitStencilHelpers(ctx, typeOf) {
+  const grads = [...(ctx.usedGradients ?? [])];
+  const divs = [...(ctx.usedDivergences ?? [])];
+  if (grads.length === 0 && divs.length === 0) return "";
+  const blocks = [];
+  // Shared helpers — emitted once per shader.
+  blocks.push(`
+fn _stencil_position(cell: u32) -> vec3<f32> {
+  let off = cell * 3u;
+  return vec3<f32>(positions[off + 0u], positions[off + 1u], positions[off + 2u]);
+}
+
+fn _stencil_eastBasis(p: vec3<f32>) -> vec3<f32> {
+  let e = vec3<f32>(-p.z, 0.0, p.x);
+  let len = length(e);
+  if (len < 0.0001) {
+    return vec3<f32>(1.0, 0.0, 0.0);
+  }
+  return e / len;
+}
+`.trim());
+  // Per-(field) gradient helper — input must be a scalar f32 field.
+  for (const fieldName of grads) {
+    const t = typeOf(fieldName);
+    if (t !== "f32") {
+      throw new Error(`gradient(${fieldName}) requires a scalar (f32) field; got ${t}`);
+    }
+    blocks.push(`
+fn _gradient_${fieldName}(cell: u32) -> vec2<f32> {
+  let p = _stencil_position(cell);
+  let east = _stencil_eastBasis(p);
+  let north = normalize(cross(p, east));
+  let center = f_${fieldName}[cell];
+  let count = neighborCounts[cell];
+  var acc = vec3<f32>(0.0, 0.0, 0.0);
+  for (var slot: u32 = 0u; slot < count; slot = slot + 1u) {
+    let n = u32(neighbors[cell * 6u + slot]);
+    let q = _stencil_position(n);
+    let tan = q - p * dot(q, p);
+    let len2 = max(dot(tan, tan), 0.000001);
+    acc = acc + tan * ((f_${fieldName}[n] - center) / len2);
+  }
+  acc = acc / f32(count);
+  return vec2<f32>(dot(acc, east), dot(acc, north));
+}
+`.trim());
+  }
+  // Per-(field) divergence helper — input must be a vec2 field.
+  for (const fieldName of divs) {
+    const t = typeOf(fieldName);
+    if (t !== "vec2") {
+      throw new Error(`divergence(${fieldName}) requires a vec2 field; got ${t}`);
+    }
+    blocks.push(`
+fn _divergence_${fieldName}(cell: u32) -> f32 {
+  let p = _stencil_position(cell);
+  let east = _stencil_eastBasis(p);
+  let north = normalize(cross(p, east));
+  let centerVec = f_${fieldName}[cell];
+  let centerWorld = east * centerVec.x + north * centerVec.y;
+  let count = neighborCounts[cell];
+  var div = 0.0;
+  for (var slot: u32 = 0u; slot < count; slot = slot + 1u) {
+    let nIdx = u32(neighbors[cell * 6u + slot]);
+    let q = _stencil_position(nIdx);
+    let tan = q - p * dot(q, p);
+    let len2 = max(dot(tan, tan), 0.000001);
+    let neast = _stencil_eastBasis(q);
+    let nnorth = normalize(cross(q, neast));
+    let neighborVec = f_${fieldName}[nIdx];
+    let neighborWorld = neast * neighborVec.x + nnorth * neighborVec.y;
+    div = div + dot(neighborWorld - centerWorld, tan) / len2;
+  }
+  return div / f32(count);
+}
+`.trim());
+  }
+  return blocks.join("\n\n");
 }
 
 const RESERVED_IDENTIFIERS = new Set([
@@ -1128,6 +1221,26 @@ function compileCall(ast, ctx) {
       throw new Error(`vec2(x, y) takes exactly 2 args; got ${args.length}`);
     }
     return `vec2<f32>(${args.join(", ")})`;
+  }
+  // Tangent-frame differential operators. The argument is a bare field
+  // identifier; the compiler emits a per-(field) helper function in
+  // the shader prelude (see compileCellShader's stencilHelperSource).
+  // The helper computes the operator over the cell's neighbors using
+  // the position / east-basis helpers also emitted in the prelude.
+  if (ast.callee.name === "gradient" || ast.callee.name === "divergence") {
+    const arg = ast.args[0];
+    if (arg?.type !== "Identifier") {
+      throw new Error(`${ast.callee.name} requires a bare field identifier`);
+    }
+    const fieldName = arg.name;
+    if (ast.callee.name === "gradient") {
+      ctx.usedGradients ??= new Set();
+      ctx.usedGradients.add(fieldName);
+      return `_gradient_${fieldName}(cell)`;
+    }
+    ctx.usedDivergences ??= new Set();
+    ctx.usedDivergences.add(fieldName);
+    return `_divergence_${fieldName}(cell)`;
   }
   switch (ast.callee.name) {
     case "cellNoise": {

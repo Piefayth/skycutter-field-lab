@@ -210,6 +210,50 @@ step {
 `), "no longer a stage primitive");
 });
 
+test("`wind` as a stage primitive is rejected (use gradient/divergence cell stage)", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field pressure: f32
+field windU: f32
+field windV: f32
+field lift: f32
+step {
+  stage compute {
+    reads pressure
+    writes windU, windV, lift
+    wind pressure -> windU, windV, lift strength 1
+  }
+}
+`), "no longer a stage primitive in v2");
+});
+
+test("wind cell pattern (gradient + divergence) compiles", () => {
+  // Replacement for the wind primitive: a cell stage that uses
+  // gradient(scalar) → vec2 + divergence(vec2) → scalar to compute
+  // pressure-driven wind + lift as plain cell expressions.
+  compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field pressure: f32
+field wind: vec2
+field lift: f32 derived
+param strength slider 0..2 default 1 label "WIND"
+step {
+  stage compute_wind {
+    reads pressure, wind
+    writes wind, lift
+    cell {
+      let grad = gradient(pressure)
+      let cor = clamp(py, -1, 1) * 0.65
+      set wind = vec2(-grad.x + cor*grad.y, -grad.y - cor*grad.x) * strength
+      set lift = -divergence(wind) * 0.7
+    }
+  }
+}
+`);
+});
+
 test("`advect` as a stage primitive is accepted (kept until continuous-pos CoordRead lands)", () => {
   // klausmeier still uses advect; it stays a real v2 primitive.
   compileV2(`
