@@ -27,7 +27,7 @@ import {
 import { StateField, StateEffect, Prec } from "@codemirror/state";
 
 import { DSL_SYMBOLS } from "./dsl-symbols.mjs";
-import { blockStackAt, parseDslAst } from "../dsl/ast-v2.mjs";
+import { cursorContextForAst, parseDslAst } from "../dsl/ast-v2.mjs";
 
 // ---------------------------------------------------------------------------
 // Catalog buckets — precomputed once so context-filtered lookups are cheap.
@@ -162,6 +162,7 @@ function roleToCmType(role) {
     case "field":
     case "source":
     case "declared":  return "variable";
+    case "local":     return "variable";
     case "param":
     case "const":
     case "palette":
@@ -174,6 +175,7 @@ function declaredBoost(role) {
   switch (role) {
     case "field":
     case "param":     return 9;
+    case "local":     return 10;
     case "const":
     case "palette":
     case "planet":
@@ -193,7 +195,13 @@ function detectContext(state, pos) {
   const lineStart = state.doc.lineAt(pos).from;
   const lineUpToCursor = state.doc.sliceString(lineStart, pos);
   const ast = parseDslAst(state.doc.toString());
-  return { stack: blockStackAt(ast, pos).map((block) => block.keyword), lineUpToCursor, ast };
+  const cursor = cursorContextForAst(ast, pos);
+  return {
+    stack: cursor.stack.map((block) => block.keyword),
+    lineUpToCursor,
+    ast,
+    cursor,
+  };
 }
 
 // Map context → completion mode. `when` is treated as transparent so a
@@ -206,6 +214,7 @@ function classifyContext(ctx) {
   if (/^\s*(import|use)(\s|$)/.test(line)) {
     return { mode: "v2Import" };
   }
+  if (ctx.cursor?.mode) return { mode: ctx.cursor.mode };
 
   let inner = null;
   for (let i = ctx.stack.length - 1; i >= 0; i--) {
@@ -280,6 +289,21 @@ function declaredFromDoc(doc) {
   for (const n of names.constants ?? []) out.push({ name: n, role: "const" });
   for (const n of names.planet ?? []) out.push({ name: n, role: "planet" });
   for (const n of names.palettes ?? []) out.push({ name: n, role: "palette" });
+  return out;
+}
+
+function declaredFromContext(ctx, doc) {
+  const symbols = ctx.cursor?.symbols ?? null;
+  if (!symbols) return declaredFromDoc(doc);
+  const out = [];
+  for (const symbol of symbols) {
+    if (symbol.kind === "field") out.push({ name: symbol.name, role: "field" });
+    else if (symbol.kind === "source") out.push({ name: symbol.name, role: "source" });
+    else if (symbol.kind === "param") out.push({ name: symbol.name, role: "param" });
+    else if (symbol.kind === "const") out.push({ name: symbol.name, role: "const" });
+    else if (symbol.kind === "palette") out.push({ name: symbol.name, role: "palette" });
+    else if (symbol.kind === "local") out.push({ name: symbol.name, role: "local" });
+  }
   return out;
 }
 
@@ -535,13 +559,13 @@ function buildOptions(state, ctx, mode, prefix) {
     || mode.mode === "presetBody" || mode.mode === "stageBody"
     || mode.mode === "viewBody";
 
-  const declared = allowDeclared ? declaredFromDoc(state.doc.toString()) : [];
+  const docText = state.doc.toString();
+  const declared = allowDeclared ? declaredFromContext(ctx, docText) : [];
 
   const declaredOptions = declared
     .filter((d) => !prefix || d.name.toLowerCase().startsWith(prefix.toLowerCase()))
     .map((d) => declaredCompletion(d.name, d.role));
 
-  const docText = state.doc.toString();
   const catalog = symbolsForMode(mode);
   const catalogOptions = catalog
     .filter((s) => !prefix || s.name.toLowerCase().startsWith(prefix.toLowerCase()))

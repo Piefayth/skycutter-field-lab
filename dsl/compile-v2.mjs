@@ -14,7 +14,7 @@
 //      (CoordRead is a first-class node; NeighborReduce.coord drives
 //      binding derivation in emitReduction).
 
-import { parseV2 } from "./parse-v2.mjs";
+import { parseRecipeSource } from "./front-end-v2.mjs";
 import {
   annotateStageParamRefs,
   buildDeclaredPipelineSummary,
@@ -27,7 +27,7 @@ import {
 import { validateV2 } from "./validate-v2.mjs";
 
 export function compileV2(source) {
-  const schema = parseV2(source);
+  const schema = parseRecipeSource(source, { tolerant: false, includeAst: true }).ast;
   // The shape validators (validate.mjs) carry a `historyFields`
   // side-channel on the schema's `imports` object that downstream
   // expression validators read for @prev / history checks. Initialise
