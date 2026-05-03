@@ -1,8 +1,9 @@
 // Field Lab DSL v2 compiler facade.
 //
 // Pipeline:
-//   1. parse-v2 produces a v2 AST (CoordRead, NeighborReduce with
-//      coord binding, scenario / stamp / metric, etc.)
+//   1. front-end-v2 parses source into a tolerant CST, then strictly projects
+//      it into a v2 AST (CoordRead, NeighborReduce with coord binding,
+//      scenario / stamp / metric, etc.)
 //   2. validateV2 owns the v2-specific semantics — flat import
 //      constraints, derived-field rules, metric expression
 //      validation, explicit-previous-reads, type checking.

@@ -75,6 +75,11 @@ function validateStrictRecipeCst(cst) {
     "step", "views", "stamps", "scenarios",
   ]);
   for (const stmt of sorted(cst.root.statements)) {
+    if (stmt.keyword === "scenario") throw new Error("v2 parse: `scenario` blocks must live inside `scenarios { ... }`");
+    if (stmt.keyword === "stamp") throw new Error("v2 parse: `stamp` blocks must live inside `stamps { ... }`");
+    if (stmt.keyword === "palette") throw new Error("v2 parse: `palette` blocks must live inside `views { ... }`");
+    if (stmt.keyword === "view") throw new Error("v2 parse: `view` blocks must live inside `views { ... }`");
+    if (stmt.keyword === "overlay") throw new Error("v2 parse: `overlay` declarations must live inside `views { ... }`");
     if (!rootStatementKinds.has(stmt.keyword)) {
       throw new Error(`v2 parse: unknown top-level keyword "${stmt.keyword}"`);
     }

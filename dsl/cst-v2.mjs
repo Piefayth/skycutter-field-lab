@@ -2,9 +2,8 @@
 //
 // This is the canonical editor-facing syntax front-end. It preserves source
 // ranges, survives incomplete code, and records line-level statement shells
-// without trying to duplicate the compiler parser's semantic AST. Compiler
-// migration can happen incrementally by projecting this CST into the existing
-// parse-v2 shape once this front-end has enough coverage.
+// without doing semantic validation. Compiler callers project this CST into
+// the v2 AST shape through cst-to-ast-v2.
 
 const BLOCK_KEYWORDS = new Set([
   "views", "stamps", "scenarios",

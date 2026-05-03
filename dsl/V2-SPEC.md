@@ -1,9 +1,10 @@
 # Field Lab DSL — v2 Specification
 
 This document is the source of truth for v2 syntax, semantics, and validator
-rules. The implementation in `dsl/parse-v2.mjs`, `dsl/validate-v2.mjs`, and
-`dsl/compile-v2.mjs` should be checked against this. If the implementation and
-the spec disagree, the spec wins (or the spec is updated explicitly).
+rules. The implementation in `dsl/cst-v2.mjs`, `dsl/cst-to-ast-v2.mjs`,
+`dsl/validate-v2.mjs`, and `dsl/compile-v2.mjs` should be checked against
+this. If the implementation and the spec disagree, the spec wins (or the spec
+is updated explicitly).
 
 ## Philosophy
 
@@ -624,7 +625,8 @@ in v2 first cut.
 
 ## Validator rules summary
 
-Enforced today (split across `dsl/parse-v2.mjs` (syntactic shape),
+Enforced today (split across `dsl/cst-v2.mjs` + `dsl/cst-to-ast-v2.mjs`
+(tolerant CST, strict syntactic shape, and compiler AST projection),
 `dsl/validate.mjs` (structural / wiring rules — single-writer-per-step,
 reads/writes consistency, name uniqueness), `dsl/validate-v2.mjs`
 (v2-specific semantics — derived fields, metric purity, flat imports,
@@ -690,12 +692,13 @@ Still TODO — partially-enforced or not yet:
 
 The compile path:
 
-- `parse-v2.mjs` produces the v2 AST: CoordRead nodes for `field@coord`
-  (kinds: `prev`, `neighbor`, `upstream`), NeighborReduce nodes carrying
-  a `coord` binding name, plus cell-action types (`set`, `add`, `let`,
-  `when`). The v1 stage primitives (`wind`, `advect`, `diffuse`,
-  `clamp`, `normalize`) are rejected at parse time with redirect
-  messages pointing at the cell-stage equivalents.
+- `cst-v2.mjs` produces a tolerant concrete syntax tree with source ranges.
+  `cst-to-ast-v2.mjs` strictly projects it into the compiler-facing v2 AST:
+  CoordRead nodes for `field@coord` (kinds: `prev`, `neighbor`, `upstream`),
+  NeighborReduce nodes carrying a `coord` binding name, plus cell-action types
+  (`set`, `add`, `let`, `when`). The v1 stage primitives (`wind`, `advect`,
+  `diffuse`, `clamp`, `normalize`) are rejected during strict projection with
+  redirect messages pointing at the cell-stage equivalents.
 - `validate.mjs` runs shape / structural checks reusable across surface
   syntaxes: name uniqueness, reads/writes wiring, scenario / stamp /
   stage shape, history-field single-writer-per-step.

@@ -1,8 +1,13 @@
-// Smoke test for the v2 parser. Each test is a small standalone case that
-// exercises one shape of the v2 grammar. Tests are sequential so that a
-// failure in an earlier shape doesn't drown out later output.
+// Smoke test for the strict CST-to-AST v2 front-end. Each test is a small
+// standalone case that exercises one shape of the compiler-facing projection.
+// Tests are sequential so an earlier failure does not drown out later output.
 
-import { parseV2 } from "./parse-v2.mjs";
+import { recipeCstToAst } from "./cst-to-ast-v2.mjs";
+import { parseDslCst } from "./cst-v2.mjs";
+
+function parseStrict(source) {
+  return recipeCstToAst(parseDslCst(source), { strict: true });
+}
 
 function test(name, fn) {
   try {
@@ -30,7 +35,7 @@ function assertEq(actual, expected, msg = "") {
 // -----------------------------------------------------------------------------
 
 test("recipe + summary + substrate + one field + step with one stage", () => {
-  const out = parseV2(`
+  const out = parseStrict(`
 recipe "Tiny"
 summary "smoke test"
 substrate geodesic frequency 16
@@ -62,7 +67,7 @@ step {
 // -----------------------------------------------------------------------------
 
 test("field type and derived annotation", () => {
-  const out = parseV2(`
+  const out = parseStrict(`
 recipe "Derived"
 substrate geodesic frequency 16
 field u: f32
@@ -83,7 +88,7 @@ step {
 // -----------------------------------------------------------------------------
 
 test("param slider and toggle", () => {
-  const out = parseV2(`
+  const out = parseStrict(`
 recipe "P"
 substrate geodesic frequency 16
 field u: f32
@@ -114,7 +119,7 @@ step { stage s { reads u; writes u; cell { set u = u } } }
 // -----------------------------------------------------------------------------
 
 test("scenario with set and spot", () => {
-  const out = parseV2(`
+  const out = parseStrict(`
 recipe "S"
 substrate geodesic frequency 16
 field u: f32
@@ -146,7 +151,7 @@ step { stage s { reads u; writes u; cell { set u = u } } }
 // -----------------------------------------------------------------------------
 
 test("stamp with brush.pos shorthand", () => {
-  const out = parseV2(`
+  const out = parseStrict(`
 recipe "S"
 substrate geodesic frequency 16
 field u: f32
@@ -169,7 +174,7 @@ step { stage s { reads u; writes u; cell { set u = u } } }
 });
 
 test("grouped views, stamps, and scenarios sections", () => {
-  const out = parseV2(`
+  const out = parseStrict(`
 recipe "Sections"
 substrate geodesic frequency 16
 field u: f32
@@ -214,7 +219,7 @@ test("top-level view/stamp/scenario blocks are rejected", () => {
   ]) {
     let threw = "";
     try {
-      parseV2(`
+      parseStrict(`
 recipe "Reject"
 substrate geodesic frequency 16
 field u: f32
@@ -236,7 +241,7 @@ test("u@prev produces a CoordRead with coord.kind = prev", () => {
   // V2 coordinate-query model: u@prev is a first-class CoordRead AST
   // node, not a Call(prev, [u]) lowering. The compiler dispatches on
   // coord.kind to emit f_u_prev[cell] in WGSL.
-  const out = parseV2(`
+  const out = parseStrict(`
 recipe "P"
 substrate geodesic frequency 16
 field u: f32
@@ -264,7 +269,7 @@ step {
 // -----------------------------------------------------------------------------
 
 test("sum n in neighbors { u@n - u } produces NeighborReduce with CoordRead body", () => {
-  const out = parseV2(`
+  const out = parseStrict(`
 recipe "L"
 substrate geodesic frequency 16
 field u: f32
@@ -303,7 +308,7 @@ step {
 // -----------------------------------------------------------------------------
 
 test("sum n in neighbors { u@n + v@n } body has CoordRead per field", () => {
-  const out = parseV2(`
+  const out = parseStrict(`
 recipe "M"
 substrate geodesic frequency 16
 field u: f32
@@ -344,7 +349,7 @@ step {
 // -----------------------------------------------------------------------------
 
 test("metric max cells { abs(u) }", () => {
-  const out = parseV2(`
+  const out = parseStrict(`
 recipe "M"
 substrate geodesic frequency 16
 field u: f32
@@ -360,7 +365,7 @@ metric peak = max cells { abs(u) }
 });
 
 test("metric count cells where abs(u) > 0.1 (no body)", () => {
-  const out = parseV2(`
+  const out = parseStrict(`
 recipe "M"
 substrate geodesic frequency 16
 field u: f32
@@ -419,7 +424,7 @@ step {
 metric peak    = max cells { abs(u) }
 metric active  = count cells where abs(u) > 0.1
 `;
-  const out = parseV2(source);
+  const out = parseStrict(source);
   assertEq(out.recipe.name, "Wave equation");
   assert(out.stages.length === 1, "one stage");
   assert(out.metrics.length === 2, `2 metrics, got ${out.metrics.length}`);

@@ -6,7 +6,6 @@ import {
   stageCstToAst,
 } from "./cst-to-ast-v2.mjs";
 import { parseDslCst } from "./cst-v2.mjs";
-import { parseV2 } from "./parse-v2.mjs";
 
 function test(name, fn) {
   try {
@@ -25,23 +24,94 @@ function assertEq(actual, expected, msg = "") {
   if (a !== b) throw new Error(`${msg}\n  expected: ${b}\n  actual:   ${a}`);
 }
 
-test("CST expression projection matches parse-v2 for arithmetic/calls/members", () => {
-  assertProjectionParity("clamp(wind.x * 2 + u, -1, 1)");
+test("CST expression projection handles arithmetic/calls/members", () => {
+  assertExpressionProjection("clamp(wind.x * 2 + u, -1, 1)", {
+    type: "Call",
+    callee: { type: "Identifier", name: "clamp" },
+    args: [
+      {
+        type: "Binary",
+        op: "+",
+        left: {
+          type: "Binary",
+          op: "*",
+          left: {
+            type: "Member",
+            object: { type: "Identifier", name: "wind" },
+            prop: "x",
+          },
+          right: { type: "Number", value: "2" },
+        },
+        right: { type: "Identifier", name: "u" },
+      },
+      { type: "Unary", op: "-", expr: { type: "Number", value: "1" } },
+      { type: "Number", value: "1" },
+    ],
+  });
 });
 
-test("CST expression projection matches parse-v2 for ternary + prev", () => {
-  assertProjectionParity("u > 0 ? u@prev : -u");
+test("CST expression projection handles ternary + prev", () => {
+  assertExpressionProjection("u > 0 ? u@prev : -u", {
+    type: "Conditional",
+    test: {
+      type: "Binary",
+      op: ">",
+      left: { type: "Identifier", name: "u" },
+      right: { type: "Number", value: "0" },
+    },
+    consequent: {
+      type: "CoordRead",
+      field: "u",
+      coord: { kind: "prev" },
+    },
+    alternate: {
+      type: "Unary",
+      op: "-",
+      expr: { type: "Identifier", name: "u" },
+    },
+  });
 });
 
-test("CST expression projection matches parse-v2 for neighbor reductions", () => {
-  assertProjectionParity("sum n in neighbors { u@n - u }");
+test("CST expression projection handles neighbor reductions", () => {
+  assertExpressionProjection("sum n in neighbors { u@n - u }", {
+    type: "NeighborReduce",
+    op: "sum",
+    coord: "n",
+    body: {
+      type: "Binary",
+      op: "-",
+      left: {
+        type: "CoordRead",
+        field: "u",
+        coord: { kind: "neighbor", binding: "n" },
+      },
+      right: { type: "Identifier", name: "u" },
+    },
+  });
 });
 
-test("CST expression projection matches parse-v2 for upstream coord reads", () => {
-  assertProjectionParity("u@upstream(wind.x, wind.y, dt)");
+test("CST expression projection handles upstream coord reads", () => {
+  assertExpressionProjection("u@upstream(wind.x, wind.y, dt)", {
+    type: "CoordRead",
+    field: "u",
+    coord: {
+      kind: "upstream",
+      velX: {
+        type: "Member",
+        object: { type: "Identifier", name: "wind" },
+        prop: "x",
+      },
+      velY: {
+        type: "Member",
+        object: { type: "Identifier", name: "wind" },
+        prop: "y",
+      },
+      dt: { type: "Identifier", name: "dt" },
+    },
+  });
 });
 
-test("CST cell-action projection matches parse-v2 for let/set/add/when", () => {
+test("CST cell-action projection handles let/set/add/when", () => {
   const source = `
 recipe "Projection"
 substrate geodesic frequency 16
@@ -60,14 +130,14 @@ step {
     }
   }
 }`;
-  const expected = parseV2(source).stages[0].body.statements[0].actions;
   const cst = parseDslCst(source);
   const cellBlock = cst.blocks.find((block) => block.keyword === "cell");
   const actual = cellActionsCstToAst(cst, cellBlock);
+  const expected = recipeCstToAst(cst, { strict: true }).stages[0].body.statements[0].actions;
   assertEq(actual, expected);
 });
 
-test("CST stage projection matches parse-v2 for reads/writes/cell", () => {
+test("CST stage projection handles reads/writes/cell", () => {
   const source = `
 recipe "Projection"
 substrate geodesic frequency 16
@@ -82,13 +152,13 @@ step {
     }
   }
 }`;
-  const expected = parseV2(source).stages[0];
   const cst = parseDslCst(source);
   const actual = stageCstToAst(cst, cst.blocks.find((block) => block.keyword === "stage"));
+  const expected = recipeCstToAst(cst, { strict: true }).stages[0];
   assertEq(actual, expected);
 });
 
-test("CST metric projection matches parse-v2 for body and predicate", () => {
+test("CST metric projection handles body and predicate", () => {
   const source = `
 recipe "Projection"
 substrate geodesic frequency 16
@@ -97,11 +167,11 @@ step { stage s { reads u; writes u; cell { set u = u } } }
 metric active = count cells where abs(u) > 0.1
 metric energy = sum cells { u * u + u@prev }
 `;
-  const expected = parseV2(source).metrics;
   const cst = parseDslCst(source);
   const actual = cst.statements
     .filter((stmt) => stmt.keyword === "metric")
     .map(metricCstToAst);
+  const expected = recipeCstToAst(cst, { strict: true }).metrics;
   assertEq(actual, expected);
 });
 
@@ -161,9 +231,8 @@ step { stage s { reads u; writes u; diffuse u by 0.1 } }
 `, "no longer a stage primitive");
 });
 
-function assertProjectionParity(expr) {
+function assertExpressionProjection(expr, expected) {
   const source = recipeWithSetExpr(expr);
-  const expected = firstSetExpr(parseV2(source));
   const cst = parseDslCst(source);
   const stmt = cst.statements.find((s) => s.keyword === "set");
   const actual = expressionCstToAst(stmt.expressions[0].node);
@@ -183,10 +252,6 @@ step {
     cell { set u = ${expr} }
   }
 }`;
-}
-
-function firstSetExpr(schema) {
-  return schema.stages[0].body.statements[0].actions[0].expr;
 }
 
 function assertStrictProjectionError(source, expectedMessage) {

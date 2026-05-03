@@ -444,8 +444,8 @@ function validatePresetCellActions(actions, declaredFields, declaredParams, decl
 
 // V2 stages emit exactly one statement per stage: a `cell` block. The
 // v1-era `event` / `each` / `wind` / `advect` / `diffuse` / `clamp` /
-// `normalize` statement shapes are rejected upstream by parse-v2 with
-// redirect messages.
+// `normalize` statement shapes are rejected upstream by strict CST projection
+// with redirect messages.
 function validateStatement(statement, stage, reads, writes, declares, visibleFields, declaredParams, declaredConstants, declaredPlanet, imports) {
   if (statement.type !== "cell") {
     throw new Error(`Unknown statement in ${stage.id}: ${statement.type}`);
