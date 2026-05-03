@@ -1,21 +1,21 @@
-import { metrics as kernelMetrics } from "./kernel.mjs";
-
+// Fallback declarations used when a recipe doesn't ship its own
+// `metrics: [...]` array. Every shipped v2 recipe declares its own
+// metrics — this fallback exists for the "load a half-written recipe"
+// editor case. FPS is the only universally-meaningful default.
 export const DEFAULT_METRIC_DECLS = [
-  { id: "cloud", label: "CLOUD", source: "cloud", spark: true },
-  { id: "variance", label: "VAR σ²", source: "cloudVariance", spark: true },
-  { id: "events", label: "EVENTS", source: "events", spark: true },
-  { id: "active", label: "ACTIVE", source: "activeArea", spark: true },
-  { id: "wind", label: "WIND", source: "wind", mini: true },
-  { id: "growth", label: "G/T", source: "growth", mini: true },
   { id: "fps", label: "FPS", source: "fps", mini: true },
-  { id: "activity", label: "δ45", source: "activity", mini: true, hidden: true },
 ];
 
+// Fallback regime thresholds. Recipe-supplied `regime: { ... }` overrides
+// these — and every shipped recipe does. Keys here use generic
+// per-tick activity proxies (`activeArea`, the share of cells above a
+// per-recipe coverage threshold) rather than the v1 weather-specific
+// `cloud` / `cloudVariance` / `events` keys.
 export const DEFAULT_REGIME_SPEC = {
   hidden: false,
-  runaway: { events: 5000, activeArea: 0.6 },
-  active: { events: 100, cloudVariance: 0.012, activeArea: 0.06 },
-  intermittent: { events: 0, cloudVariance: 0.0008, cloud: 0.01 },
+  runaway:      { activeArea: 0.6 },
+  active:       { activeArea: 0.06 },
+  intermittent: { activeArea: 0.0008 },
 };
 
 export function normalizeMetricDecls(recipe) {
@@ -46,23 +46,13 @@ export function normalizeRegimeSpec(recipe) {
 }
 
 export function deriveMetricValues(state, extras = {}) {
-  const out = { ...kernelMetrics(state), ...extras };
-  out.activeArea ??= coverageOf(state.fields.cloud, 0.5);
-
   // Per-field mean/max are NOT pre-computed here. They cost O(N) each
   // and the for-loop scaled linearly with the number of declared
   // fields — fine at 5-10 fields, painful when a recipe declares 15+.
   // Instead, evaluateMetricSource computes them lazily when (and only
   // when) a metric declaration actually references the field name.
   // updateStrip runs on every paint event, so this hot path matters.
-
-  if (out.eventsByLabel) {
-    for (const [label, count] of Object.entries(out.eventsByLabel)) {
-      out[`event:${label}`] = count;
-    }
-  }
-
-  return out;
+  return { ...extras };
 }
 
 export function evaluateMetricDecls(state, decls, extras = {}) {
@@ -90,10 +80,6 @@ export function evaluateMetricSource(state, source, values = deriveMetricValues(
   if (source.startsWith("coverage:")) {
     const [, fieldName, thresholdRaw] = source.split(":");
     return coverageOf(state.fields?.[fieldName], Number(thresholdRaw ?? 0.5));
-  }
-
-  if (source.startsWith("event:")) {
-    return values.eventsByLabel?.[source.slice("event:".length)] ?? 0;
   }
 
   // v2 DSL `metric <id> = <reduction> cells [where pred] { expr }` —
