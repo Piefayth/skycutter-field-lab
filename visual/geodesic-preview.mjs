@@ -19,6 +19,27 @@ export async function createGeodesicPreview({ scene, globe, frequency = 48, grid
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = "geodesic-state-preview";
   scene.add(mesh);
+
+  // Optional `arrows` overlay — a single LineSegments mesh sized for
+  // the maximum-density case (one arrow per cell). populateArrows()
+  // fills as many slots as needed and setDrawRange() crops to the
+  // active count, so subsampling via stride doesn't allocate.
+  const arrowsBuffer = new Float32Array(grid.cellCount * 6);
+  const arrowsGeometry = new THREE.BufferGeometry();
+  arrowsGeometry.setAttribute("position", new THREE.BufferAttribute(arrowsBuffer, 3));
+  arrowsGeometry.setDrawRange(0, 0);
+  const arrowsMaterial = new THREE.LineBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0.85,
+    depthWrite: false,
+  });
+  const arrowsMesh = new THREE.LineSegments(arrowsGeometry, arrowsMaterial);
+  arrowsMesh.name = "geodesic-arrow-overlay";
+  arrowsMesh.visible = false;
+  arrowsMesh.renderOrder = 5;
+  scene.add(arrowsMesh);
+
   const globeMaterialSnapshot = muteGlobeMaterial(globe);
 
   let disposed = false;
@@ -29,22 +50,93 @@ export async function createGeodesicPreview({ scene, globe, frequency = 48, grid
     reason: "ok",
     grid,
     mesh,
+    arrowsMesh,
     refresh({ fields, viewSpec, frame = 0, force = false } = {}) {
       if (disposed) return;
-      const key = `${frame}:${viewSpec?.id ?? ""}`;
+      const arrowsKey = viewSpec?.arrows ? `${viewSpec.arrows.field}:${viewSpec.arrows.length}:${viewSpec.arrows.stride}` : "";
+      const key = `${frame}:${viewSpec?.id ?? ""}:${arrowsKey}`;
       if (!force && key === lastRefreshKey) return;
       lastRefreshKey = key;
       refreshColors({ grid, geometry, fields, viewSpec });
+      populateArrows({ grid, fields, viewSpec, arrowsBuffer, arrowsGeometry, arrowsMesh });
     },
     update() {},
     dispose() {
       disposed = true;
       restoreGlobeMaterial(globeMaterialSnapshot);
       scene.remove(mesh);
+      scene.remove(arrowsMesh);
       geometry.dispose();
       material.dispose();
+      arrowsGeometry.dispose();
+      arrowsMaterial.dispose();
     },
   };
+}
+
+// Per-refresh: project the active view's vec2 field onto each cell's
+// east/north tangent basis and write line-segment endpoints into the
+// arrows mesh. Hides the mesh entirely when the view has no arrows
+// clause or the field isn't allocated yet.
+//
+// Layout per arrow: 6 floats (start xyz + end xyz). DrawRange caps
+// the active slot count so subsampling via `stride` is just a count
+// reduction, not a buffer realloc.
+function populateArrows({ grid, fields = {}, viewSpec, arrowsBuffer, arrowsGeometry, arrowsMesh }) {
+  const arrows = viewSpec?.arrows;
+  if (!arrows) {
+    arrowsMesh.visible = false;
+    return;
+  }
+  const fieldVal = fields[arrows.field];
+  if (!fieldVal || fieldVal.length < grid.cellCount * 2) {
+    arrowsMesh.visible = false;
+    return;
+  }
+  // Sphere-radius offset so arrows sit just above the tile mesh.
+  const r = 1.012;
+  // Visual scale: cell-radius proxy from the icosphere's mean
+  // edge length (≈ 2π / sqrt(20) / freq). Tunable per-recipe via
+  // the `length=N` knob.
+  const baseScale = (2 * Math.PI / Math.sqrt(20)) / Math.max(1, grid.frequency ?? 32);
+  const scale = baseScale * arrows.length;
+  const stride = Math.max(1, arrows.stride | 0);
+  let writeIdx = 0;
+  let arrowCount = 0;
+  for (let cell = 0; cell < grid.cellCount; cell += stride) {
+    const cx = grid.positions[cell * 3 + 0];
+    const cy = grid.positions[cell * 3 + 1];
+    const cz = grid.positions[cell * 3 + 2];
+    // East / north tangent basis at this cell. Same construction as
+    // dsl-init-runtime's tangentBasis() — east = horizontal-only
+    // tangent, north = center × east.
+    let ex = -cz, ey = 0, ez = cx;
+    let elen = Math.hypot(ex, ey, ez);
+    if (elen < 1e-6) { ex = 1; ey = 0; ez = 0; elen = 1; }
+    ex /= elen; ey /= elen; ez /= elen;
+    const nx = ey * cz - ez * cy;
+    const ny = ez * cx - ex * cz;
+    const nz = ex * cy - ey * cx;
+
+    const vx = fieldVal[cell * 2];
+    const vy = fieldVal[cell * 2 + 1];
+    if (!Number.isFinite(vx) || !Number.isFinite(vy)) continue;
+    const dx = vx * ex + vy * nx;
+    const dy = vx * ey + vy * ny;
+    const dz = vx * ez + vy * nz;
+
+    const sx = cx * r, sy = cy * r, sz = cz * r;
+    arrowsBuffer[writeIdx++] = sx;
+    arrowsBuffer[writeIdx++] = sy;
+    arrowsBuffer[writeIdx++] = sz;
+    arrowsBuffer[writeIdx++] = sx + dx * scale;
+    arrowsBuffer[writeIdx++] = sy + dy * scale;
+    arrowsBuffer[writeIdx++] = sz + dz * scale;
+    arrowCount++;
+  }
+  arrowsGeometry.attributes.position.needsUpdate = true;
+  arrowsGeometry.setDrawRange(0, arrowCount * 2);
+  arrowsMesh.visible = arrowCount > 0;
 }
 
 function muteGlobeMaterial(globe) {

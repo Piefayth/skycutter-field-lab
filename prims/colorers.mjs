@@ -291,6 +291,11 @@ function walkAst(ast, fieldNameSet, out) {
 // `fieldDecls` / `paramDecls` / `constDecls` flow through to the
 // expr-view factory's evaluator.
 export function materializeView(view, palettes, fieldDecls = [], paramDecls = [], constDecls = []) {
+  // Optional sibling `arrows` clause — passes through verbatim. The
+  // renderer reads { field, length, stride } when populating the
+  // arrow LineSegments mesh; absence means the view has no arrow
+  // overlay.
+  const arrows = view.arrows ?? null;
   if (view.kind === "ramp") {
     let stops;
     if (view.paletteName) {
@@ -306,6 +311,7 @@ export function materializeView(view, palettes, fieldDecls = [], paramDecls = []
       id: view.id,
       label: view.label,
       color: rampFromStops(view.field, stops, view.range),
+      arrows,
     };
   }
   if (view.kind === "wheel") {
@@ -313,6 +319,7 @@ export function materializeView(view, palettes, fieldDecls = [], paramDecls = []
       id: view.id,
       label: view.label,
       color: wheelFromRange(view.field, view.range),
+      arrows,
     };
   }
   if (view.kind === "expr") {
@@ -320,6 +327,7 @@ export function materializeView(view, palettes, fieldDecls = [], paramDecls = []
       id: view.id,
       label: view.label,
       color: exprColorer(view.actions, fieldDecls, paramDecls, constDecls),
+      arrows,
     };
   }
   throw new Error(`view "${view.id}": unknown kind "${view.kind}"`);

@@ -197,7 +197,7 @@ function validatePaletteBlock(block) {
 }
 
 function validateViewBlock(block) {
-  const allowed = new Set(["color", "let", "set", "when", "stop"]);
+  const allowed = new Set(["color", "arrows", "let", "set", "when", "stop"]);
   for (const stmt of sorted(block.statements)) {
     if (!allowed.has(stmt.keyword)) throw new Error(`v2 parse: view ${block.id}: unknown declaration "${stmt.keyword}"`);
   }
@@ -497,7 +497,8 @@ function viewCstToAst(cst, block) {
   if (!colorStmt) throw new Error(`v2 CST projection: view ${block.id} missing color declaration`);
   const words = wordsFrom(colorStmt.cleanText);
   const kind = words[1] ?? null;
-  const base = { id: block.id, label: blockLabel(cst, block) ?? block.id };
+  const arrows = arrowsFromViewBlock(block);
+  const base = { id: block.id, label: blockLabel(cst, block) ?? block.id, arrows };
   if (kind === "ramp") {
     const range = rangeFromColorStatement(colorStmt) ?? [0, 1];
     const paletteName = /\bpalette\s+([A-Za-z_][A-Za-z0-9_]*)\b/.exec(colorStmt.cleanText)?.[1] ?? null;
@@ -525,6 +526,37 @@ function viewCstToAst(cst, block) {
     return { ...base, kind, actions: cellActionsCstToAst(cst, block) };
   }
   throw new Error(`v2 CST projection: unsupported view color kind ${kind ?? ""}`);
+}
+
+// `arrows` is a sibling clause to `color` inside a `view` block —
+// renders the named vec2 field as oriented line segments overlaid on
+// the colored sphere. Not all views have arrows; absence is fine.
+//
+//   view flow "Velocity" {
+//     color ramp speed range [0, 1] palette HEAT
+//     arrows wind length=0.6 stride=2
+//   }
+//
+// length: scalar multiplier on the rendered arrow length (default 0.5,
+// units of cell-radius). stride: render every Nth cell (default 1 =
+// one arrow per cell). Both are optional named args.
+function arrowsFromViewBlock(block) {
+  const stmt = sorted(block.statements).find((s) => s.keyword === "arrows");
+  if (!stmt) return null;
+  const text = stmt.cleanText;
+  // arrows FIELD [name=value]*
+  const match = /\barrows\s+([A-Za-z_][A-Za-z0-9_]*)/.exec(text);
+  if (!match) throw new Error(`v2 CST projection: view ${block.id}: arrows clause missing field reference`);
+  const field = match[1];
+  const named = {};
+  for (const m of text.matchAll(/(\w+)\s*=\s*(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)/g)) {
+    named[m[1]] = Number(m[2]);
+  }
+  return {
+    field,
+    length: Number.isFinite(named.length) ? named.length : 0.5,
+    stride: Number.isFinite(named.stride) ? Math.max(1, Math.round(named.stride)) : 1,
+  };
 }
 
 function rangeFromColorStatement(stmt) {

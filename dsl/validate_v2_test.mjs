@@ -18,6 +18,95 @@ function expectThrow(fn, snippet) {
 // Derived fields: must have ≥1 stage writer
 // -----------------------------------------------------------------------------
 
+test("view: arrows clause parses + carries length/stride defaults", () => {
+  const out = compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field h: f32
+field wind: vec2
+step { stage s { reads h, wind; writes h, wind; cell { set h = h; set wind = wind } } }
+views {
+  palette HEAT {
+    stop 0 color [0, 0, 0]
+    stop 1 color [255, 255, 255]
+  }
+  view flow "Velocity" {
+    color ramp h range [0, 1] palette HEAT
+    arrows wind
+  }
+}
+scenarios { scenario blank "Blank" { set h = 0  set wind = vec2(0, 0) } }
+`);
+  const view = out.dsl.views[0];
+  assert(view.arrows?.field === "wind", "arrows field");
+  assert(view.arrows.length === 0.5, "default length=0.5");
+  assert(view.arrows.stride === 1, "default stride=1");
+});
+
+test("view: arrows clause respects named length / stride args", () => {
+  const out = compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field h: f32
+field wind: vec2
+step { stage s { reads h, wind; writes h, wind; cell { set h = h; set wind = wind } } }
+views {
+  palette HEAT {
+    stop 0 color [0, 0, 0]
+    stop 1 color [255, 255, 255]
+  }
+  view flow "Velocity" {
+    color ramp h range [0, 1] palette HEAT
+    arrows wind length=1.5 stride=4
+  }
+}
+scenarios { scenario blank "Blank" { set h = 0  set wind = vec2(0, 0) } }
+`);
+  const view = out.dsl.views[0];
+  assert(view.arrows.length === 1.5, "explicit length=1.5");
+  assert(view.arrows.stride === 4, "explicit stride=4");
+});
+
+test("view: arrows clause rejects scalar field", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field h: f32
+step { stage s { reads h; writes h; cell { set h = h } } }
+views {
+  palette HEAT {
+    stop 0 color [0, 0, 0]
+    stop 1 color [255, 255, 255]
+  }
+  view flow "Bad" {
+    color ramp h range [0, 1] palette HEAT
+    arrows h
+  }
+}
+scenarios { scenario blank "Blank" { set h = 0 } }
+`), "arrows requires a vec2 field");
+});
+
+test("view: arrows clause rejects unknown field", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field h: f32
+step { stage s { reads h; writes h; cell { set h = h } } }
+views {
+  palette HEAT {
+    stop 0 color [0, 0, 0]
+    stop 1 color [255, 255, 255]
+  }
+  view flow "Bad" {
+    color ramp h range [0, 1] palette HEAT
+    arrows nope
+  }
+}
+scenarios { scenario blank "Blank" { set h = 0 } }
+`), "arrows references unknown field");
+});
+
 test("duplicate field declaration is rejected", () => {
   // Surfaced by negative-fuzz-v2.mjs: the v1-shape name-uniqueness
   // check only fired on prior-kind != current-kind, so two `field`

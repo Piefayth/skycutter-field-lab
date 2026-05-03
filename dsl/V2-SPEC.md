@@ -380,6 +380,36 @@ Allowed calls: `clamp`, `min`, `max`, `abs`, `sin`, `cos`, `asin`,
 `lat`, `frame`, `dt`) are stage-only — promote them to a derived
 field if the view needs them.
 
+### Arrows (vec2 glyph overlay)
+
+A view block may carry an optional `arrows` clause alongside its
+`color` clause. The named vec2 field is projected onto each cell's
+east/north tangent basis and rendered as oriented line segments
+overlaid on the colored sphere.
+
+```
+view flow "Velocity" {
+  color ramp speed range [0, 0.25] palette SPEED
+  arrows m length=0.6 stride=2
+}
+```
+
+- `arrows FIELD` — bare field reference; the field must be declared
+  as `vec2`.
+- `length=N` — scalar multiplier on rendered arrow length, in units
+  of the mesh's mean cell-radius. Default `0.5`. Larger values
+  produce longer arrows that overlap with neighbours; smaller
+  values produce a denser look.
+- `stride=N` — render every Nth cell only. Default `1` (one arrow
+  per cell). Higher values produce sparser glyph fields, useful
+  when mesh resolution outruns visual density.
+
+The `color` clause and the `arrows` clause are independent — the
+color can come from any kind (`ramp` / `wheel` / `expr`) and the
+arrows can name any vec2 field, regardless of which fields the color
+references. Common pattern: color the magnitude scalar, arrow the
+direction vector.
+
 ### Overlay
 
 ```

@@ -821,6 +821,9 @@ export const MODIFIERS = [
   { name: "stops",    signature: "stops { stop T color [R, G, B] ... }",         doc: "Inline stop list — alternative to a named palette inside a `color ramp ... stops { ... }` clause. Same shape rules as a top-level `palette` block." },
   { name: "stop",     signature: "stop T color [R, G, B]",                       doc: "A single palette stop. T is in [0, 1] (ascending across the palette); colors are in 0..255." },
   { name: "palette",  signature: "color ramp FIELD ... palette NAME",            doc: "Inside a `color ramp` clause, references a top-level `palette NAME` declaration. Mutually exclusive with inline `stops { ... }`." },
+  { name: "arrows",   signature: "arrows VEC2_FIELD [length=N] [stride=N]",      doc: "Optional sibling clause inside a `view` block. Renders a vec2 field as oriented line segments overlaid on the colored sphere — projecting (x, y) onto each cell's east/north tangent basis. `length` scales the rendered arrow length (units of cell-radius, default 0.5). `stride` subsamples cells (default 1 = arrow per cell; 2 = every other cell, etc.)." },
+  { name: "length",   signature: "arrows ... length=N",                           doc: "Optional named arg on `arrows`. Multiplier on the rendered arrow length, in units of cell-radius. Default 0.5." },
+  { name: "stride",   signature: "arrows ... stride=N",                           doc: "Optional named arg on `arrows`. Render every Nth cell only (default 1 = one arrow per cell). Higher values produce sparser glyph fields, useful when the underlying mesh resolution out-paces visual density." },
 ];
 
 // ---------------------------------------------------------------------------
@@ -859,6 +862,9 @@ const DUAL_USE_NAMES = new Set([
   // `palette` declares a top-level palette block AND appears as a
   // modifier inside a `color ramp ... palette NAME` clause.
   "palette",
+  // `length` is a math fn (`length(vec2)` returns scalar magnitude) AND
+  // a named arg on `arrows ... length=N` — context disambiguates.
+  "length",
 ]);
 
 (function assertSpecUnique() {

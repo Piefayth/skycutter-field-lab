@@ -135,6 +135,25 @@ function validateRenderDecls(schema) {
         fieldTypes, paramNames, constNames,
       });
     }
+    // Optional `arrows FIELD ...` overlay clause. Field must be a
+    // vec2 declared field (the renderer projects (x, y) onto the
+    // cell's east/north tangent basis to produce an oriented line).
+    // Length / stride are positive numbers.
+    if (v.arrows) {
+      const a = v.arrows;
+      if (!fieldNames.has(a.field)) {
+        throw new Error(`view "${v.id}": arrows references unknown field "${a.field}"`);
+      }
+      if (fieldTypes.get(a.field) !== "vec2") {
+        throw new Error(`view "${v.id}": arrows requires a vec2 field — "${a.field}" is ${fieldTypes.get(a.field) ?? "?"}`);
+      }
+      if (!(a.length > 0)) {
+        throw new Error(`view "${v.id}": arrows length must be positive — got ${a.length}`);
+      }
+      if (!Number.isInteger(a.stride) || a.stride < 1) {
+        throw new Error(`view "${v.id}": arrows stride must be a positive integer — got ${a.stride}`);
+      }
+    }
   }
 
   // Overlays — registered names only.
