@@ -19,7 +19,7 @@
 // =============================================================================
 
 import {
-  autocompletion, completionKeymap, acceptCompletion,
+  autocompletion, completionKeymap, acceptCompletion, snippetCompletion,
 } from "@codemirror/autocomplete";
 import {
   keymap, Decoration, WidgetType, EditorView,
@@ -335,12 +335,32 @@ const FIELD_TYPE_COMPLETIONS = [
   keywordOption("bool", "boolean field"),
 ];
 
+const PARAM_WIDGET_COMPLETIONS = [
+  keywordOption("slider", "numeric parameter"),
+  keywordOption("toggle", "boolean parameter"),
+];
+
+const PARAM_MODIFIER_COMPLETIONS = [
+  keywordOption("default"),
+  keywordOption("label"),
+  keywordOption("step"),
+];
+
+const METRIC_REDUCTION_COMPLETIONS = [
+  keywordOption("sum", "sum cells { expr }"),
+  keywordOption("max", "max cells { expr }"),
+  keywordOption("min", "min cells { expr }"),
+  keywordOption("mean", "mean cells { expr }"),
+  keywordOption("count", "count cells where predicate"),
+];
+
 function keywordOption(label, detail = undefined, boost = 20) {
   return { label, type: "keyword", detail, boost };
 }
 
-function structuralOption(label, detail = undefined, boost = 30) {
-  return { label, type: "keyword", detail, boost };
+function structuralOption(label, detail = undefined, boost = 30, template = null) {
+  const base = { label, type: "keyword", detail, boost };
+  return template ? { ...snippetCompletion(template, base), boost } : base;
 }
 
 function optionsFromNames(names, role) {
@@ -420,6 +440,19 @@ function optionsForExpectedContext(ctx, prefix) {
   if (expected.has("scenarioName")) return structural(scenariosFromAst(ctx));
   if (expected.has("fieldType")) return structural(FIELD_TYPE_COMPLETIONS);
   if (expected.has("coordName")) return structural(coordOptionsFromContext(ctx));
+  if (expected.has("substrateKind")) return structural([keywordOption("geodesic")]);
+  if (expected.has("substrateOption")) return structural([keywordOption("frequency")]);
+  if (expected.has("paramWidget")) return structural(PARAM_WIDGET_COMPLETIONS);
+  if (expected.has("paramModifier")) return structural(PARAM_MODIFIER_COMPLETIONS);
+  if (expected.has("metricReduction")) return structural(METRIC_REDUCTION_COMPLETIONS);
+  if (expected.has("colorRampModifier")) {
+    return structural([
+      keywordOption("range", "range [lo, hi]"),
+      keywordOption("palette", "palette NAME"),
+      keywordOption("stops", "stops { stop ... }"),
+    ]);
+  }
+  if (expected.has("colorWheelModifier")) return structural([keywordOption("range", "range [lo, hi]")]);
   if (expected.has("colorKind")) {
     return structural([
       structuralOption("ramp", "color ramp field palette PALETTE"),
@@ -475,7 +508,12 @@ function optionsForGrammarPosition(ctx, mode, prefix) {
 
   if (mode.mode === "stepBody") {
     if (/^\s*[A-Za-z_]*$/.test(trimmed)) {
-      return structural([structuralOption("stage", "stage id \"Label\" { ... }")]);
+      return structural([structuralOption(
+        "stage",
+        "stage id \"Label\" { ... }",
+        30,
+        "stage ${id} \"${Label}\" {\n  reads ${field}\n  writes ${field}\n  cell {\n    ${}\n  }\n}",
+      )]);
     }
   }
 
@@ -494,8 +532,18 @@ function optionsForGrammarPosition(ctx, mode, prefix) {
     if (/^\s*overlay\s+$/.test(line)) return structural([keywordOption("grid")]);
     if (/^\s*[A-Za-z_]*$/.test(trimmed)) {
       return structural([
-        structuralOption("palette", "palette NAME { stop ... }"),
-        structuralOption("view", "view id \"Label\" { color ... }"),
+        structuralOption(
+          "palette",
+          "palette NAME { stop ... }",
+          30,
+          "palette ${NAME} {\n  stop 0 color [0, 0, 0]\n  stop 1 color [255, 255, 255]\n}",
+        ),
+        structuralOption(
+          "view",
+          "view id \"Label\" { color ... }",
+          30,
+          "view ${id} \"${Label}\" {\n  color ramp ${field} range [0, 1] palette ${PALETTE}\n}",
+        ),
         structuralOption("overlay", "overlay grid"),
       ]);
     }
@@ -503,19 +551,31 @@ function optionsForGrammarPosition(ctx, mode, prefix) {
 
   if (mode.mode === "stampsSection") {
     if (/^\s*[A-Za-z_]*$/.test(trimmed)) {
-      return structural([structuralOption("stamp", "stamp id \"Label\" { ... }")]);
+      return structural([structuralOption(
+        "stamp",
+        "stamp id \"Label\" { ... }",
+        30,
+        "stamp ${id} \"${Label}\" {\n  spot ${field} at brush.pos, radius=brush.r, amount=${1}\n}",
+      )]);
     }
   }
 
   if (mode.mode === "scenariosSection") {
     if (/^\s*[A-Za-z_]*$/.test(trimmed)) {
-      return structural([structuralOption("scenario", "scenario id \"Label\" { ... }")]);
+      return structural([structuralOption(
+        "scenario",
+        "scenario id \"Label\" { ... }",
+        30,
+        "scenario ${id} \"${Label}\" {\n  set ${field} = ${0}\n}",
+      )]);
     }
   }
 
   if (mode.mode === "paletteBody") {
     if (/^\s*stop\s+[-+.\w]+\s+$/.test(line)) return structural([keywordOption("color")]);
-    if (/^\s*[A-Za-z_]*$/.test(trimmed)) return structural([structuralOption("stop", "stop 0 color [0, 0, 0]")]);
+    if (/^\s*[A-Za-z_]*$/.test(trimmed)) {
+      return structural([structuralOption("stop", "stop 0 color [0, 0, 0]", 30, "stop ${t} color [${r}, ${g}, ${b}]")]);
+    }
   }
 
   if (mode.mode === "viewBody") {
@@ -564,11 +624,11 @@ function optionsForGrammarPosition(ctx, mode, prefix) {
     }
     if (initial || /^\s*[A-Za-z_]*$/.test(trimmed)) {
       return structural([
-        structuralOption("set", "set field = expr"),
-        structuralOption("spot", "spot field at ..."),
-        structuralOption("ellipse", "ellipse field at ..."),
-        structuralOption("region", "region field where ..."),
-        structuralOption("for", "for each cell { ... }"),
+        structuralOption("set", "set field = expr", 30, "set ${field} = ${expr}"),
+        structuralOption("spot", "spot field at ...", 30, "spot ${field} at lon=${lon}, lat=${lat}, radius=${radius}, amount=${amount}"),
+        structuralOption("ellipse", "ellipse field at ...", 30, "ellipse ${field} at lon=${lon}, lat=${lat}, rx=${rx}, ry=${ry}, amount=${amount}, angle=${angle}"),
+        structuralOption("region", "region field at ...", 30, "region ${field} at lonMin=${lonMin}, lonMax=${lonMax}, latMin=${latMin}, latMax=${latMax}, amount=${amount}"),
+        structuralOption("for", "for each cell { ... }", 30, "for each cell {\n  ${}\n}"),
       ]);
     }
   }
@@ -577,10 +637,10 @@ function optionsForGrammarPosition(ctx, mode, prefix) {
     if (/^\s*(set|add)\s+$/.test(line)) return structural(fieldsFromAst(ctx));
     if (initial || /^\s*[A-Za-z_]*$/.test(trimmed)) {
       return structural([
-        structuralOption("let", "let name = expr"),
-        structuralOption("set", "set field = expr"),
-        structuralOption("add", "add field = expr"),
-        structuralOption("when", "when condition { ... }"),
+        structuralOption("let", "let name = expr", 30, "let ${name} = ${expr}"),
+        structuralOption("set", "set field = expr", 30, "set ${field} = ${expr}"),
+        structuralOption("add", "add field = expr", 30, "add ${field} = ${expr}"),
+        structuralOption("when", "when condition { ... }", 30, "when ${condition} {\n  ${}\n}"),
       ]);
     }
   }
@@ -589,10 +649,10 @@ function optionsForGrammarPosition(ctx, mode, prefix) {
     if (/^\s*(set|add)\s+$/.test(line)) return structural(fieldsFromAst(ctx));
     if (initial || /^\s*[A-Za-z_]*$/.test(trimmed)) {
       return structural([
-        structuralOption("let", "let name = expr"),
-        structuralOption("set", "set field = expr"),
-        structuralOption("add", "add field = expr"),
-        structuralOption("when", "when condition { ... }"),
+        structuralOption("let", "let name = expr", 30, "let ${name} = ${expr}"),
+        structuralOption("set", "set field = expr", 30, "set ${field} = ${expr}"),
+        structuralOption("add", "add field = expr", 30, "add ${field} = ${expr}"),
+        structuralOption("when", "when condition { ... }", 30, "when ${condition} {\n  ${}\n}"),
       ]);
     }
   }

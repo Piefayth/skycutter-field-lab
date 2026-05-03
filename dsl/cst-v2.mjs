@@ -451,6 +451,22 @@ function annotateStatement(stmt) {
     return;
   }
 
+  if (stmt.keyword === "substrate") {
+    const kindMatch = /^\s*substrate\s+([A-Za-z_][A-Za-z0-9_]*)?/.exec(line);
+    const kindFrom = line.indexOf("substrate") + "substrate".length;
+    const kindTo = kindMatch?.[1] ? line.indexOf(kindMatch[1], kindFrom) + kindMatch[1].length : line.length;
+    addZone(kindFrom, kindTo, "substrateKind", "substrateKind");
+    if (kindMatch?.[1] === "geodesic") {
+      addZone(kindTo, line.length, "substrateOption", "substrateOption");
+    }
+    return;
+  }
+
+  if (stmt.keyword === "param") {
+    annotateParamStatement(stmt, line, addZone);
+    return;
+  }
+
   if (stmt.keyword === "recommendedPreset") {
     addZone(afterKeyword, line.length, "scenarioName", "recommendedPreset");
     return;
@@ -471,8 +487,10 @@ function annotateStatement(stmt) {
   if (stmt.keyword === "metric") {
     const eq = line.indexOf("=");
     if (eq >= 0) {
+      const cells = line.indexOf("cells", eq);
       const where = line.indexOf("where", eq);
       const bodyOpen = line.indexOf("{", eq);
+      addZone(eq + 1, cells >= 0 ? cells : firstPositive([where, bodyOpen, line.length]), "metricReduction", "metricReduction");
       const bodyClose = line.lastIndexOf("}");
       if (bodyOpen >= 0) addExpr(bodyOpen + 1, bodyClose > bodyOpen ? bodyClose : line.length, "metricBody");
       if (where >= 0) addExpr(where + "where".length, bodyOpen >= 0 ? bodyOpen : line.length, "metricPredicate");
@@ -498,6 +516,20 @@ function annotateNamedArgExpressions(stmt, line, base, addExpr) {
     const next = /\s+\b(amount|radius|rx|ry|angle|lon|lat|lonMin|lonMax|latMin|latMax)\s*=/.exec(rest);
     const end = next ? start + next.index : line.length;
     addExpr(start, end, `${match[1]}Arg`);
+  }
+}
+
+function annotateParamStatement(stmt, line, addZone) {
+  const nameMatch = /^\s*param\s+([A-Za-z_][A-Za-z0-9_]*)?/.exec(line);
+  const nameTo = nameMatch?.[1]
+    ? line.indexOf(nameMatch[1], line.indexOf("param") + "param".length) + nameMatch[1].length
+    : line.length;
+  const widgetMatch = /\b(slider|toggle)\b/.exec(line.slice(nameTo));
+  const widgetFrom = nameTo;
+  const widgetTo = widgetMatch ? nameTo + widgetMatch.index + widgetMatch[1].length : line.length;
+  addZone(widgetFrom, widgetTo, "paramWidget", "paramWidget");
+  if (widgetMatch) {
+    addZone(widgetTo, line.length, "paramModifier", "paramModifier");
   }
 }
 
@@ -537,6 +569,10 @@ function annotateColorStatement(stmt, line, base, addZone, addExpr) {
     }
     if (palette >= 0) {
       addZone(palette + "palette".length, line.length, "paletteName", "paletteRef");
+    } else if (kind === "ramp" && fieldMatch?.[2]) {
+      addZone(fieldEnd, line.length, "colorRampModifier", "colorRampModifier");
+    } else if (kind === "wheel" && fieldMatch?.[2]) {
+      addZone(fieldEnd, line.length, "colorWheelModifier", "colorWheelModifier");
     }
   } else if (kind === "expr") {
     addZone(afterKind, line.length, "exprBlock", "colorExprBlock");

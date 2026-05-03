@@ -79,9 +79,32 @@ test("CST annotates expression spans and expected cursor zones", () => {
   const setStmt = statementAt(cst, SOURCE.indexOf("set u ="));
   assertEq(setStmt.parts.target.name, "u");
   assertEq(setStmt.expressions.map((expr) => expr.kind), ["assignmentExpr"]);
+  assertEq(expectedAt(cst, SOURCE.indexOf("geodesic")), ["substrateKind"]);
   assertEq(expectedAt(cst, SOURCE.indexOf("reads u") + "reads ".length), ["fieldName"]);
   assertEq(expectedAt(cst, SOURCE.lastIndexOf("palette P") + "palette ".length), ["paletteName"]);
   assertEq(expectedAt(cst, SOURCE.indexOf("u + lap")), ["expression"]);
+});
+
+test("CST reports directive-specific expected zones", () => {
+  const source = `
+recipe "Zones"
+substrate geodesic frequency 16
+field u: f32
+param speed slider 0..1 step 0.1 default 0.3 label "Speed"
+step { stage s { reads u; writes u; cell { set u = u } } }
+metric peak = max cells { abs(u) }
+views {
+  palette P { stop 0 color [0, 0, 0]; stop 1 color [255, 255, 255] }
+  view u "U" { color ramp u range [0, 1] palette P }
+}
+scenarios { scenario blank { set u = 0 } }
+`;
+  const cst = parseDslCst(source);
+  assertEq(expectedAt(cst, source.indexOf("slider")), ["paramWidget"]);
+  assertEq(expectedAt(cst, source.indexOf("step 0.1")), ["paramModifier"]);
+  assertEq(expectedAt(cst, source.indexOf("max cells")), ["metricReduction"]);
+  assertEq(expectedAt(cst, source.indexOf("ramp u") + "ramp ".length), ["fieldName"]);
+  assertEq(expectedAt(cst, source.indexOf("range [0") + "range [".length), ["expression"]);
 });
 
 test("CST expression spans record identifiers, coord reads, and reduction binders", () => {
