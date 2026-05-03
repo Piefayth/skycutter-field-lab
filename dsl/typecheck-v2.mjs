@@ -260,12 +260,24 @@ function typeOfIdentifier(name, locals, ctx) {
   if (locals.has(name)) return locals.get(name);
   if (ctx.fieldTypes.has(name)) return ctx.fieldTypes.get(name);
   if (F32_BUILTINS.has(name)) return "f32";
-  if (paramOrConstOrPlanet(name, ctx)) return "f32";
+  const paramType = paramTypeOf(name, ctx);
+  if (paramType) return paramType;
+  if (constOrPlanet(name, ctx)) return "f32";
   return "unknown";
 }
 
-function paramOrConstOrPlanet(name, ctx) {
-  for (const p of ctx.schema.parameters ?? []) if (p?.name === name) return true;
+// Toggle params surface in the recipe AST with `type === "boolean"` —
+// the DSL treats them as bool (`when enabled { ... }`) even though they
+// pack as f32 0/1 on the wire. Slider params are scalar.
+function paramTypeOf(name, ctx) {
+  for (const p of ctx.schema.parameters ?? []) {
+    if (p?.name !== name) continue;
+    return p.type === "boolean" ? "bool" : "f32";
+  }
+  return null;
+}
+
+function constOrPlanet(name, ctx) {
   for (const c of ctx.schema.constants ?? []) if (c?.name === name) return true;
   if (ctx.schema.planet && Object.prototype.hasOwnProperty.call(ctx.schema.planet, name)) return true;
   return false;

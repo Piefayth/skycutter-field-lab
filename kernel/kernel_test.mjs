@@ -1,9 +1,13 @@
 import { DEFAULT_CELL_COUNT, createState, hashNoise, reallocateState } from "./kernel.mjs";
 import { createGeodesicGrid } from "./geodesic-grid.mjs";
 import { materializeRecipe } from "../visual/recipes.mjs";
-import * as weather from "../recipes/weather.mjs";
+import * as klausmeier from "../recipes/klausmeier.mjs";
 
-const weatherRecipe = materializeRecipe(weather);
+// Klausmeier is the v2 stamp fixture: it has `stamp seed "Plant patch"` /
+// `stamp clearcut` / `stamp irrigate`, all `spot FIELD at brush.pos`
+// — enough surface to verify that materialized stamps mutate geodesic
+// state when invoked.
+const stampRecipe = materializeRecipe(klausmeier);
 
 const tests = [];
 
@@ -42,16 +46,21 @@ test("state allocation follows an installed geodesic grid", () => {
   assert(state.fields.A.length === topology.cellCount, "field allocation should follow geodesic cell count");
 });
 
-test("weather stamps mutate geodesic fields", () => {
-  const state = makeGeodesicWeatherState(16);
-  const before = sum(state.fields.pressure);
-  const stamp = weatherRecipe.stamps.find((s) => s.id === "stormSeed");
+test("v2 stamps mutate geodesic fields", () => {
+  // Pick a stamp the v2 klausmeier recipe ships with and confirm it
+  // actually modifies the field it targets. The previous version of
+  // this test exercised the v1 weather recipe's `stormSeed`; the
+  // v2 path goes through the same materialized-stamp shape.
+  const state = makeGeodesicStampState(16);
+  const before = sum(state.fields.n);
+  const stamp = stampRecipe.stamps.find((s) => s.id === "seed");
+  assert(stamp, "stamp `seed` must exist on klausmeier");
   stamp.run(state, 128, 64, 10, { lon: 0, lat: 0, u: 0.5, v: 0.5, px: 1, py: 0, pz: 0 });
-  const after = sum(state.fields.pressure);
-  assert(Math.abs(after - before) > 1e-5, "stormSeed should change pressure on a geodesic grid");
+  const after = sum(state.fields.n);
+  assert(Math.abs(after - before) > 1e-5, "`seed` stamp should change biomass field n on a geodesic grid");
 });
 
-function makeGeodesicWeatherState(frequency) {
+function makeGeodesicStampState(frequency) {
   const topology = createGeodesicGrid({ frequency });
   const state = createState();
   state.grid = {
@@ -62,7 +71,7 @@ function makeGeodesicWeatherState(frequency) {
     width: 256,
     height: 128,
   };
-  reallocateState(state, { fields: weatherRecipe.fields });
+  reallocateState(state, { fields: stampRecipe.fields });
   return state;
 }
 

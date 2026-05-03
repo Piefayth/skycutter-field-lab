@@ -1,32 +1,35 @@
-import { compileDsl } from "./compiler.mjs";
+// Tests for the WebGPU geodesic compiler — both the cell-stage WGSL
+// emit path and the @upstream / vec2 / type-checker paths it shares
+// with the v2 frontend. Every test drives the compiler via compileV2,
+// since v1 (`compileDsl`) is gone.
+
+import { compileV2 } from "./compile-v2.mjs";
 import {
   buildWebGpuGeodesicUniforms,
   compileWebGpuGeodesicCellStage,
-  compileWebGpuGeodesicEachStage,
-  compileWebGpuGeodesicEventStage,
   compileWebGpuGeodesicPipeline,
 } from "./webgpu-geodesic-compiler.mjs";
-import { pipelineDsl as weatherDsl } from "../recipes/weather.mjs";
+import { pipeline as klausmeierPipeline } from "../recipes/klausmeier.mjs";
 
 test("compiles a DSL cell stage to WGSL storage-buffer passes", () => {
-  const recipe = compileDsl(`
+  const recipe = compileV2(`
 recipe "Tiny"
-use sim cell
-use clock dt, frame
-use geo px, py, pz
-field A, B
-param gain slider min 0 max 2 step 0.1 default 1
-param enabled boolean default true
-const bias 0.25
-planet gravity 9.81
+substrate geodesic frequency 16
+field A: f32
+field B: f32
+param gain slider 0..2 step 0.1 default 1
+param enabled toggle default true
+const bias = 0.25
 
-stage push "Push" {
-  reads A, B
-  writes A
-  cell {
-    when enabled {
-      let boost = gain + bias + gravity * 0
-      add A = (B - A) * boost * dt
+step {
+  stage push "Push" {
+    reads A, B
+    writes A
+    cell {
+      when enabled {
+        let boost = gain + bias
+        add A = (B - A) * boost * dt
+      }
     }
   }
 }
@@ -41,21 +44,23 @@ stage push "Push" {
   assert(passes[0].source.includes("params.p_enabled != 0.0"), "boolean param was not lowered");
 });
 
-test("builds packed f32 uniforms from params, consts, and planet values", () => {
-  const recipe = compileDsl(`
+test("builds packed f32 uniforms from params and consts", () => {
+  // V2 dropped the v1 `planet GRAVITY 9.81` directive; only params and
+  // consts contribute to the packed uniforms now.
+  const recipe = compileV2(`
 recipe "Tiny"
-use sim cell
-use clock dt, frame
-field A
-param gain slider min 0 max 2 step 0.1 default 1
-const bias 0.25
-planet gravity 9.81
+substrate geodesic frequency 16
+field A: f32
+param gain slider 0..2 step 0.1 default 1
+const bias = 0.25
 
-stage push "Push" {
-  reads A
-  writes A
-  cell {
-    add A = gain + bias + gravity + dt + frame
+step {
+  stage push "Push" {
+    reads A
+    writes A
+    cell {
+      add A = gain + bias + dt + frame
+    }
   }
 }
 `);
@@ -67,31 +72,31 @@ stage push "Push" {
     cellCount: 42,
     params: { gain: 1.5 },
     consts: { bias: 0.75 },
-    planet: { gravity: 3.25 },
   });
-  assert(uniforms.length === 7, `unexpected uniform length ${uniforms.length}`);
+  // Layout: [dt, frame, cellCount, pad0, p_gain, c_bias].
+  assert(uniforms.length === 6, `unexpected uniform length ${uniforms.length}`);
   assert(uniforms[0] === 0.5, "dt not packed");
   assert(uniforms[1] === 7, "frame not packed");
   assert(uniforms[2] === 42, "cellCount not packed");
   assert(uniforms[4] === 1.5, "param not packed");
   assert(uniforms[5] === 0.75, "const not packed");
-  assert(uniforms[6] === 3.25, "planet not packed");
 });
 
 test("nullish coalescing keeps the fallback in generated WGSL", () => {
-  const recipe = compileDsl(`
+  const recipe = compileV2(`
 recipe "Fallback"
-use sim cell
-use clock dt, frame
-field A
-param gain slider min 0 max 2 step 0.1 default 1
+substrate geodesic frequency 16
+field A: f32
+param gain slider 0..2 step 0.1 default 1
 
-stage push "Push" {
-  reads A
-  writes A
-  cell {
-    let gain = gain ?? 0.75
-    add A = gain * dt
+step {
+  stage push "Push" {
+    reads A
+    writes A
+    cell {
+      let g = gain ?? 0.75
+      add A = g * dt
+    }
   }
 }
 `);
@@ -100,19 +105,18 @@ stage push "Push" {
 });
 
 test("cellNoise lowers to spatial geodesic noise", () => {
-  const recipe = compileDsl(`
+  const recipe = compileV2(`
 recipe "Noise"
-use sim cell
-use clock dt, frame
-use geo px, py, pz
-use core cellNoise
-field A
+substrate geodesic frequency 16
+field A: f32
 
-stage push "Push" {
-  reads A
-  writes A
-  cell {
-    add A = cellNoise(7) * dt
+step {
+  stage push "Push" {
+    reads A
+    writes A
+    cell {
+      add A = cellNoise(7) * dt
+    }
   }
 }
 `);
@@ -122,19 +126,18 @@ stage push "Push" {
 });
 
 test("cellNoise(seed, scale) emits scaled sphere coords", () => {
-  const recipe = compileDsl(`
+  const recipe = compileV2(`
 recipe "Scaled noise"
-use sim cell
-use clock dt
-use geo px, py, pz
-use core cellNoise
-field A
+substrate geodesic frequency 16
+field A: f32
 
-stage push "Push" {
-  reads A
-  writes A
-  cell {
-    add A = cellNoise(11, 2.5) * dt
+step {
+  stage push "Push" {
+    reads A
+    writes A
+    cell {
+      add A = cellNoise(11, 2.5) * dt
+    }
   }
 }
 `);
@@ -143,20 +146,19 @@ stage push "Push" {
 });
 
 test("neighbor sum lifts to a per-cell loop", () => {
-  const recipe = compileDsl(`
+  const recipe = compileV2(`
 recipe "Sum"
-use sim cell
-use clock dt
-use geo px, py, pz
-use core neighbor
-field A
+substrate geodesic frequency 16
+field A: f32
 
-stage sum "Sum" {
-  reads A
-  writes A
-  cell {
-    let lap = neighbor sum n in A { n - A }
-    add A = lap * dt
+step {
+  stage sum "Sum" {
+    reads A
+    writes A
+    cell {
+      let lap = sum n in neighbors { A@n - A }
+      add A = lap * dt
+    }
   }
 }
 `);
@@ -165,25 +167,29 @@ stage sum "Sum" {
   assert(pass.source.includes("var nr_0: f32 = 0.0;"), "sum accumulator initialized to 0");
   assert(pass.source.includes("for (var nr_0_slot: u32 = 0u"), "loop emitted");
   assert(pass.source.includes("let nr_0_n: u32 = u32(neighbors[cell * 6u + nr_0_slot]);"), "neighbor index resolved once per slot");
-  assert(pass.source.includes("let n: f32 = f_A[nr_0_n];"), "binding read from neighbor index");
-  assert(pass.source.includes("nr_0 = nr_0 + ((n - v_A))"), "sum body accumulated");
+  // V2 hoists each `field@n` to a `_n_<field>` local; the body
+  // accumulates from those locals. Confirm both the local emit and
+  // the accumulator pull from it.
+  assert(pass.source.includes("let _n_A: f32 = f_A[nr_0_n];"),
+    "per-neighbor field read must be hoisted to _n_A");
+  assert(/nr_0\s*=\s*nr_0\s*\+\s*\(\(_n_A - v_A\)\)/.test(pass.source),
+    "sum body must accumulate (A@n - A)");
 });
 
 test("neighbor mean divides by neighbor count", () => {
-  const recipe = compileDsl(`
+  const recipe = compileV2(`
 recipe "Mean"
-use sim cell
-use clock dt
-use geo px, py, pz
-use core neighbor
-field A
+substrate geodesic frequency 16
+field A: f32
 
-stage avg "Avg" {
-  reads A
-  writes A
-  cell {
-    let lap = neighbor mean n in A { n }
-    add A = (lap - A) * dt
+step {
+  stage avg "Avg" {
+    reads A
+    writes A
+    cell {
+      let lap = mean n in neighbors { A@n }
+      add A = (lap - A) * dt
+    }
   }
 }
 `);
@@ -193,399 +199,97 @@ stage avg "Avg" {
 });
 
 test("neighbor max uses -infinity sentinel", () => {
-  const recipe = compileDsl(`
+  const recipe = compileV2(`
 recipe "Max"
-use sim cell
-use clock dt
-use geo px, py, pz
-use core neighbor
-field A
+substrate geodesic frequency 16
+field A: f32
 
-stage hi "Hi" {
-  reads A
-  writes A
-  cell {
-    let m = neighbor max n in A { n }
-    set A = m
+step {
+  stage hi "Hi" {
+    reads A
+    writes A
+    cell {
+      let m = max n in neighbors { A@n }
+      set A = m
+    }
   }
 }
 `);
   const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
   assert(pass.source.includes("var nr_0: f32 = -1.0e38;"), "max seeded with -infinity");
-  assert(pass.source.includes("nr_0 = max(nr_0, (n))"), "max body uses WGSL max");
+  assert(pass.source.includes("let _n_A: f32 = f_A[nr_0_n];"),
+    "per-neighbor field read must be hoisted to _n_A");
+  assert(/nr_0\s*=\s*max\(nr_0,\s*\(_n_A\)\)/.test(pass.source),
+    "max body must use WGSL max with the per-neighbor field read");
 });
 
 test("validator rejects nested neighbor reductions", () => {
+  // The outer reduction body must reference `field@n` (otherwise the
+  // parser flags the empty body before the validator gets to nesting).
+  // Embedding `A@n` plus a nested `sum m in neighbors { A@m }` lets us
+  // trigger the no-neighbor-of-neighbor rule.
   let threw = null;
   try {
-    compileDsl(`
+    compileV2(`
 recipe "Nested"
-use sim cell
-use clock dt
-use geo px, py, pz
-use core neighbor
-field A
+substrate geodesic frequency 16
+field A: f32
 
-stage bad "Bad" {
-  reads A
-  writes A
-  cell {
-    add A = neighbor sum n in A { neighbor sum m in A { m } } * dt
+step {
+  stage bad "Bad" {
+    reads A
+    writes A
+    cell {
+      add A = sum n in neighbors { A@n + sum m in neighbors { A@m } } * dt
+    }
   }
 }
 `);
-  } catch (error) {
-    threw = error.message;
-  }
+  } catch (error) { threw = error.message; }
   assert(threw && threw.includes("nested neighbor reductions"), `expected nested-rejection, got: ${threw}`);
 });
 
-test("compiles a local event stage to per-field WGSL passes", () => {
-  const recipe = compileDsl(`
-recipe "Event"
-use sim event
-use clock dt, frame
-field A, B, R
-param threshold slider min 0 max 2 step 0.1 default 1
-param amount slider min 0 max 2 step 0.1 default 0.5
-
-stage discharge "Discharge" {
-  reads A, B, R
-  writes A, B, R
-  event when A > threshold and R < 0.05 {
-    add B = amount
-    set A = 0
-    set R = 1
-  }
-}
-`);
-  const passes = compileWebGpuGeodesicEventStage(recipe.dsl.stages[0], recipe.dsl);
-  assert(passes.length === 3, `expected three passes, got ${passes.length}`);
-  assert(passes.some((pass) => pass.field === "B" && pass.source.includes("outValue = outValue + params.p_amount")), "B add action missing");
-  assert(passes.some((pass) => pass.field === "A" && pass.source.includes("outValue = 0.0")), "A set action missing");
-  assert(passes.some((pass) => pass.field === "R" && pass.source.includes("outValue = 1.0")), "R set action missing");
-  assert(passes.filter((pass) => pass.eventCounter).length === 1, "expected one event counter pass");
-  assert(passes.some((pass) => pass.source.includes("atomicAdd(&eventCounter.value, 1u);")), "event counter increment missing");
-});
-
-test("compiles neighbor reduction inside each stage", () => {
-  const recipe = compileDsl(`
-recipe "Neighbor"
-use sim each
-use geo x, y, i, lon, lat, u, v, px, py, pz, N, PI, TAU
-use core neighbor
-field W, R, spreadMask
-param threshold slider min 0 max 1 step 0.01 default 0.5
-
-stage mark "Mark" {
-  reads W, R
-  writes spreadMask
-  each {
-    when W < threshold and R <= 0.1 and neighbor max n in W { n } > 0.5 {
-      set spreadMask = 1
-    }
-  }
-}
-`);
-  const passes = compileWebGpuGeodesicEachStage(recipe.dsl.stages[0], recipe.dsl);
-  const pass = passes.find((item) => item.field === "spreadMask");
-  assert(pass, "spreadMask pass missing");
-  assert(pass.needsNeighbors === true, "stage did not request neighbor buffers");
-  assert(pass.source.includes("var<storage, read> neighbors"), "neighbor storage binding missing");
-  assert(pass.source.includes("var nr_0: f32 = -1.0e38;"), "max accumulator initialized to -infinity");
-  assert(pass.source.includes("let nr_0_n: u32 = u32(neighbors[cell * 6u + nr_0_slot]);"), "neighbor index resolved once per slot");
-  assert(pass.source.includes("let n: f32 = f_W[nr_0_n];"), "binding read from neighbor index");
-  assert(pass.source.includes("let v_W: f32 = f_W[cell];"), "read variable should avoid W constant collision");
-});
-
-test("weather cell stages compile to WebGPU geodesic WGSL", () => {
-  const recipe = compileDsl(weatherDsl);
-  const cellStages = recipe.dsl.stages.filter((stage) => stage.body.statements[0]?.type === "cell");
-  assert(cellStages.length >= 3, `expected weather cell stages, got ${cellStages.length}`);
-  for (const stage of cellStages) {
-    const passes = compileWebGpuGeodesicCellStage(stage, recipe.dsl);
-    assert(passes.length > 0, `${stage.id} did not emit passes`);
-    for (const pass of passes) {
-      assert(pass.source.includes("outputField[cell] = outValue;"), `${stage.id}:${pass.field} missing writeback`);
-    }
-  }
-});
-
-test("compiles a full DSL pipeline into stage passes and event counters", () => {
-  const recipe = compileDsl(weatherDsl);
-  const compiled = compileWebGpuGeodesicPipeline(recipe.dsl);
-  assert(compiled.stages.length === recipe.dsl.stages.length, "stage count mismatch");
+test("compiles a multi-stage v2 pipeline into stage passes", () => {
+  // Replaces the v1 weather-fixture full-pipeline test. Klausmeier has
+  // a representative mix of stages: continuous-position CoordRead,
+  // neighbor-mean diffusion, plain reaction kinetics, and a clamp pass.
+  const compiled = compileWebGpuGeodesicPipeline(klausmeierPipeline.dsl);
+  assert(compiled.stages.length === klausmeierPipeline.dsl.stages.length, "stage count mismatch");
   assert(compiled.stages.every((stage) => Array.isArray(stage.passes)), "stage passes missing");
-  assert(Array.isArray(compiled.eventCounters), "event counters missing");
 });
 
-test("history field declaration carries history count", () => {
-  const recipe = compileDsl(`
-recipe "Hist"
-use sim cell
-use clock dt, frame, prev
-use geo px, py, pz
-field u history 1
-
-stage step "Step" {
-  reads u
-  writes u
-  cell {
-    add u = (u - prev(u)) * dt
-  }
-}
-`);
-  const decl = recipe.dsl.fields.find((d) => d.name === "u");
-  assert(decl?.history === 1, "u should carry history=1 on its declaration");
-});
-
-test("validator rejects prev() on a non-history field", () => {
+test("validator rejects history field with no writing stage", () => {
+  // V2 infers history from `@prev` usage. If a field is referenced
+  // with @prev but no stage writes it, the inferred-history rule
+  // surfaces as a "no writing stage" error — the v2 analogue of the
+  // v1 explicit `field u history 1` no-writer check.
   let threw = null;
   try {
-    compileDsl(`
-recipe "NoHist"
-use sim cell
-use clock dt, frame, prev
-field u
+    compileV2(`
+recipe "Hist"
+substrate geodesic frequency 16
+field u: f32
+field v: f32
 
-stage step "Step" {
-  reads u
-  writes u
-  cell {
-    add u = prev(u) * dt
+step {
+  stage step1 "Step" {
+    reads u, v
+    writes v
+    cell {
+      set v = u@prev
+    }
   }
 }
 `);
   } catch (error) { threw = error.message; }
-  assert(threw && threw.includes("history"), `expected history-required error; got: ${threw}`);
+  assert(threw && threw.includes("no writing stage"), `expected no-writer error; got: ${threw}`);
 });
 
-test("validator rejects prev() of an expression", () => {
-  let threw = null;
-  try {
-    compileDsl(`
-recipe "PrevExpr"
-use sim cell
-use clock dt, frame, prev
-field u history 1
+// =============================================================================
+// V2-only paths (vec2, gradient/divergence, @upstream, type checker).
+// =============================================================================
 
-stage step "Step" {
-  reads u
-  writes u
-  cell {
-    add u = prev(u + 1) * dt
-  }
-}
-`);
-  } catch (error) { threw = error.message; }
-  assert(threw && threw.includes("bare field identifier"), `expected bare-id error; got: ${threw}`);
-});
-
-test("history field declaration with multi-name field rejects", () => {
-  let threw = null;
-  try {
-    compileDsl(`
-recipe "BadList"
-use sim cell
-field a, b history 1
-`);
-  } catch (error) { threw = error.message; }
-  assert(threw && threw.includes("single-name"), `expected single-name error; got: ${threw}`);
-});
-
-test("history is rejected on `source` declarations", () => {
-  let threw = null;
-  try {
-    compileDsl(`
-recipe "BadSrc"
-use sim cell
-source w history 1
-`);
-  } catch (error) { threw = error.message; }
-  assert(threw && threw.includes("history is only valid on"), `expected source-rejection error; got: ${threw}`);
-});
-
-test("parser rejects history > 1", () => {
-  let threw = null;
-  try {
-    compileDsl(`
-recipe "Hist"
-use sim cell
-use clock dt, frame, prev
-use geo px, py, pz
-field u history 2
-
-stage step "Step" {
-  reads u
-  writes u
-  cell {
-    add u = (u - prev(u)) * dt
-  }
-}
-`);
-  } catch (error) {
-    threw = error.message;
-  }
-  assert(
-    threw && threw.includes("not yet supported"),
-    `expected history>1 rejection; got: ${threw}`,
-  );
-});
-
-test("validator rejects history field with no writer", () => {
-  let threw = null;
-  try {
-    compileDsl(`
-recipe "Hist"
-use sim cell
-use clock dt, frame, prev
-use geo px, py, pz
-field u history 1
-
-stage observe "Observe" {
-  reads u
-  writes u
-  cell {
-    set u = u
-  }
-}
-`);
-  } catch (error) {
-    threw = error.message;
-  }
-  // Sanity: this one DOES have a writer, should NOT throw.
-  assert(threw === null, `expected no error for present writer; got: ${threw}`);
-
-  // Now the actual no-writer case.
-  threw = null;
-  try {
-    compileDsl(`
-recipe "Hist"
-use sim cell
-use clock dt, frame, prev
-use geo px, py, pz
-field u history 1
-field v
-
-stage step "Step" {
-  reads u, v
-  writes v
-  cell {
-    set v = prev(u)
-  }
-}
-`);
-  } catch (error) {
-    threw = error.message;
-  }
-  assert(
-    threw && threw.includes("no writing stage"),
-    `expected no-writer error; got: ${threw}`,
-  );
-});
-
-test("validator rejects read of history field after its writer", () => {
-  let threw = null;
-  try {
-    compileDsl(`
-recipe "Hist"
-use sim cell
-use clock dt, frame, prev
-use geo px, py, pz
-field u history 1
-field v
-
-stage step "Step" {
-  reads u
-  writes u
-  cell {
-    set u = u + prev(u)
-  }
-}
-
-stage echo "Echo" {
-  reads u, v
-  writes v
-  cell {
-    set v = u
-  }
-}
-`);
-  } catch (error) {
-    threw = error.message;
-  }
-  assert(
-    threw && threw.includes("after its writer"),
-    `expected post-writer-read error; got: ${threw}`,
-  );
-});
-
-test("validator rejects history field written by multiple stages", () => {
-  let threw = null;
-  try {
-    compileDsl(`
-recipe "Hist"
-use sim cell, clamp
-use clock dt, frame, prev
-use geo px, py, pz
-field u history 1
-
-stage step "Step" {
-  reads u
-  writes u
-  cell {
-    add u = (u - prev(u)) * dt
-  }
-}
-
-stage clip "Clip" {
-  reads u
-  writes u
-  clamp u -1 1
-}
-`);
-  } catch (error) {
-    threw = error.message;
-  }
-  assert(
-    threw && threw.includes("written by multiple stages"),
-    `expected multi-writer error; got: ${threw}`,
-  );
-});
-
-test("validator rejects history field written by non-cell primitive", () => {
-  let threw = null;
-  try {
-    compileDsl(`
-recipe "Hist"
-use sim cell, clamp
-use clock dt, frame, prev
-use geo px, py, pz
-field u history 1
-
-stage step "Step" {
-  reads u
-  writes u
-  cell {
-    add u = (u - prev(u)) * dt
-  }
-  clamp u -1 1
-}
-`);
-  } catch (error) {
-    threw = error.message;
-  }
-  assert(
-    threw && threw.includes("cannot be written by clamp"),
-    `expected non-cell-write error; got: ${threw}`,
-  );
-});
-
-test("vec2 field emits array<vec2<f32>> bindings + typed read locals", async () => {
-  // Use the v2 path so vec2 field types and the vec2 builtin are wired
-  // through the modern stack — the v1 parser doesn't have typed field
-  // syntax and the v1 validator namespace-gates `vec2` differently.
-  const { compileV2 } = await import("./compile-v2.mjs");
+test("vec2 field emits array<vec2<f32>> bindings + typed read locals", () => {
   const recipe = compileV2(`
 recipe "Vec"
 substrate geodesic frequency 16
@@ -613,8 +317,7 @@ step {
     "vec2(...) call lowers to WGSL native constructor");
 });
 
-test("gradient(scalarField) emits a per-field tangent-frame helper + stencil helpers", async () => {
-  const { compileV2 } = await import("./compile-v2.mjs");
+test("gradient(scalarField) emits a per-field tangent-frame helper + stencil helpers", () => {
   const recipe = compileV2(`
 recipe "WindCell"
 substrate geodesic frequency 16
@@ -644,8 +347,7 @@ step {
     "gradient call lowered to helper invocation");
 });
 
-test("divergence(vec2Field) emits the divergence helper", async () => {
-  const { compileV2 } = await import("./compile-v2.mjs");
+test("divergence(vec2Field) emits the divergence helper", () => {
   const recipe = compileV2(`
 recipe "LiftCell"
 substrate geodesic frequency 16
@@ -670,11 +372,9 @@ step {
     "divergence call lowered to helper invocation");
 });
 
-test("gradient on a vec2 field is rejected by the type checker", async () => {
-  // This used to surface only at WGSL emit time. The v2 type checker
-  // (typecheck-v2.mjs) now catches it at recipe load with a clearer
-  // message — assert the early-exit path.
-  const { compileV2 } = await import("./compile-v2.mjs");
+test("gradient on a vec2 field is rejected by the type checker", () => {
+  // The v2 type checker (typecheck-v2.mjs) catches this at recipe
+  // load with a clearer message than the WGSL emit-layer fallback.
   let threw = null;
   try {
     compileV2(`
@@ -699,13 +399,12 @@ step {
     `expected gradient-on-vec2 type-check error; got: ${threw}`);
 });
 
-test("@upstream coord-arg field references add the field to pass.reads", async () => {
+test("@upstream coord-arg field references add the field to pass.reads", () => {
   // Regression: a stage that reads field `slope` only via the velocity
   // arguments of `field@upstream(velX, velY, dt)` would silently drop
   // `slope` from pass.reads, leaving the WGSL referencing an unbound
   // identifier. The compiler must walk velX/velY/dt expressions when
   // collecting per-target dependencies.
-  const { compileV2 } = await import("./compile-v2.mjs");
   const recipe = compileV2(`
 recipe "Upstream args"
 substrate geodesic frequency 16
@@ -730,8 +429,7 @@ step {
     "@upstream args must reference the typed v_slope local");
 });
 
-test("validator rejects unknown identifier in @upstream coord arguments", async () => {
-  const { compileV2 } = await import("./compile-v2.mjs");
+test("validator rejects unknown identifier in @upstream coord arguments", () => {
   let threw = null;
   try {
     compileV2(`
@@ -749,26 +447,27 @@ step {
   }
 }
 `);
-  } catch (e) {
-    threw = e;
-  }
+  } catch (e) { threw = e; }
   assert(threw, "expected validation error for unknown identifier in @upstream args");
   assert(/notDeclared/.test(threw.message), `expected error to mention notDeclared, got: ${threw.message}`);
 });
 
-test("WGSL compiler emits f_<name>_prev binding for prev() reads", () => {
-  const recipe = compileDsl(`
+test("WGSL compiler emits f_<name>_prev binding for @prev reads", () => {
+  // V2 history is auto-inferred: a `@prev` reference makes the field
+  // a history field, the compiler allocates a prev binding, and the
+  // WGSL reads from it. Any stage reading u@prev must also write u.
+  const recipe = compileV2(`
 recipe "Hist"
-use sim cell
-use clock dt, frame, prev
-use geo px, py, pz
-field u history 1
+substrate geodesic frequency 16
+field u: f32
 
-stage step "Step" {
-  reads u
-  writes u
-  cell {
-    add u = (u - prev(u)) * dt
+step {
+  stage propagate "Step" {
+    reads u
+    writes u
+    cell {
+      add u = (u - u@prev) * dt
+    }
   }
 }
 `);
@@ -778,9 +477,27 @@ stage step "Step" {
   assert(pass.source.includes("f_u_prev[cell]"), "WGSL must read prev from f_u_prev");
 });
 
+// =============================================================================
+// Test harness (this file is invoked via `node --test`; the helpers
+// below print TAP-shaped output the runner picks up).
+// =============================================================================
+
 function test(name, fn) {
   try {
-    fn();
+    const result = fn();
+    if (result && typeof result.then === "function") {
+      // If a test returns a promise, the runner picks up unhandled
+      // rejections via process.exitCode — chain to surface failures.
+      result.then(
+        () => console.log(`ok - ${name}`),
+        (error) => {
+          console.error(`not ok - ${name}`);
+          console.error(error.stack ?? error.message);
+          process.exitCode = 1;
+        },
+      );
+      return;
+    }
     console.log(`ok - ${name}`);
   } catch (error) {
     console.error(`not ok - ${name}`);
