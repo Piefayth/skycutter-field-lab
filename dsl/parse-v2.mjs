@@ -1024,7 +1024,15 @@ function parseV2Postfix(parser) {
       continue;
     }
     if (tok.value === "@") {
-      // Coordinate query: prev | <neighbor-binding-name>
+      // Coordinate query: u@prev | u@<neighbor-binding-name>. Both
+      // produce a CoordRead AST node — a first-class coordinate-query
+      // primitive the compiler dispatches on. The v1 lowering (Call to
+      // `prev`, synthetic Identifier locals) is gone.
+      //
+      // Future extensions (u@prev(2), u@anti, u@(<position-expr>),
+      // u@boundary) extend by adding new `coord.kind` variants here and
+      // matching cases in webgpu-geodesic-compiler.mjs's compileExpr —
+      // the AST stays a uniform CoordRead.
       parser.index++;
       const coordTok = parser.tokens[parser.index];
       if (coordTok.type !== "ident") {
@@ -1032,19 +1040,17 @@ function parseV2Postfix(parser) {
       }
       parser.index++;
       const coord = coordTok.value;
-      // The thing being queried must be an Identifier (a field name).
       if (expr.type !== "Identifier") {
         throw new Error(`v2 parse: @ coordinate query must follow a bare field name (got ${expr.type})`);
       }
       const fieldName = expr.name;
       if (coord === "prev") {
-        // Lower to v1: Call(prev, [Identifier(field)])
-        expr = { type: "Call", callee: { type: "Identifier", name: "prev" }, args: [{ type: "Identifier", name: fieldName }] };
+        expr = { type: "CoordRead", field: fieldName, coord: { kind: "prev" } };
       } else {
-        // Cell-centered neighbor read: register as a binding for the enclosing
-        // reduction, and substitute a synthetic local Identifier.
-        const binding = registerNeighborBinding(parser, coord, fieldName);
-        expr = { type: "Identifier", name: binding };
+        // Neighbor read: validates against the enclosing reduction frame.
+        // The frame's `coord` must match the binding name used here.
+        ensureNeighborCoordInScope(parser, coord, fieldName);
+        expr = { type: "CoordRead", field: fieldName, coord: { kind: "neighbor", binding: coord } };
       }
       continue;
     }
@@ -1100,38 +1106,50 @@ function tryParseV2NeighborReduction(parser) {
   const op = opTok.value;
   const coord = t1.value;
 
-  // Push a fresh neighbor-bindings frame; the body will register coord-bound
-  // field reads here as we encounter `field@coord` postfixes.
-  const frame = { coord, bindings: [] };
-  parser.neighborBinds.push(frame);
+  // Push a scope frame so `field@coord` inside the body validates as
+  // bound. The body emits CoordRead nodes; the compiler walks them
+  // later to derive the per-field neighbor bindings — there's no
+  // pre-rewriting at parse time.
+  parser.neighborBinds.push({ coord });
   const body = parseV2Conditional(parser);
   expectV2(parser, "}");
   parser.neighborBinds.pop();
 
-  if (frame.bindings.length === 0) {
-    throw new Error(`v2 parse: reduction \`${op} ${coord} in neighbors\` body has no \`field@${coord}\` references — no neighbor data to reduce`);
+  // Sanity: a reduction with no `field@coord` reference is almost
+  // certainly a typo (you'd be reducing the same value over every
+  // neighbor — equivalent to `<op> * neighborCount`). Catch early.
+  if (!bodyHasNeighborCoordRead(body, coord)) {
+    throw new Error(
+      `v2 parse: reduction \`${op} ${coord} in neighbors\` body has no \`field@${coord}\` references — ` +
+      `no neighbor data to reduce`,
+    );
   }
   return {
     type: "NeighborReduce",
     op,
-    bindings: frame.bindings,
+    coord,
     body,
   };
 }
 
-function registerNeighborBinding(parser, coord, fieldName) {
+function ensureNeighborCoordInScope(parser, coord, fieldName) {
   const frame = parser.neighborBinds[parser.neighborBinds.length - 1];
   if (!frame || frame.coord !== coord) {
-    throw new Error(`v2 parse: \`${fieldName}@${coord}\` outside its enclosing \`<op> ${coord} in neighbors { ... }\` reduction`);
+    throw new Error(
+      `v2 parse: \`${fieldName}@${coord}\` outside its enclosing \`<op> ${coord} in neighbors { ... }\` reduction`,
+    );
   }
-  // If we've already bound this field for this coord, reuse the synthetic name.
-  for (const b of frame.bindings) {
-    if (b.field === fieldName) return b.name;
+}
+
+function bodyHasNeighborCoordRead(ast, coord) {
+  if (!ast || typeof ast !== "object") return false;
+  if (ast.type === "CoordRead" && ast.coord?.kind === "neighbor" && ast.coord.binding === coord) return true;
+  for (const k of Object.keys(ast)) {
+    const v = ast[k];
+    if (Array.isArray(v) && v.some((c) => bodyHasNeighborCoordRead(c, coord))) return true;
+    if (v && typeof v === "object" && bodyHasNeighborCoordRead(v, coord)) return true;
   }
-  // New binding: synthesize a local name that won't collide with user idents.
-  const name = `_${coord}_${fieldName}`;
-  frame.bindings.push({ name, field: fieldName });
-  return name;
+  return false;
 }
 
 function expectV2(parser, valueOrType) {

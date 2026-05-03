@@ -564,9 +564,46 @@ function validateExpr(
     case "NeighborReduce":
       validateNeighborReduce(ast, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers, allowImplicitGeo);
       return;
+    case "CoordRead":
+      validateCoordRead(ast, visibleFields, locals, label, imports);
+      return;
     default:
       throw new Error(`${label}: unknown expression node ${ast.type}`);
   }
+}
+
+// V2 CoordRead = `field@<coord>`. Two flavors today:
+//   - coord.kind === "prev"      → temporal read of last tick
+//   - coord.kind === "neighbor"  → spatial read at the bound neighbor cell
+// Both require the field to be visible to the surrounding stage; the
+// `prev` flavor additionally requires the field to be declared as a
+// history-eligible source (validated in the wider validateStages pass
+// via imports.historyFields, mirroring the legacy `prev()` Call check).
+function validateCoordRead(ast, visibleFields, locals, label, imports) {
+  if (!ast.field || !ast.coord?.kind) {
+    throw new Error(`${label}: malformed CoordRead`);
+  }
+  if (!visibleFields.has(ast.field)) {
+    throw new Error(`${label}: ${ast.field}@${ast.coord.kind} — field not visible to this stage; add it to reads`);
+  }
+  if (ast.coord.kind === "prev") {
+    requireImport(imports, "clock", "prev", label);
+    const historyFields = imports?.historyFields;
+    if (!historyFields || !historyFields.has(ast.field)) {
+      throw new Error(
+        `${label}: ${ast.field}@prev requires the field to be used with @prev somewhere — ` +
+        `history depth is inferred from @prev usage`,
+      );
+    }
+    return;
+  }
+  if (ast.coord.kind === "neighbor") {
+    // Neighbor coord is a parser-time scope check; if we got here the
+    // CoordRead is inside its enclosing reduction frame.
+    requireImport(imports, "core", "neighbor", label);
+    return;
+  }
+  throw new Error(`${label}: unsupported coord kind "${ast.coord.kind}"`);
 }
 
 const NEIGHBOR_REDUCTION_OPS = new Set(["sum", "max", "min", "mean"]);
@@ -577,31 +614,38 @@ function validateNeighborReduce(ast, visibleFields, locals, label, declaredParam
   }
   requireImport(imports, "core", "neighbor", label);
 
-  if (!Array.isArray(ast.bindings) || ast.bindings.length === 0) {
+  // Two AST shapes:
+  //   v2 CoordRead: ast carries `coord` (the binding name); the body
+  //     contains CoordRead nodes that reference the coord. Bindings
+  //     are derived during compilation, not pre-built.
+  //   legacy v1: ast carries `bindings: [{ name, field }]` and the body
+  //     uses bare Identifier references to the synthetic names.
+  // Both forms are accepted here.
+  const isV2 = typeof ast.coord === "string";
+  if (!isV2 && (!Array.isArray(ast.bindings) || ast.bindings.length === 0)) {
     throw new Error(`${label}: neighbor ${ast.op} requires at least one binding`);
   }
-  // Nested reductions aren't supported on the geodesic substrate — we
-  // don't have neighbor-of-neighbor access. Reject early with a clear
-  // message rather than letting the WGSL compiler emit something broken.
   if (containsNeighborReduce(ast.body)) {
     throw new Error(`${label}: nested neighbor reductions aren't supported (no neighbor-of-neighbor access on the geodesic substrate)`);
   }
-  // Each binding's field must be visible to the surrounding stage; the
-  // bound name is added to the body's local scope.
   const bodyLocals = new Set(locals);
-  for (const binding of ast.bindings) {
-    requireVisibleField(binding.field, visibleFields, label, `neighbor ${ast.op} field`);
-    validateLocalName(
-      binding.name,
-      `${label} neighbor ${ast.op} binding`,
-      visibleFields,
-      bodyLocals,
-    );
-    bodyLocals.add(binding.name);
+  if (isV2) {
+    // For v2 reductions, `coord` is the binding name; CoordRead nodes
+    // inside the body resolve it via the parser's scope frame. The
+    // expression validator checks fields against visibleFields and
+    // walks every CoordRead via the validateCoordRead case.
+  } else {
+    for (const binding of ast.bindings) {
+      requireVisibleField(binding.field, visibleFields, label, `neighbor ${ast.op} field`);
+      validateLocalName(
+        binding.name,
+        `${label} neighbor ${ast.op} binding`,
+        visibleFields,
+        bodyLocals,
+      );
+      bodyLocals.add(binding.name);
+    }
   }
-  // Body validates with the binding(s) in scope — `n` from `n in theta`
-  // resolves as a local; `theta` (the field name) still resolves as the
-  // cell's value via the regular visibleFields path.
   validateExpr(ast.body, visibleFields, bodyLocals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers, allowImplicitGeo);
 }
 

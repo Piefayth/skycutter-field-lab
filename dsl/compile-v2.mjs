@@ -175,12 +175,17 @@ export function compileV2(source) {
   };
 }
 
-// Walk every cell-action expression and metric expression for Call nodes
-// whose callee is `prev`. Returns the set of field names referenced.
+// Walk every cell-action expression and metric expression for v2
+// CoordRead nodes with `coord.kind === "prev"`. The set of fields
+// referenced gates history-buffer allocation. Legacy `Call(prev, ...)`
+// shape is still recognized for any leftover non-CoordRead AST.
 function collectHistoryFields(stages, metrics) {
   const out = new Set();
   function walk(ast) {
     if (!ast || typeof ast !== "object") return;
+    if (ast.type === "CoordRead" && ast.coord?.kind === "prev") {
+      out.add(ast.field);
+    }
     if (ast.type === "Call" && ast.callee?.type === "Identifier" && ast.callee.name === "prev") {
       const arg = ast.args?.[0];
       if (arg?.type === "Identifier") out.add(arg.name);

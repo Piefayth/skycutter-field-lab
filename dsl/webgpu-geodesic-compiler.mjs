@@ -323,6 +323,13 @@ function collectExprFieldReads(ast, declaredFields, out = new Set()) {
   if (ast.type === "Identifier" && declaredFields.has(ast.name)) {
     out.add(ast.name);
   }
+  // V2 CoordRead — `field@<coord>` reads `field` regardless of coord kind
+  // (prev / neighbor / future kinds). Surface the field as a read.
+  if (ast.type === "CoordRead" && declaredFields.has(ast.field)) {
+    out.add(ast.field);
+  }
+  // Legacy v1 prev() Call form, kept so any leftover non-CoordRead AST
+  // still classifies correctly.
   if (ast.type === "Call" && ast.callee?.name === "prev"
       && ast.args?.[0]?.type === "Identifier"
       && declaredFields.has(ast.args[0].name)) {
@@ -663,11 +670,17 @@ function visitExpr(expr, onIdentifier) {
       for (const arg of expr.args ?? []) visitExpr(arg, onIdentifier);
       break;
     case "NeighborReduce":
-      // The bound name shadows enclosing scope inside the body, but we
-      // need the field name visible to the dependency walker so the
-      // surrounding stage knows it's a read. Surface both.
+      // Legacy v1-shape: bindings carried on the node. v2 shape derives
+      // bindings from CoordRead nodes inside the body, which the
+      // CoordRead case below visits.
       for (const binding of expr.bindings ?? []) onIdentifier(binding.field);
       visitExpr(expr.body, onIdentifier);
+      break;
+    case "CoordRead":
+      // CoordRead is a per-cell field read at some coordinate. The
+      // surrounding stage / metric needs to know the field is read, so
+      // we surface it as an Identifier hit.
+      onIdentifier(expr.field);
       break;
   }
 }
@@ -687,10 +700,10 @@ function filterActionList(actions, target, locals) {
   return out;
 }
 
-// Walk the action body looking for `prev(IDENT)` calls. Returns the
-// distinct field names referenced by such calls (in source-order).
-// The validator already guarantees prev's argument is a bare Identifier,
-// so we don't need to second-guess shape here.
+// Walk the action body for v2 `field@prev` reads — CoordRead nodes with
+// coord.kind === "prev". Returns the distinct field names (source-order).
+// Legacy v1 `prev(IDENT)` Call shape is also recognized so the same
+// helper works for any leftover v1-style AST.
 function collectPrevReads(actions) {
   const out = [];
   const seen = new Set();
@@ -702,6 +715,13 @@ function collectPrevReads(actions) {
   }
   function walkExpr(expr) {
     if (!expr) return;
+    if (expr.type === "CoordRead" && expr.coord?.kind === "prev") {
+      if (!seen.has(expr.field)) {
+        seen.add(expr.field);
+        out.push(expr.field);
+      }
+      return;
+    }
     if (expr.type === "Call" && expr.callee?.type === "Identifier" && expr.callee.name === "prev") {
       const arg = expr.args?.[0];
       if (arg?.type === "Identifier" && !seen.has(arg.name)) {
@@ -843,18 +863,47 @@ function emitReduction(node, ctx, statements) {
   const count = `${accName}_count`;
   const neighborIdx = `${accName}_n`;
   const sumName = `${accName}_sum`;
-  const bindings = node.bindings ?? [];
-  if (bindings.length === 0) {
-    throw new Error("emitReduction: NeighborReduce has no bindings");
+  // The reduction's bindings come from one of two sources:
+  //   - v2 CoordRead-shaped body: walk the body for every
+  //     `CoordRead { coord: { kind: "neighbor", binding: node.coord } }`,
+  //     collect distinct fields, synthesize one local per field
+  //     (`_n_<field>`). The compiler then resolves CoordRead → the
+  //     local at compile-expression time via `ctx.coordReadResolver`.
+  //   - legacy v1-shape body: the parser pre-built `node.bindings`
+  //     with `{ name, field }` entries; the body uses bare Identifier
+  //     references to the synthetic names.
+  // Both paths produce identical WGSL.
+  let bindings;
+  if (node.coord) {
+    const fieldNames = collectNeighborFields(node.body, node.coord);
+    if (fieldNames.length === 0) {
+      throw new Error(`emitReduction: reduction over coord ${node.coord} reads no fields`);
+    }
+    bindings = fieldNames.map((field) => ({
+      name: `_${node.coord}_${field}`,
+      field,
+    }));
+  } else {
+    bindings = node.bindings ?? [];
+    if (bindings.length === 0) {
+      throw new Error("emitReduction: NeighborReduce has no bindings");
+    }
   }
 
-  // Compile the body with all binding names in scope as locals. v2's
-  // cell-centered reductions emit one binding per coord-bound field
-  // (`field@n` in v2 lowers to a synthetic local named `_n_<field>`);
-  // v1's field-centered single-binding form is the trivial 1-binding case.
+  // Build a per-reduction CoordRead resolver: given a field name, return
+  // the WGSL identifier that holds that field's value at the current
+  // neighbor cell. Stacks with the outer ctx.coordReadResolver so a
+  // body inside this reduction can also reference `u@prev` from the
+  // surrounding cell.
+  const coordReadResolver = makeCoordReadResolver({
+    parent: ctx.coordReadResolver,
+    neighborCoord: node.coord,
+    bindingByField: new Map(bindings.map((b) => [b.field, b.name])),
+  });
+
   const bodyLocals = new Set(ctx.locals);
   for (const b of bindings) bodyLocals.add(b.name);
-  const bodyCtx = { ...ctx, locals: bodyLocals };
+  const bodyCtx = { ...ctx, locals: bodyLocals, coordReadResolver };
   const bodyWgsl = compileExpr(node.body, bodyCtx);
 
   if (node.op === "sum") {
@@ -913,9 +962,79 @@ function compileExpr(ast, ctx) {
       return `select(${compileExpr(ast.alternate, ctx)}, ${compileExpr(ast.consequent, ctx)}, ${compileExpr(ast.test, ctx)})`;
     case "Call":
       return compileCall(ast, ctx);
+    case "CoordRead":
+      return compileCoordRead(ast, ctx);
     default:
       throw new Error(`Unsupported WebGPU geodesic expression node: ${ast.type}`);
   }
+}
+
+// Coordinate-query lowering. The CoordRead AST node is the v2 unifying
+// primitive — every `field@<coord>` syntax compiles through here. New
+// coord kinds (continuous-position sampling, antipode, prev with
+// non-1 offset) extend by adding cases.
+function compileCoordRead(ast, ctx) {
+  const coord = ast.coord;
+  switch (coord.kind) {
+    case "prev":
+      return `f_${ast.field}_prev[cell]`;
+    case "neighbor": {
+      const resolver = ctx.coordReadResolver;
+      const local = resolver?.(ast.field, coord.binding);
+      if (!local) {
+        throw new Error(
+          `compileCoordRead: \`${ast.field}@${coord.binding}\` is not in scope of any \`<op> ${coord.binding} in neighbors { ... }\` reduction`,
+        );
+      }
+      return local;
+    }
+    default:
+      throw new Error(`compileCoordRead: unsupported coord kind "${coord.kind}"`);
+  }
+}
+
+function makeCoordReadResolver({ parent, neighborCoord, bindingByField }) {
+  return function resolve(field, coordName) {
+    if (coordName === neighborCoord) {
+      const local = bindingByField.get(field);
+      if (!local) {
+        throw new Error(`coord-read: reduction over ${coordName} doesn't bind field "${field}"`);
+      }
+      return local;
+    }
+    if (parent) return parent(field, coordName);
+    return null;
+  };
+}
+
+// Walk a NeighborReduce body for every CoordRead with the matching
+// neighbor binding; return the distinct field names (preserves first-seen
+// order for stable WGSL output / test goldens).
+function collectNeighborFields(ast, coord) {
+  const seen = new Set();
+  const out = [];
+  function walk(node) {
+    if (!node || typeof node !== "object") return;
+    if (node.type === "CoordRead" && node.coord?.kind === "neighbor" && node.coord.binding === coord) {
+      if (!seen.has(node.field)) {
+        seen.add(node.field);
+        out.push(node.field);
+      }
+      return;
+    }
+    if (node.type === "NeighborReduce") {
+      // Don't dive into another reduction's body — it has its own coord
+      // scope and any inner CoordReads belong to it, not us.
+      return;
+    }
+    for (const k of Object.keys(node)) {
+      const v = node[k];
+      if (Array.isArray(v)) v.forEach(walk);
+      else if (v && typeof v === "object") walk(v);
+    }
+  }
+  walk(ast);
+  return out;
 }
 
 function compileIdentifier(name, ctx) {

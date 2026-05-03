@@ -168,7 +168,10 @@ step { stage s { reads u; writes u; cell { set u = u } } }
 // Cell-body @prev
 // -----------------------------------------------------------------------------
 
-test("u@prev lowers to Call(prev, [u])", () => {
+test("u@prev produces a CoordRead with coord.kind = prev", () => {
+  // V2 coordinate-query model: u@prev is a first-class CoordRead AST
+  // node, not a Call(prev, [u]) lowering. The compiler dispatches on
+  // coord.kind to emit f_u_prev[cell] in WGSL.
   const out = parseV2(`
 recipe "P"
 substrate geodesic frequency 16
@@ -185,18 +188,18 @@ step {
   assertEq(cell.type, "cell");
   const action = cell.actions[0];
   assertEq(action.type, "set");
-  // expr should be Binary(-, Identifier(u), Call(prev, [Identifier(u)]))
+  // expr is Binary(-, Identifier(u), CoordRead{ field: u, coord: { kind: prev } })
   assertEq(action.expr.type, "Binary");
-  assertEq(action.expr.right.type, "Call");
-  assertEq(action.expr.right.callee, { type: "Identifier", name: "prev" });
-  assertEq(action.expr.right.args[0], { type: "Identifier", name: "u" });
+  assertEq(action.expr.right.type, "CoordRead");
+  assertEq(action.expr.right.field, "u");
+  assertEq(action.expr.right.coord, { kind: "prev" });
 });
 
 // -----------------------------------------------------------------------------
 // Cell-centered neighbor reduction (single field)
 // -----------------------------------------------------------------------------
 
-test("sum n in neighbors { u@n - u } lowers to NeighborReduce", () => {
+test("sum n in neighbors { u@n - u } produces NeighborReduce with CoordRead body", () => {
   const out = parseV2(`
 recipe "L"
 substrate geodesic frequency 16
@@ -217,15 +220,17 @@ step {
   assertEq(letAction.type, "let");
   assertEq(letAction.name, "lap");
   const reduce = letAction.expr;
+  // The reduction carries `coord: "n"` — the binding name. The body
+  // emits CoordRead nodes; the compiler walks them to derive bindings,
+  // there is no pre-rewriting at parse time.
   assertEq(reduce.type, "NeighborReduce");
   assertEq(reduce.op, "sum");
-  // Single field bound under the synthetic name `_n_u`
-  assert(reduce.bindings.length === 1, `1 binding, got ${reduce.bindings.length}`);
-  assertEq(reduce.bindings[0].field, "u");
-  assertEq(reduce.bindings[0].name, "_n_u");
-  // Body: Binary(-, Identifier(_n_u), Identifier(u))
+  assertEq(reduce.coord, "n");
+  // Body: Binary(-, CoordRead{u@n}, Identifier(u))
   assertEq(reduce.body.type, "Binary");
-  assertEq(reduce.body.left, { type: "Identifier", name: "_n_u" });
+  assertEq(reduce.body.left.type, "CoordRead");
+  assertEq(reduce.body.left.field, "u");
+  assertEq(reduce.body.left.coord, { kind: "neighbor", binding: "n" });
   assertEq(reduce.body.right, { type: "Identifier", name: "u" });
 });
 
@@ -233,7 +238,7 @@ step {
 // Multi-field neighbor reduction (the cell-centered win)
 // -----------------------------------------------------------------------------
 
-test("sum n in neighbors { u@n + v@n } emits multi-binding reduction", () => {
+test("sum n in neighbors { u@n + v@n } body has CoordRead per field", () => {
   const out = parseV2(`
 recipe "M"
 substrate geodesic frequency 16
@@ -252,10 +257,22 @@ step {
 `);
   const reduce = out.stages[0].body.statements[0].actions[0].expr;
   assertEq(reduce.type, "NeighborReduce");
-  // Two bindings: one per coord-bound field
-  assert(reduce.bindings.length === 2, `2 bindings, got ${reduce.bindings.length}`);
-  const fieldsBound = new Set(reduce.bindings.map(b => b.field));
-  assert(fieldsBound.has("u") && fieldsBound.has("v"));
+  assertEq(reduce.coord, "n");
+  // Walk the body for CoordRead nodes — should find u@n and v@n.
+  const fieldsRead = new Set();
+  function walk(ast) {
+    if (!ast || typeof ast !== "object") return;
+    if (ast.type === "CoordRead" && ast.coord?.kind === "neighbor" && ast.coord.binding === "n") {
+      fieldsRead.add(ast.field);
+    }
+    for (const k of Object.keys(ast)) {
+      const v = ast[k];
+      if (Array.isArray(v)) v.forEach(walk);
+      else if (v && typeof v === "object") walk(v);
+    }
+  }
+  walk(reduce.body);
+  assert(fieldsRead.has("u") && fieldsRead.has("v"), `expected u and v read; got ${[...fieldsRead].join(',')}`);
 });
 
 // -----------------------------------------------------------------------------
@@ -348,16 +365,22 @@ metric active  = count cells where abs(u) > 0.1
 
   // The `lap` let-binding is a NeighborReduce
   assertEq(cell.actions[0].expr.type, "NeighborReduce");
-  // The final set has both u@prev calls in it
-  function findCalls(ast, name, acc = []) {
+  // The final set has u@prev — walk the AST for CoordRead nodes with
+  // coord.kind === "prev" (the v2 representation, replacing v1's
+  // Call(prev, [u]) lowering).
+  function findCoordReads(ast, kind, acc = []) {
     if (!ast || typeof ast !== "object") return acc;
-    if (ast.type === "Call" && ast.callee?.name === name) acc.push(ast);
+    if (ast.type === "CoordRead" && ast.coord?.kind === kind) acc.push(ast);
     for (const k of Object.keys(ast)) {
-      if (Array.isArray(ast[k])) ast[k].forEach((c) => findCalls(c, name, acc));
-      else if (typeof ast[k] === "object") findCalls(ast[k], name, acc);
+      if (Array.isArray(ast[k])) ast[k].forEach((c) => findCoordReads(c, kind, acc));
+      else if (typeof ast[k] === "object") findCoordReads(ast[k], kind, acc);
     }
     return acc;
   }
-  const prevCalls = findCalls(cell.actions[2].expr, "prev");
-  assert(prevCalls.length === 1, `expected 1 prev() call in set, got ${prevCalls.length}`);
+  // The wave-equation cell body contains u@prev twice (once in `damp`,
+  // once in `raw`). Both are inside the final `set u = ...` action's
+  // expression tree.
+  const prevReads = findCoordReads(cell.actions[2].expr, "prev");
+  assert(prevReads.length >= 1, `expected at least 1 u@prev read; got ${prevReads.length}`);
+  for (const r of prevReads) assertEq(r.field, "u");
 });

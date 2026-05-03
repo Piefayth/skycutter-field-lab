@@ -520,9 +520,12 @@ Reserved in grammar, not implemented in v2 first cut:
   recipe's `views[]` / paint stamp list. **Pending evidence** — only
   Kuramoto's `cosTheta` is currently derived, so the UI gap isn't yet
   user-visible.
-- Coordinate-query architecture (`u@prev`, `u@n`, future `u@(pos)`,
-  `u@anti`) currently lowers to v1 AST shape (`Call(prev, [u])` for
-  `u@prev`; synthetic local for `u@n`). Future kinds (`u@(continuous)`
-  for advection, `u@anti` for antipodal) will need a real `CoordRead`
-  AST node and dispatched compiler — a real refactor, not a sugar
-  extension.
+- Coordinate-query architecture — **DONE**. `u@prev` and `u@n` are
+  first-class `CoordRead { field, coord }` AST nodes (NOT lowered to
+  `Call(prev, [u])` or a synthetic Identifier). The WGSL compiler
+  dispatches on `coord.kind` in `compileCoordRead` — `prev` emits
+  `f_<field>_prev[cell]`, `neighbor` resolves to a per-binding local
+  set up by `emitReduction`. History inference and metric-body
+  validators walk for CoordRead nodes directly. Future coord kinds
+  (`u@anti`, `u@prev(N)`, `u@(continuous_pos)` for advection sampling,
+  `u@boundary`) extend by adding cases here — the AST stays uniform.

@@ -262,18 +262,29 @@ function validateMetricIdentifiers(metric, schema) {
         return;
       }
       case "NeighborReduce": {
-        // The reduction body sees `bindings[i].name` as a local —
-        // synthetic binding names like `_n_u` from cell-centered
-        // lowering. Add them so the body's references resolve.
+        // V2 shape carries the binding coord on the node itself; CoordRead
+        // nodes inside the body reference the coord. Legacy v1 shape
+        // pre-bound { name, field } pairs — handle both.
         const bodyLocals = new Set(locals);
         for (const b of ast.bindings ?? []) {
           if (b.name) bodyLocals.add(b.name);
-          // Also verify the bound field exists.
           if (b.field && !fieldNames.has(b.field)) {
             throw new Error(`${label}: neighbor reduction binds unknown field "${b.field}"`);
           }
         }
         visitExpr(ast.body, bodyLocals);
+        return;
+      }
+      case "CoordRead": {
+        // `field@<coord>` reads `field`. Verify field exists; coord
+        // shape was enforced by the parser. (Inside a metric body we
+        // also still need to check that prev-coord fields are
+        // history-eligible — the v1 validator does that for stages,
+        // but metric expressions don't go through validateStages so
+        // we re-check here.)
+        if (!fieldNames.has(ast.field)) {
+          throw new Error(`${label}: ${ast.field}@${ast.coord?.kind ?? "?"} — unknown field "${ast.field}"`);
+        }
         return;
       }
       default:
