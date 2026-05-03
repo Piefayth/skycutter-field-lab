@@ -1,6 +1,92 @@
 {
   "version": 1,
   "defaultRecipe": "blank",
+  "featuredRecipes": [
+    "blank",
+    "wave-equation",
+    "shallow-water",
+    "smoothlife",
+    "nonlocal-ecology",
+    "kuramoto-chimera",
+    "ising-model",
+    "kobayashi-snowflake",
+    "vicsek-flock",
+    "ice-albedo"
+  ],
+  "groups": [
+    {
+      "id": "starter",
+      "label": "Starter",
+      "recipes": [
+        "blank"
+      ]
+    },
+    {
+      "id": "reaction-diffusion",
+      "label": "Reaction-Diffusion",
+      "recipes": [
+        "fitzhugh-nagumo",
+        "belousov-zhabotinsky",
+        "gierer-meinhardt",
+        "brusselator",
+        "lengyel-epstein",
+        "aliev-panfilov"
+      ]
+    },
+    {
+      "id": "metric-kernels",
+      "label": "Metric Kernels",
+      "recipes": [
+        "smoothlife",
+        "lenia-lite",
+        "wilson-cowan-field",
+        "nonlocal-ecology"
+      ]
+    },
+    {
+      "id": "fluids-waves-physics",
+      "label": "Fluids / Waves / Physics",
+      "recipes": [
+        "wave-equation",
+        "shallow-water",
+        "schrodinger",
+        "burgers",
+        "ice-albedo",
+        "kobayashi-snowflake"
+      ]
+    },
+    {
+      "id": "ecology-populations",
+      "label": "Ecology / Populations",
+      "recipes": [
+        "klausmeier",
+        "predator-prey",
+        "sir-epidemic"
+      ]
+    },
+    {
+      "id": "cellular-automata-stochastic",
+      "label": "Cellular Automata / Stochastic",
+      "recipes": [
+        "cyclic-ca",
+        "ising-model",
+        "drossel-schwabl",
+        "sandpile",
+        "greenberg-hastings",
+        "eden-growth",
+        "coupled-logistic-map"
+      ]
+    },
+    {
+      "id": "flocking-phase",
+      "label": "Flocking / Phase",
+      "recipes": [
+        "kuramoto-chimera",
+        "vicsek-flock",
+        "toner-tu"
+      ]
+    }
+  ],
   "recipes": [
     {
       "id": "blank",

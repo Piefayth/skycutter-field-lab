@@ -30,6 +30,7 @@ import { createWindow, listWindows } from "./windows.mjs";
 import { buildMenuBar } from "./menu.mjs";
 import { createGeodesicPreview } from "./geodesic-preview.mjs";
 import { createDslDocsContent, registerDslDocsWindow } from "./dsl-docs.mjs";
+import { groupManifestRecipes } from "./recipe-menu-model.mjs";
 
 let canvas = null;
 let renderer = null;
@@ -325,13 +326,9 @@ function buildWindows() {
 
 function buildMenu(windows) {
   const host = document.querySelector("#menuBar");
-  // File → Recipe → list of recipes from the manifest. We poll the
-  // manifest at every menu open (`items` is rebuilt by the menu module
-  // each time) so newly-added recipes show up without a page reload —
-  // but for now the menu module captures the items array at build time,
-  // which is fine since manifest is fetched once at boot. If we add
-  // mid-session manifest reload, this needs a `rebuild()` call.
-  const recipeItems = () => recipes.manifest.recipes.map((r) => ({
+  // File -> Example Recipes is shaped by the manifest catalog metadata.
+  // If we add mid-session manifest reload, this needs a `rebuild()` call.
+  const recipeMenuItem = (r) => ({
     type: "checkable",
     label: r.name ?? r.id,
     title: r.summary,
@@ -340,7 +337,21 @@ function buildMenu(windows) {
       ui.recipeSelect.value = r.id;
       ui.recipeSelect.dispatchEvent(new Event("change", { bubbles: true }));
     },
-  }));
+  });
+  const recipeItems = () => {
+    const groups = groupManifestRecipes(recipes.manifest);
+    if (!groups.length) return [{ label: "No example recipes", disabled: true }];
+    const items = [];
+    groups.forEach((group, index) => {
+      if (index > 0 && groups[index - 1]?.virtual) items.push({ type: "separator" });
+      items.push({
+        type: "submenu",
+        label: group.label,
+        items: group.recipes.map(recipeMenuItem),
+      });
+    });
+    return items;
+  };
   const savedRecipeItems = () => {
     if (!recipes.savedRecipes.length) {
       return [{ label: "No saved recipes", disabled: true }];
