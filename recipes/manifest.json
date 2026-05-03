@@ -76,9 +76,9 @@
     },
     {
       "id": "conway-life",
-      "name": "Conway's Life (example)",
+      "name": "Hex Life (example)",
       "path": "recipes/conway-life.mjs",
-      "summary": "Cellular automaton on a sphere. State is `u32` (alive=1, dead=0); each tick counts alive neighbors and applies B3/S23. The 12 pentagonal cells make the dynamics slightly off-rule near icosahedron vertices, so gliders deform when they cross a pentagon. First v2 recipe to demo integer-storage field types."
+      "summary": "Cellular automaton on a sphere with a parameterized birth/survival rule. State is `u32` (alive=1, dead=0); each tick counts alive neighbors and applies B[birthMin..birthMax]/S[surviveMin..surviveMax]. Defaults to B2/S34 (sustains on 6-neighbor hex tilings, unlike vanilla Conway B3/S23 which dies fast). First v2 recipe to demo integer-storage field types."
     }
   ]
 }

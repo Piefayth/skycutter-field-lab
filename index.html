@@ -118,9 +118,12 @@
           </header>
           <div class="lab-section__body">
             <div class="control-row">
-              <label for="presetSelect">Preset</label>
-              <!-- options populated from the active recipe's `presets[]`
-                   declarations by visual/recipes.mjs::populatePresetSelect. -->
+              <label for="presetSelect">Scenario</label>
+              <!-- options populated from the active recipe's `scenario`
+                   declarations (parser keeps the schema field name
+                   `presets` — same shape as v1's preset construct —
+                   but v2 surface syntax is `scenario`). See
+                   visual/recipes.mjs::populatePresetSelect. -->
               <select id="presetSelect"></select>
             </div>
             <div class="button-row">

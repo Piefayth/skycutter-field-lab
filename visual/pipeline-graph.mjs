@@ -99,7 +99,10 @@ export function mountPipelineGraph(rootEl, api) {
 
   const pipelineDslSection = makeDslEditorSection("pipeline", "pipeline", { open: true });
   const stampDslSection = makeDslEditorSection("stamps", "stamp");
-  const presetDslSection = makeDslEditorSection("presets", "preset");
+  // Section title is the v2 surface keyword "scenarios"; the kind
+  // tag stays "preset" because downstream code (split keys, count
+  // bindings, dom selectors) keys off that string.
+  const presetDslSection = makeDslEditorSection("scenarios", "preset");
   dslStack.append(pipelineDslSection.root, stampDslSection.root, presetDslSection.root);
 
   const dslButtons = document.createElement("div");
@@ -436,7 +439,11 @@ export function mountPipelineGraph(rootEl, api) {
   function updateDslExtractCounts() {
     pipelineDslSection.count.textContent = `${extractTopLevelBlocks(dslEditor.getSource(), "stage").length}`;
     stampDslSection.count.textContent = `${extractTopLevelBlocks(stampDslSection.editor.getSource(), "stamp").length}`;
-    presetDslSection.count.textContent = `${extractTopLevelBlocks(presetDslSection.editor.getSource(), "preset").length}`;
+    // Count both v2 `scenario` and any leftover v1 `preset` blocks
+    // so the badge stays accurate after the keyword rename.
+    const scenarioCount = extractTopLevelBlocks(presetDslSection.editor.getSource(), "scenario").length;
+    const presetCount = extractTopLevelBlocks(presetDslSection.editor.getSource(), "preset").length;
+    presetDslSection.count.textContent = `${scenarioCount + presetCount}`;
   }
 
   dslApplyBtn.addEventListener("click", applyPipelineDsl);

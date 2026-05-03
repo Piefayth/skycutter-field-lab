@@ -38,7 +38,13 @@ export function extractTopLevelBlocks(source, keyword) {
 
 export function splitPipelineDsl(source) {
   const stampRanges = extractTopLevelBlockRanges(source, "stamp");
-  const presetRanges = extractTopLevelBlockRanges(source, "preset");
+  // v2 surface keyword is `scenario`; legacy `preset` blocks are
+  // accepted as an alias so any older saved-recipe text still
+  // routes into the right editor section.
+  const presetRanges = [
+    ...extractTopLevelBlockRanges(source, "scenario"),
+    ...extractTopLevelBlockRanges(source, "preset"),
+  ];
   const ranges = [...stampRanges, ...presetRanges].sort((a, b) => a.from - b.from);
   let main = source ?? "";
   for (const range of [...ranges].sort((a, b) => b.from - a.from)) {
@@ -47,7 +53,11 @@ export function splitPipelineDsl(source) {
   return {
     main: cleanSplitDslText(main),
     stamps: stampRanges.map((range) => range.text.trim()).join("\n\n"),
-    presets: presetRanges.map((range) => range.text.trim()).join("\n\n"),
+    // The output key stays "presets" because the consumer
+    // (pipeline-graph.mjs) refers to that section by id; renaming
+    // it ripples into setSection lookups. Conceptually this slice
+    // holds the recipe's scenarios.
+    presets: presetRanges.sort((a, b) => a.from - b.from).map((range) => range.text.trim()).join("\n\n"),
   };
 }
 
