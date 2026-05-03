@@ -421,52 +421,58 @@ field if the view needs them.
 ### Glyph overlay
 
 A view block may carry an optional `glyph` clause alongside its
-`color` clause. Each cell gets a small shape — `arrow`, `dot`,
-`ring`, `square`, or `plus` — drawn on top of the tile, with
-optional rotation and size driven by recipe fields.
+`color` clause. Each cell gets a font character — whatever the
+recipe author writes between the quotes — rasterized to a texture
+and drawn on top of the tile, with optional rotation and size
+driven by recipe fields.
 
 ```
 view flow "Velocity" {
   color ramp speed range [0, 0.25] palette SPEED
-  glyph arrow rotate=m length=0.6 stride=2
+  glyph "→" rotate=m length=0.6 stride=2
 }
 
 view density "Density dots" {
   color ramp rho range [0, 1] palette MONO
-  glyph dot size=rho length=0.4
+  glyph "●" size=rho length=0.4
 }
 
-view phase "Phase markers" {
-  color wheel theta
-  glyph plus length=0.3
+view stars "Activity" {
+  color ramp activity range [0, 1] palette ACT
+  glyph "★" length=0.5
+}
+
+view marks "X marks the spot" {
+  color ramp h range [0, 1] palette MONO
+  glyph "X" length=0.4 stride=2
 }
 ```
 
 Surface:
 
 ```
-glyph KIND [rotate=VEC2_FIELD] [size=SCALAR_FIELD] [length=N] [stride=N]
+glyph "CHAR" [rotate=VEC2_FIELD] [size=SCALAR_FIELD] [length=N] [stride=N]
 ```
 
-- `KIND` — one of `arrow`, `dot`, `ring`, `square`, `plus`.
+- `"CHAR"` — the literal character (or short string) to rasterize.
+  Anything the system font can draw works: arrows (→ ↑ ↗ ⇒),
+  shapes (● ○ ■ ▲ ★), letters / numbers, even emoji.
 - `rotate=FIELD` (optional) — vec2 field whose `atan2(y, x)` sets
-  glyph orientation in the cell's east/north tangent plane. Required
-  in spirit for `arrow` (otherwise the arrow points north uniformly);
-  meaningless for symmetric shapes (`dot`, `square`, `plus`).
+  glyph orientation in the cell's east/north tangent plane. The
+  glyph's natural facing is whatever the font draws — "→" points
+  east when the field has angle 0; "↑" points north.
 - `size=FIELD` (optional) — scalar field that multiplies glyph
   size per cell. Cells whose size-field is zero are skipped
-  entirely. Useful for "density dots" where the dot diameter is
-  the field magnitude.
+  entirely.
 - `length=N` (default `0.5`) — base size in units of mesh mean
-  cell-radius. The total per-cell size is `length × size_field
-  × baseScale`.
+  cell-radius. The total per-cell size is `length × (size_field
+  magnitude or 1) × baseScale`.
 - `stride=N` (default `1`) — render every Nth cell only.
 
 Glyphs are auto-shaded for contrast against the underlying tile
-color: bright tiles get dark glyphs, dark tiles get bright ones. The
-shading uses a comet-tail gradient (tile-tinted base → contrast
-tip), which makes oriented `arrow` glyphs read as directional
-streaks rather than flat triangles.
+color: bright tiles get dark glyphs (luma 0.05), dark tiles get
+bright ones (luma 0.97). The system font and 128-px rasterization
+are baked into the renderer.
 
 The `color` clause and the `glyph` clause are independent — common
 pattern: color the magnitude scalar, glyph the direction vector or

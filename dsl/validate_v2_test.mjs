@@ -18,7 +18,7 @@ function expectThrow(fn, snippet) {
 // Derived fields: must have ≥1 stage writer
 // -----------------------------------------------------------------------------
 
-test("view: glyph arrow clause parses + carries defaults", () => {
+test("view: glyph clause parses character literal + defaults", () => {
   const out = compileV2(`
 recipe "X"
 substrate geodesic frequency 16
@@ -32,19 +32,19 @@ views {
   }
   view flow "Velocity" {
     color ramp h range [0, 1] palette HEAT
-    glyph arrow rotate=wind
+    glyph "→" rotate=wind
   }
 }
 scenarios { scenario blank "Blank" { set h = 0  set wind = vec2(0, 0) } }
 `);
   const view = out.dsl.views[0];
-  assert(view.glyph?.kind === "arrow", "glyph kind");
+  assert(view.glyph?.char === "→", "glyph char");
   assert(view.glyph.rotate === "wind", "rotate field");
   assert(view.glyph.length === 0.5, "default length=0.5");
   assert(view.glyph.stride === 1, "default stride=1");
 });
 
-test("view: glyph dot with size field", () => {
+test("view: glyph with size field", () => {
   const out = compileV2(`
 recipe "X"
 substrate geodesic frequency 16
@@ -57,19 +57,19 @@ views {
   }
   view density "Dots" {
     color ramp rho range [0, 1] palette MONO
-    glyph dot size=rho length=0.4
+    glyph "●" size=rho length=0.4
   }
 }
 scenarios { scenario blank "Blank" { set rho = 0 } }
 `);
   const view = out.dsl.views[0];
-  assert(view.glyph.kind === "dot");
+  assert(view.glyph.char === "●");
   assert(view.glyph.size === "rho");
-  assert(view.glyph.rotate === null, "no rotate for dot");
+  assert(view.glyph.rotate === null, "no rotate");
   assert(view.glyph.length === 0.4);
 });
 
-test("view: glyph clause rejects unknown kind", () => {
+test("view: glyph clause needs quoted character", () => {
   expectThrow(() => compileV2(`
 recipe "X"
 substrate geodesic frequency 16
@@ -82,11 +82,11 @@ views {
   }
   view flow "Bad" {
     color ramp h range [0, 1] palette HEAT
-    glyph hexagon
+    glyph arrow
   }
 }
 scenarios { scenario blank "Blank" { set h = 0 } }
-`), "unknown glyph kind");
+`), "needs a quoted character");
 });
 
 test("view: glyph rotate must be vec2", () => {
@@ -102,7 +102,7 @@ views {
   }
   view flow "Bad" {
     color ramp h range [0, 1] palette HEAT
-    glyph arrow rotate=h
+    glyph "→" rotate=h
   }
 }
 scenarios { scenario blank "Blank" { set h = 0 } }
@@ -123,7 +123,7 @@ views {
   }
   view bad "Bad" {
     color ramp h range [0, 1] palette MONO
-    glyph dot size=wind
+    glyph "●" size=wind
   }
 }
 scenarios { scenario blank "Blank" { set h = 0  set wind = vec2(0, 0) } }

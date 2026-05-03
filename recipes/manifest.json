@@ -115,6 +115,24 @@
       "name": "Burgers' equation (example)",
       "path": "recipes/burgers.mjs",
       "summary": "Scalar self-advection — du/dt + u·du/dx = ν·∇²u — the simplest PDE that does shock formation. Smooth profiles steepen at their leading edge until viscosity stops the singularity. The NOISE scenario produces Burgers turbulence: a tangled landscape of merging shocks that slowly anneals to a few dominant fronts."
+    },
+    {
+      "id": "kobayashi-snowflake",
+      "name": "Kobayashi snowflake (example)",
+      "path": "recipes/kobayashi-snowflake.mjs",
+      "summary": "Anisotropic phase-field crystal growth — Kobayashi (1993). A solid seed releases latent heat that warms the surrounding liquid; protrusions cool faster than concavities so the front becomes unstable, and the six-fold ε(θ) anisotropy locks the resulting dendrites into snowflake branches. Drop a single seed and watch a hexagonal snowflake grow on the sphere over ~30 wall-seconds."
+    },
+    {
+      "id": "toner-tu",
+      "name": "Toner-Tu flocking (example)",
+      "path": "recipes/toner-tu.mjs",
+      "summary": "Continuum limit of Vicsek-style flocking. Velocity v is self-propelled toward magnitude √(α/β); density ρ is conserved by ∇·(ρv); pressure smooths density bunching, viscosity aligns neighbours. Below the critical noise the whole sphere polarises into a single global flow direction with persistent dense bands (Toner-Tu's giant number fluctuations); above it, flow is turbulent. The continuous-density alternative to the Vicsek-flock recipe."
+    },
+    {
+      "id": "drossel-schwabl",
+      "name": "Drossel-Schwabl forest fire (example)",
+      "path": "recipes/drossel-schwabl.mjs",
+      "summary": "Canonical self-organised-criticality CA. Three states per cell — empty / tree / burning. Trees grow from empty cells with probability p; lightning ignites trees with probability f; burning cells spread to tree neighbours and become empty next tick. At small f and p≫f the fire-size distribution is a power law; this is the textbook example of SOC."
     }
   ]
 }
