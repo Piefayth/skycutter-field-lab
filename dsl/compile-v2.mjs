@@ -3,23 +3,16 @@
 // Pipeline:
 //   1. parse-v2 produces a v2 AST (CoordRead, NeighborReduce with
 //      coord binding, scenario / stamp / metric, etc.)
-//   2. validateV2 owns ALL v2-specific semantics — flat import
+//   2. validateV2 owns the v2-specific semantics — flat import
 //      constraints, derived-field rules, metric expression
-//      validation, explicit-previous-reads, etc.
-//   3. The v1 validator functions (validateNameUniqueness /
-//      validatePresets / validateStamps / validateStages) are reused
-//      as shape validators only. Their namespaced import gating is
-//      bypassed via a `permitAll` sentinel — v2 doesn't need v1's
-//      `use sim cell` machinery.
+//      validation, explicit-previous-reads, type checking.
+//   3. validate.mjs supplies shape-only validators (reads/writes
+//      wiring, name uniqueness, scenario / stamp / metric structural
+//      shape). These rules are independent of v1 vs v2 surface
+//      syntax and are reused here.
 //   4. webgpu-geodesic-compiler emits WGSL directly from the v2 AST
 //      (CoordRead is a first-class node; NeighborReduce.coord drives
 //      binding derivation in emitReduction).
-//
-// The remaining v1 dependency is the shape-validator code path. That
-// reuse is acceptable because those validators check structural rules
-// (reads/writes wiring, name uniqueness, history-field
-// single-writer-per-step) that are the same in v1 and v2. The v1
-// import-namespace concept doesn't escape this module.
 
 import { parseV2 } from "./parse-v2.mjs";
 import {
@@ -35,14 +28,12 @@ import { validateV2 } from "./validate-v2.mjs";
 
 export function compileV2(source) {
   const schema = parseV2(source);
-  // V2 doesn't use v1's namespaced `use NS name` import gating. The
-  // permitAll sentinel tells v1's requireImport to short-circuit; the
-  // v2 validator (validateV2 below) owns the actual flat-import
-  // constraint check. The historyFields side-channel still piggybacks
-  // on this object — validateStages writes it for the validateCall /
-  // validateCoordRead branches that need to know which fields have
-  // @prev usage anywhere in the recipe.
-  schema.imports = { permitAll: true };
+  // The shape validators (validate.mjs) carry a `historyFields`
+  // side-channel on the schema's `imports` object that downstream
+  // expression validators read for @prev / history checks. Initialise
+  // an empty bag here; validateStages populates `historyFields` once
+  // it has walked the recipe.
+  schema.imports = {};
 
   const presets = schema.presets;
   const stamps = schema.stamps;
@@ -91,7 +82,6 @@ export function compileV2(source) {
       planet: schema.planet,
       constants: schema.constants,
       resolution: schema.resolution,
-      imports: schema.imports,
       sources: schema.sources,
       fields: schema.fields,
       declared,

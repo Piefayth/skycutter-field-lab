@@ -1,4 +1,24 @@
-// Field Lab DSL validation and graph metadata.
+// Field Lab DSL shape / structural validators.
+//
+// History: this module started life as the v1 validator. After v1 was
+// retired its v1-specific bits (namespaced import gating, the
+// `use NAMESPACE name` shape) were excised, and the rest survives as a
+// reusable shape-validator suite that compile-v2.mjs calls into:
+// reads/writes wiring, name uniqueness, history-field rules,
+// scenario / stamp / metric structural shape, edge derivation.
+//
+// The exported entry points (validateNameUniqueness, validateStages,
+// validatePresets, validateStamps, annotateStageParamRefs,
+// buildDeclaredPipelineSummary, deriveEdges) take a parsed schema in
+// the v1-shaped form (which v2 still emits — same `stages[].body`,
+// `presets`, `stamps`, etc.).
+//
+// Internal helpers retain an `imports` parameter (now always
+// `{ permitAll: true, historyFields: ... }` from compile-v2). The
+// permitAll sentinel disables the legacy namespace gating in
+// requireImport; the historyFields side-channel is read by
+// validateCoordRead / validateCall when checking @prev usage. The
+// flat v2 import constraint is enforced by validate-v2.mjs.
 
 import {
   CLOCK_IDENTIFIERS,
@@ -739,29 +759,22 @@ function validateCall(ast, visibleFields, locals, label, declaredParams, declare
   for (const arg of ast.args) validateExpr(arg, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, extraIdentifiers, allowImplicitGeo);
 }
 
+// Carry the schema's imports object through unmodified. v2 always
+// passes `{ permitAll: true, historyFields: ... }`; the side-channel
+// fields (historyFields in particular) are read by other validators
+// downstream. There is no longer any v1-shape array form to translate.
 function buildImportSets(imports) {
-  // V2 path: imports is `{ permitAll: true, ... }`. The v2 chain owns
-  // its own flat-import constraint (validate-v2.mjs), so the v1
-  // namespaced gating becomes a no-op. Pass the object through so
-  // side-channels (historyFields) and the permitAll sentinel survive.
-  if (imports && !Array.isArray(imports)) return imports;
-  // V1 path: imports is an array of { from, names } records. Build
-  // the namespaced-set shape requireImport expects.
-  const sets = new Map();
-  for (const decl of imports ?? []) {
-    if (!sets.has(decl.from)) sets.set(decl.from, new Set());
-    for (const name of decl.names ?? []) sets.get(decl.from).add(name);
-  }
-  return sets;
+  return imports ?? {};
 }
 
-function requireImport(imports, from, name, label) {
-  if (!imports) return;
-  // V2 short-circuit: v2 enforces flat imports separately in
-  // validate-v2.mjs, so the v1 namespaced gating is bypassed here.
-  if (imports.permitAll) return;
-  if (imports.get?.(from)?.has(name)) return;
-  throw new Error(`${label}: ${from}.${name} is not imported`);
+// Legacy namespace-import constraint check. v2 enforces its own flat
+// import constraint in validate-v2.mjs; this function is now an
+// unconditional no-op kept only so the 25-or-so callsites threaded
+// through expression / stage / metric validators don't need surgery.
+// Future cleanup: drop this function and remove the `imports` parameter
+// from those callsites.
+function requireImport(_imports, _from, _name, _label) {
+  return;
 }
 
 function requireWrite(field, writes, stageId) {
