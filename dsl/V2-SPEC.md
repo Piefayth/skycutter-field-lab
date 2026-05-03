@@ -482,10 +482,18 @@ Reserved in grammar, not implemented in v2 first cut:
 
 ## Open questions
 
-- Multi-binding `NeighborReduce` in WGSL emitter: extension to v1's compiler
-  needed for cell-centered multi-field reductions. Estimated half-day of
-  work.
+- Multi-binding `NeighborReduce` in WGSL emitter — **DONE** (commit
+  `379928f`). Cell-centered multi-field reductions like
+  `sum n in neighbors { u@n + v@n - u - v }` now lower correctly.
 - Reduction kernel infrastructure: workgroup partial reduce + finalize.
-  Estimated 2–3 days.
+  Estimated 2–3 days. **Pending evidence** — no shipped recipe currently
+  uses a v2 `metric x = ...` declaration; the JS-side `export const
+  metrics = [...]` per-recipe path still drives the metrics panel via
+  CPU readback. Worth implementing when a recipe wants a metric the JS
+  layer can't compute efficiently (e.g. `mean cells where pred { expr
+  with neighbor reductions inside }` over 30k cells).
 - Derived field UI: paint panel needs to auto-hide derived fields; views
-  panel should show them. Editor concern, not DSL.
+  panel should show them. Editor concern, not DSL — wires through the
+  recipe's `views[]` / paint stamp list. **Pending evidence** — only
+  Kuramoto's `cosTheta` is currently derived, so the UI gap isn't yet
+  user-visible.
