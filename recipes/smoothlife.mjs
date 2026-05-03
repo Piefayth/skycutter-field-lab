@@ -1,11 +1,10 @@
 // SmoothLife-inspired continuous cellular automaton on the geodesic mesh.
 //
-// This recipe exists mostly to dogfood topological k-neighborhoods. Classic
-// SmoothLife uses metric disks / annuli in the plane; field-lab currently has
-// bounded topological `disk(k)` and `ring(k)` over the icosphere graph. That is
-// intentionally not the same thing. If the pentagon-shell artifacts are too
-// visible here, that is a useful signal that the next DSL primitive should be
-// weighted metric kernels, not wider graph rings.
+// SmoothLife uses smooth metric neighborhoods: an inner disk estimates
+// whether the cell is alive, and an outer annulus estimates whether its
+// surroundings should birth or sustain it. This recipe uses v2's weighted
+// metric kernel reductions so the radii are great-circle distances rather
+// than graph-step shells.
 
 import { compileV2 } from "../dsl/compile-v2.mjs";
 
@@ -26,11 +25,11 @@ export const regime = {
 };
 
 export const pipelineDsl = `
-recipe "SmoothLife topological"
-summary "SmoothLife-style continuous cellular automaton using topological disk/ring reductions. disk(2) estimates local mass; ring(3) estimates the outer annulus. This is intentionally a dogfood recipe for graph-distance neighborhoods, not a faithful metric-kernel SmoothLife."
+recipe "SmoothLife metric"
+summary "SmoothLife-style continuous cellular automaton using weighted metric kernels. A center-weighted bell kernel estimates inner life; an annular bell kernel estimates the outer environment. Smooth birth/survival windows turn those densities into flowing cellular organisms."
 recommendedPreset islands
 
-substrate geodesic frequency 48
+substrate geodesic frequency 32
 
 field u: f32
 field activity: f32 derived
@@ -42,20 +41,23 @@ param deathLo slider 0..1 step 0.001 default 0.267 label "SURVIVE LOW"
 param deathHi slider 0..1 step 0.001 default 0.445 label "SURVIVE HIGH"
 param softness slider 0.005..0.2 step 0.001 default 0.030 label "SOFTNESS"
 param response slider 0..8 step 0.01 default 2.4 label "RESPONSE"
+param outerCenter slider 0.06..0.12 step 0.001 default 0.105 label "OUTER CENTER"
+param outerWidth slider 0.012..0.02 step 0.001 default 0.020 label "OUTER WIDTH"
 param simRateHz slider 0..120 step 1 default 45 label "SIM RATE"
 param rate slider 1..10 step 1 default 1 label "RATE"
 
 step {
-  stage evolve "Topological SmoothLife step" {
+  stage evolve "Metric SmoothLife step" {
     reads u
     writes u, activity, edge
     cell {
-      // Inner mass: local occupancy around the cell.
-      let inner = mean n in disk(2) { u@n }
-      // Outer annulus: exact graph shell three edges away. This is the
-      // recipe's central dogfood point; classic SmoothLife wants a metric
-      // annulus, but v2 now has a topological shell.
-      let outer = mean n in ring(3) { u@n }
+      // Inner mass: center-weighted smoothing. Because bell(0, width)
+      // includes the current cell with maximum weight, this tracks local
+      // occupancy rather than only the surrounding shell.
+      let inner = mean n in kernel bell(0, 0.045) { u@n }
+      // Outer annulus: strongest at outerCenter; the current cell has
+      // almost no weight because center > 0.
+      let outer = mean n in kernel bell(outerCenter, outerWidth) { u@n }
 
       // Window helper built from two smooth ramps:
       //   1 inside [lo, hi], 0 outside, soft boundaries.
@@ -66,7 +68,7 @@ step {
       // disk is mostly dead or mostly alive.
       let aliveMix = smoothstep(0.5 - softness, 0.5 + softness, inner)
       let desired = birthWindow * (1 - aliveMix) + surviveWindow * aliveMix
-      let next = clamp(u + (desired - u) * response * dt, 0, 1)
+      let next = clamp(u + (desired - u) * response * rate * dt, 0.001, 0.999)
 
       set activity = abs(next - u)
       set edge = abs(outer - inner)

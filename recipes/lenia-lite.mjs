@@ -1,10 +1,10 @@
-// Lenia-lite on the geodesic mesh.
+// Single-channel Lenia on the geodesic mesh.
 //
-// Real Lenia is built around continuous radial kernels. This recipe is a
-// deliberately smaller dogfood version: it approximates a bell-shaped kernel
-// by mixing immediate neighbors, ring(2), and ring(3). If this feels good in
-// the browser, topological neighborhoods have real recipe value. If it feels
-// too shell-like, the next DSL surface should be metric / weighted kernels.
+// Lenia is a continuous cellular automaton: compute a weighted neighborhood
+// potential, pass it through a smooth growth curve, and add that growth back
+// into the field. This recipe uses a metric bell kernel over great-circle
+// distance, so the same center/width values mean the same thing at different
+// geodesic frequencies.
 
 import { compileV2 } from "../dsl/compile-v2.mjs";
 
@@ -25,14 +25,14 @@ export const regime = {
 };
 
 export const pipelineDsl = `
-recipe "Lenia-lite topological"
-summary "Continuous cellular automaton inspired by Lenia. A three-shell topological kernel mixes neighbors, ring(2), and ring(3); a Gaussian growth curve nudges each cell up or down. This is a dogfood recipe for graph-distance kernels, not full metric-kernel Lenia."
+recipe "Lenia metric"
+summary "Single-channel Lenia on the sphere. A metric bell kernel computes a neighborhood potential by great-circle distance; a Gaussian growth curve nudges each cell up or down. Tune kernel center/width and growth center/width to find soft colonies, holes, and drifting organism-like patches."
 recommendedPreset colonies
 
-substrate geodesic frequency 48
+substrate geodesic frequency 32
 
 field u: f32
-field kernel: f32 derived
+field potential: f32 derived
 field growth: f32 derived
 field activity: f32 derived
 
@@ -40,30 +40,25 @@ param mu slider 0..1 step 0.001 default 0.31 label "GROWTH CENTER"
 param sigma slider 0.01..0.25 step 0.001 default 0.065 label "GROWTH WIDTH"
 param gain slider 0..8 step 0.01 default 2.1 label "GAIN"
 param leak slider 0..0.25 step 0.001 default 0.025 label "LEAK"
-param innerWeight slider 0..1 step 0.01 default 0.18 label "INNER WEIGHT"
-param midWeight slider 0..1 step 0.01 default 0.56 label "MID WEIGHT"
+param kernelCenter slider 0.03..0.12 step 0.001 default 0.085 label "KERNEL CENTER"
+param kernelWidth slider 0.01..0.02 step 0.001 default 0.020 label "KERNEL WIDTH"
 param simRateHz slider 0..120 step 1 default 45 label "SIM RATE"
 param rate slider 1..10 step 1 default 1 label "RATE"
 
 step {
-  stage evolve "Lenia-lite shell kernel" {
+  stage evolve "Lenia metric kernel" {
     reads u
-    writes u, kernel, growth, activity
+    writes u, potential, growth, activity
     cell {
-      let inner = mean n in neighbors { u@n }
-      let middle = mean n in ring(2) { u@n }
-      let outer = mean n in ring(3) { u@n }
-      let outerWeight = max(0, 1 - innerWeight - midWeight)
-      let weightSum = max(0.001, innerWeight + midWeight + outerWeight)
-      let k = (inner * innerWeight + middle * midWeight + outer * outerWeight) / weightSum
+      let k = mean n in kernel bell(kernelCenter, kernelWidth) { u@n }
 
       // Bell-shaped growth centered on mu. g is +1 near mu and tends to -1
       // far away; leak damps dense regions so colonies do not pin at u=1.
       let offset = (k - mu) / max(sigma, 0.001)
-      let g = 2 * exp(-0.5 * offset * offset) - 1
+      let g = clamp(2 * exp(-0.5 * offset * offset) - 1, -0.999, 0.999)
       let next = clamp(u + (g - leak * u) * gain * rate * dt, 0, 1)
 
-      set kernel = k
+      set potential = k
       set growth = g
       set activity = abs(next - u)
       set u = next
@@ -94,8 +89,8 @@ views {
     color ramp u range [0, 1] palette LENIA
   }
 
-  view kernel "Kernel field" {
-    color ramp kernel range [0, 0.65] palette LENIA
+  view potential "Kernel field" {
+    color ramp potential range [0, 0.65] palette LENIA
   }
 
   view growth "Growth" {

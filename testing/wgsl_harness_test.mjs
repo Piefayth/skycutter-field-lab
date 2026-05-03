@@ -295,6 +295,48 @@ scenarios { scenario blank "Blank" { set u = 1 } }
       h.dispose();
     }
   });
+
+  // -- Test 7: weighted metric kernel tables --------------------------------
+  await t.test("metric bell kernel mean preserves a uniform field", async () => {
+    const recipe = `
+recipe "Kernel mean"
+substrate geodesic frequency 8
+field u: f32
+field out: f32
+param center slider 0..0.2 step 0.01 default 0.08 label "CENTER"
+step {
+  stage blur {
+    reads u
+    writes out
+    cell {
+      set out = mean n in kernel bell(center, 0.03) { u@n }
+    }
+  }
+}
+metric m = mean cells { out }
+views {
+  palette MONO {
+    stop 0 color [0, 0, 0]
+    stop 1 color [255, 255, 255]
+  }
+  view out "Out" {
+    color ramp out range [0, 1] palette MONO
+  }
+}
+scenarios { scenario blank "Blank" { set u = 1 } }
+`;
+    const h = await makeHarness({ recipeDsl: recipe, frequency: FREQUENCY });
+    try {
+      h.uploadField("u", new Float32Array(h.cellCount).fill(0.37));
+      await h.tick({ params: { center: 0.08 } });
+      const out = await h.readField("out");
+      for (let i = 0; i < out.length; i++) {
+        assert.ok(closeTo(out[i], 0.37, 1e-4), `cell ${i}: got ${out[i]}, want 0.37`);
+      }
+    } finally {
+      h.dispose();
+    }
+  });
 });
 
 function topoNeighborhoodCount(grid, cell, kind, radius) {

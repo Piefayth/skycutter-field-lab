@@ -118,7 +118,7 @@ export class MetricRuntime {
   // Called by the pipeline runtime at the end of each tick (post all stages,
   // post history rotation). Reads use the runtime's currentBuffer for each
   // field — since this runs after rotation, that's the just-written value.
-  dispatch(uniforms) {
+  dispatch(uniforms, params = {}) {
     const device = this.device;
     const cellCount = this.runtime.cellCount;
     const dispatchCount = Math.ceil(cellCount / WORKGROUP_SIZE);
@@ -154,6 +154,13 @@ export class MetricRuntime {
           perCellEntries.push({ binding, resource: { buffer: this.runtime.neighborsBuffer } });
           binding++;
           perCellEntries.push({ binding, resource: { buffer: this.runtime.neighborCountsBuffer } });
+          binding++;
+        }
+        for (const spec of prim.kernelSpecs ?? []) {
+          const table = this.runtime.metricKernelBuffers(spec, params);
+          perCellEntries.push({ binding, resource: { buffer: table.offsetsBuffer } });
+          binding++;
+          perCellEntries.push({ binding, resource: { buffer: table.entriesBuffer } });
           binding++;
         }
         // Per-cell pass uses the same `params` uniform shape as cell

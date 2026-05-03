@@ -55,6 +55,7 @@ function compileActionPass({ stage, field, reads, actions, layout, key }) {
   const passReads = readsForTarget(actions, field, reads);
   const targetActions = filterActionsForTarget(actions, field);
   const needsNeighbors = actionsUseNeighborReduce(targetActions);
+  const kernelSpecs = collectKernelSpecsFromActions(targetActions, layout);
   // `field@prev` reads the named field's value as of the tick boundary.
   // The runtime keeps a separate `f_<name>_prev` buffer per history-
   // declared field; the compiler emits an additional binding for each
@@ -72,6 +73,7 @@ function compileActionPass({ stage, field, reads, actions, layout, key }) {
     prevReads,
     layout,
     needsNeighbors,
+    kernelSpecs,
     source: compileCellShader({
       stage,
       field,
@@ -80,6 +82,7 @@ function compileActionPass({ stage, field, reads, actions, layout, key }) {
       actions: targetActions,
       layout,
       needsNeighbors,
+      kernelSpecs,
     }),
   };
 }
@@ -218,6 +221,7 @@ function compileMetricPrimitive(metric, primOp, dsl) {
     reads: pass.reads,
     prevReads: pass.prevReads,
     needsNeighbors: pass.needsNeighbors,
+    kernelSpecs: pass.kernelSpecs ?? [],
     layout: pass.layout,
     identity,
   };
@@ -357,7 +361,7 @@ function wgslWriteOutput(fieldType, valueExpr) {
   return `outputField[cell] = ${valueExpr};`;
 }
 
-function compileCellShader({ stage, field, reads, prevReads = [], actions, layout, needsNeighbors = false }) {
+function compileCellShader({ stage, field, reads, prevReads = [], actions, layout, needsNeighbors = false, kernelSpecs = [] }) {
   const fieldTypes = layout.fieldTypes ?? {};
   const typeOf = (name) => fieldTypes[name] ?? "f32";
   const readBindings = reads.map((name, index) =>
@@ -374,6 +378,7 @@ function compileCellShader({ stage, field, reads, prevReads = [], actions, layou
   const positionsBinding = outputBinding + 2;
   const neighborsBinding = outputBinding + 3;
   const neighborCountsBinding = outputBinding + 4;
+  const kernelStartBinding = outputBinding + 3 + (needsNeighbors ? 2 : 0);
   // Per-cell read locals carry an explicit type annotation. vec2
   // fields surface as `vec2<f32>` so member access (.x/.y) compiles.
   // u32 / bool fields cast on read into f32 so the rest of the cell
@@ -390,6 +395,13 @@ function compileCellShader({ stage, field, reads, prevReads = [], actions, layou
 @group(0) @binding(${neighborsBinding}) var<storage, read> neighbors: array<i32>;
 @group(0) @binding(${neighborCountsBinding}) var<storage, read> neighborCounts: array<u32>;
 ` : "";
+  const kernelBindings = kernelSpecs.map((spec, index) => {
+    const base = kernelStartBinding + index * 2;
+    return [
+      `@group(0) @binding(${base}) var<storage, read> k_${spec.id}_offsets: array<u32>;`,
+      `@group(0) @binding(${base + 1}) var<storage, read> k_${spec.id}_entries: array<MetricKernelEntry>;`,
+    ].join("\n");
+  }).join("\n");
   // Initial value for the per-cell `outValue` accumulator. For vec2
   // fields not in reads, default to vec2<f32>(0.0, 0.0); for f32 / u32
   // / bool, 0.0. (Integer-storage fields use f32 outValue throughout
@@ -409,6 +421,7 @@ function compileCellShader({ stage, field, reads, prevReads = [], actions, layou
     usedGradients: new Set(),
     usedDivergences: new Set(),
     usedUpstreams: new Set(),
+    kernelSpecs,
   };
   const body = compileActions(actions, ctx);
   // Tangent-frame stencil helpers are emitted only when the body uses
@@ -417,6 +430,11 @@ function compileCellShader({ stage, field, reads, prevReads = [], actions, layou
   const stencilHelperSource = emitStencilHelpers(ctx, typeOf);
 
   return `
+struct MetricKernelEntry {
+  index: u32,
+  weight: f32,
+};
+
 struct Params {
   dt: f32,
   frame: f32,
@@ -433,6 +451,7 @@ ${prevReadBindings.join("\n")}
 @group(0) @binding(${paramsBinding}) var<uniform> params: Params;
 @group(0) @binding(${positionsBinding}) var<storage, read> positions: array<f32>;
 ${neighborBindings}
+${kernelBindings}
 
 const PI: f32 = 3.141592653589793;
 const TAU: f32 = 6.283185307179586;
@@ -751,7 +770,10 @@ function actionsUseNeighborReduce(actions) {
 
 function exprUsesNeighborReduce(expr) {
   if (!expr) return false;
-  if (expr.type === "NeighborReduce") return true;
+  if (expr.type === "NeighborReduce") {
+    if (expr.source?.kind === "kernel") return exprUsesNeighborReduce(expr.body);
+    return true;
+  }
   // gradient / divergence are stencil reads — they need the neighbor
   // topology buffers for the same reason a NeighborReduce does.
   if (expr.type === "Call" && expr.callee?.type === "Identifier"
@@ -767,6 +789,72 @@ function exprUsesNeighborReduce(expr) {
   if (expr.type === "Conditional") return exprUsesNeighborReduce(expr.test) || exprUsesNeighborReduce(expr.consequent) || exprUsesNeighborReduce(expr.alternate);
   if (expr.type === "Call") return exprUsesNeighborReduce(expr.callee) || (expr.args ?? []).some(exprUsesNeighborReduce);
   return false;
+}
+
+function collectKernelSpecsFromActions(actions, layout) {
+  const byKey = new Map();
+  function walkAction(action) {
+    if (!action) return;
+    if (action.condition) walkExpr(action.condition);
+    if (action.expr) walkExpr(action.expr);
+    for (const child of action.actions ?? []) walkAction(child);
+  }
+  function walkExpr(expr) {
+    if (!expr || typeof expr !== "object") return;
+    if (expr.type === "NeighborReduce") {
+      if (expr.source?.kind === "kernel") {
+        const key = kernelSourceKey(expr.source);
+        if (!byKey.has(key)) byKey.set(key, kernelSpecFromSource(expr.source, byKey.size, layout));
+      }
+      walkExpr(expr.body);
+      return;
+    }
+    if (expr.type === "Member") walkExpr(expr.object);
+    else if (expr.type === "Unary") walkExpr(expr.expr);
+    else if (expr.type === "Binary") { walkExpr(expr.left); walkExpr(expr.right); }
+    else if (expr.type === "Conditional") { walkExpr(expr.test); walkExpr(expr.consequent); walkExpr(expr.alternate); }
+    else if (expr.type === "Call") {
+      walkExpr(expr.callee);
+      for (const arg of expr.args ?? []) walkExpr(arg);
+    }
+    else if (expr.type === "CoordRead" && expr.coord?.kind === "upstream") {
+      walkExpr(expr.coord.velX);
+      walkExpr(expr.coord.velY);
+      walkExpr(expr.coord.dt);
+    }
+  }
+  for (const action of actions ?? []) walkAction(action);
+  return [...byKey.values()];
+}
+
+function kernelSpecFromSource(source, index, layout) {
+  return {
+    id: `kernel_${index}`,
+    key: kernelSourceKey(source),
+    kind: "kernel",
+    kernel: "bell",
+    center: kernelArgSpec(source.center, layout),
+    width: kernelArgSpec(source.width, layout),
+  };
+}
+
+function kernelArgSpec(arg, layout) {
+  if (arg?.kind === "literal") return { kind: "literal", value: Number(arg.value) };
+  if (arg?.kind === "param") {
+    const decl = layout.parameters.find((item) => item.name === arg.name);
+    return { kind: "param", name: arg.name, default: Number(decl?.default ?? 0) };
+  }
+  return { kind: "unknown" };
+}
+
+function kernelSourceKey(source) {
+  return `bell:${kernelArgKey(source.center)}:${kernelArgKey(source.width)}`;
+}
+
+function kernelArgKey(arg) {
+  if (arg?.kind === "literal") return `lit:${Number(arg.value)}`;
+  if (arg?.kind === "param") return `param:${arg.name}`;
+  return "unknown";
 }
 
 // Tangent-frame stencil helpers — emitted only when the cell body
@@ -1246,7 +1334,7 @@ function emitReduction(node, ctx, statements) {
     // produced "expected f32, got vec2" at WGSL parse time.
     emitCandidate(`u32(neighbors[cell * 6u + ${slot}])`);
     statements.push(`  }`);
-  } else {
+  } else if (source.kind === "ring" || source.kind === "disk") {
     const radius = source.radius;
     const targetCheck = source.kind === "ring"
       ? `${accName}_candidate_dist == ${radius}u`
@@ -1283,13 +1371,41 @@ function emitReduction(node, ctx, statements) {
     statements.push(`      }`);
     statements.push(`    }`);
     statements.push(`  }`);
+  } else if (source.kind === "kernel") {
+    const kernel = kernelSpecForSource(source, ctx);
+    const weight = `${accName}_w`;
+    const weightSum = `${accName}_weight_sum`;
+    if (node.op !== "sum" && node.op !== "mean") {
+      throw new Error(`Unsupported weighted kernel reduction op: ${node.op}`);
+    }
+    if (node.op === "mean") statements.push(`  var ${weightSum}: f32 = 0.0;`);
+    statements.push(`  let ${accName}_start: u32 = k_${kernel.id}_offsets[cell];`);
+    statements.push(`  let ${accName}_end: u32 = k_${kernel.id}_offsets[cell + 1u];`);
+    statements.push(`  for (var ${slot}: u32 = ${accName}_start; ${slot} < ${accName}_end; ${slot} = ${slot} + 1u) {`);
+    statements.push(`    let ${accName}_entry: MetricKernelEntry = k_${kernel.id}_entries[${slot}];`);
+    statements.push(`    let ${weight}: f32 = ${accName}_entry.weight;`);
+    const before = statements.length;
+    emitCandidate(`${accName}_entry.index`);
+    for (let i = before; i < statements.length; i++) {
+      if (node.op === "sum" && statements[i].includes(`${accName} = ${accName} + (`)) {
+        statements[i] = statements[i].replace(`(${bodyWgsl})`, `((${bodyWgsl}) * ${weight})`);
+      } else if (node.op === "mean" && statements[i].includes(`${sumName} = ${sumName} + (`)) {
+        statements[i] = statements[i].replace(`(${bodyWgsl})`, `((${bodyWgsl}) * ${weight})`);
+      }
+    }
+    if (node.op === "mean") statements.push(`    ${weightSum} = ${weightSum} + ${weight};`);
+    statements.push(`  }`);
   }
   if (node.op === "mean") {
     // Divide by count, with the empty-neighbor guard. WGSL's `select`
     // takes the same type for both branches, so the zero literal
     // matches the accumulator type. Vec2 / f32 → vec2 (component-
     // wise) is fine.
-    statements.push(`  ${accName} = select(${zeroLit}, ${sumName} / f32(${count}), ${count} > 0u);`);
+    if (source.kind === "kernel") {
+      statements.push(`  ${accName} = select(${zeroLit}, ${sumName} / ${accName}_weight_sum, ${accName}_weight_sum > 0.0);`);
+    } else {
+      statements.push(`  ${accName} = select(${zeroLit}, ${sumName} / f32(${count}), ${count} > 0u);`);
+    }
   }
   statements.push(`}`);
 
@@ -1301,7 +1417,15 @@ function normalizeNeighborSource(source) {
   if (source.kind === "ring" || source.kind === "disk") {
     return { kind: source.kind, radius: source.radius };
   }
+  if (source.kind === "kernel") return source;
   throw new Error(`Unsupported neighbor reduction source: ${source.kind}`);
+}
+
+function kernelSpecForSource(source, ctx) {
+  const key = kernelSourceKey(source);
+  const spec = (ctx.kernelSpecs ?? []).find((item) => item.key === key);
+  if (!spec) throw new Error(`Kernel source not registered: ${key}`);
+  return spec;
 }
 
 // Reduction body type is dictated by the data flowing through it.

@@ -173,6 +173,8 @@ export async function makeHarness({ recipeDsl, dsl, frequency = 16 } = {}) {
         prevReads: pass.prevReads,
         uniforms,
         needsNeighbors: pass.needsNeighbors,
+        kernelSpecs: pass.kernelSpecs ?? [],
+        params,
         swapAfter,
       });
     },

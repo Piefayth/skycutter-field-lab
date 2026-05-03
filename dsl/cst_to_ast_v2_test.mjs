@@ -121,6 +121,25 @@ test("CST expression projection handles ring and disk reductions", () => {
   });
 });
 
+test("CST expression projection handles metric kernel reductions", () => {
+  assertExpressionProjection("mean n in kernel bell(center, 0.03) { u@n }", {
+    type: "NeighborReduce",
+    op: "mean",
+    coord: "n",
+    source: {
+      kind: "kernel",
+      kernel: "bell",
+      center: { kind: "param", name: "center" },
+      width: { kind: "literal", value: 0.03 },
+    },
+    body: {
+      type: "CoordRead",
+      field: "u",
+      coord: { kind: "neighbor", binding: "n" },
+    },
+  });
+});
+
 test("CST expression projection handles upstream coord reads", () => {
   assertExpressionProjection("u@upstream(wind.x, wind.y, dt)", {
     type: "CoordRead",

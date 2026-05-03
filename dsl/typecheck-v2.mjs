@@ -520,6 +520,9 @@ function typeOfCall(ast, locals, ctx, label) {
 
 function typeOfNeighborReduce(ast, locals, ctx, label) {
   const bodyLabel = `${label} ${ast.op}-reduction`;
+  if (ast.source?.kind === "kernel" && (ast.op === "max" || ast.op === "min")) {
+    throwTypeError(`${bodyLabel}: weighted kernel reductions support sum/mean only; max/min do not have weighted semantics`);
+  }
   // Legacy v1-shape bindings — pre-neighbor field name + value name.
   // The v2 shape uses CoordRead inside the body and doesn't go through
   // this branch.

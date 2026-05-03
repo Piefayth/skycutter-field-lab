@@ -301,8 +301,8 @@ function genVec2Expr(ctx, scope, depth = 0) {
 
 function genNeighborReduce(ctx, parentScope, depth) {
   const r = ctx.rng;
-  const op = pick(r, REDUCE_OPS);
-  const source = pick(r, ["neighbors", "neighbors", "ring(2)", "disk(2)", "disk(3)"]);
+  const source = pick(r, ["neighbors", "neighbors", "ring(2)", "disk(2)", "disk(3)", "kernel bell(0.08, 0.025)"]);
+  const op = source.startsWith("kernel ") ? pick(r, ["sum", "mean"]) : pick(r, REDUCE_OPS);
   const innerScope = { ...parentScope, neighborBound: "n" };
   // Body must produce a scalar; common idiom is `f@n - f` (Laplacian).
   const f = pick(r, parentScope.scalarReads);

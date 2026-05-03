@@ -393,9 +393,9 @@ export const STENCIL_HELPERS = [
     // is a neighbor coordinate; the body reads any field at that
     // neighbor via `field@coord`. Replaces v1's field-centered
     // `neighbor MOD BIND in FIELD { EXPR }` form.
-    signature: "<op> n in neighbors|ring(k)|disk(k) { EXPR with field@n }",
-    doc: "Per-cell topological reduction. `neighbors` means immediate adjacency, `ring(k)` means cells at exact graph distance k, and `disk(k)` means graph distances 1..k; ring/disk currently require literal k in 1..3. For each selected cell, evaluate EXPR (which reads any field at that cell via `field@n`), then combine via op ∈ {sum, max, min, mean}. The center cell is not included. Canonical scalar diffusion uses `mean n in neighbors { u@n - u }`; broader kernels use ring/disk when the recipe intentionally wants topological distance rather than metric radius.",
-    example: "let lap      = mean n in neighbors { u@n - u }\nlet smooth2  = mean n in disk(2) { u@n }\nlet shell    = sum n in ring(3) { activator@n }",
+    signature: "<op> n in neighbors|ring(k)|disk(k)|kernel bell(center,width) { EXPR with field@n }",
+    doc: "Per-cell neighborhood reduction. `neighbors`/`ring`/`disk` are topological graph neighborhoods. `kernel bell(center,width)` is a weighted metric neighborhood over great-circle distance on the unit sphere: weight(d)=exp(-0.5*((d-center)/width)^2), gathered out to center+3*width. Kernel reductions support sum/mean; mean normalizes by total weight, sum returns the raw weighted sum. The center cell is included when it falls inside the kernel cutoff (notably bell(0,width)).",
+    example: "let lap      = mean n in neighbors { u@n - u }\nlet smooth2  = mean n in disk(2) { u@n }\nlet shell    = sum n in ring(3) { activator@n }\nlet blur     = mean n in kernel bell(0, 0.05) { u@n }\nlet annulus  = mean n in kernel bell(0.12, 0.03) { u@n }",
   },
   {
     name: "ring",
@@ -406,6 +406,16 @@ export const STENCIL_HELPERS = [
     name: "disk",
     signature: "<op> n in disk(k) { EXPR }",
     doc: "Topological disk for neighbor reductions. `disk(2)` selects shells 1 and 2 around the current cell; the center cell is excluded. k must currently be a literal integer 1..3. This is not a metric radial kernel.",
+  },
+  {
+    name: "kernel",
+    signature: "<op> n in kernel bell(center, width) { EXPR }",
+    doc: "Weighted metric neighborhood reduction over great-circle distance. First version supports `bell(center,width)` only, with center/width as number literals or global params. The compiler precomputes packed weighted gather tables and rebuilds them lazily when kernel params change. Guardrails: center >= 0, width > 0, center + 3*width <= 0.35, max 128 gathered cells per cell.",
+  },
+  {
+    name: "bell",
+    signature: "kernel bell(center, width)",
+    doc: "Gaussian/bell kernel over spherical distance: weight(d)=exp(-0.5*((d-center)/width)^2). `bell(0,width)` is center-weighted smoothing and includes self strongly; `bell(center>0,width)` is annular and gives self little weight.",
   },
 ];
 

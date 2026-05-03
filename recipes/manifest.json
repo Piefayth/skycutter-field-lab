@@ -88,15 +88,15 @@
     },
     {
       "id": "smoothlife",
-      "name": "SmoothLife topological (example)",
+      "name": "SmoothLife metric (example)",
       "path": "recipes/smoothlife.mjs",
-      "summary": "SmoothLife-style continuous cellular automaton using topological disk/ring reductions. disk(2) estimates local mass; ring(3) estimates the outer annulus. A dogfood recipe for graph-distance neighborhoods, not a faithful metric-kernel SmoothLife."
+      "summary": "SmoothLife-style continuous cellular automaton using weighted metric kernels. A center-weighted bell kernel estimates inner life; an annular bell kernel estimates the outer environment. Smooth birth/survival windows turn those densities into flowing cellular organisms."
     },
     {
       "id": "lenia-lite",
-      "name": "Lenia-lite topological (example)",
+      "name": "Lenia metric (example)",
       "path": "recipes/lenia-lite.mjs",
-      "summary": "Continuous cellular automaton inspired by Lenia. A three-shell topological kernel mixes neighbors, ring(2), and ring(3); a Gaussian growth curve nudges each cell up or down. A dogfood recipe for graph-distance kernels, not full metric-kernel Lenia."
+      "summary": "Single-channel Lenia on the sphere. A metric bell kernel computes a neighborhood potential by great-circle distance; a Gaussian growth curve nudges each cell up or down. Tune kernel center/width and growth center/width to find soft colonies, holes, and drifting organism-like patches."
     },
     {
       "id": "gierer-meinhardt",

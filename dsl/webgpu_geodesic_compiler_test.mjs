@@ -244,6 +244,77 @@ step {
   assert(pass.source.includes("nr_0_candidate_dist == 3u"), "ring reduction should reduce only the exact shell");
 });
 
+test("metric bell kernel reduction emits weighted table bindings", () => {
+  const recipe = compileV2(`
+recipe "Kernel"
+substrate geodesic frequency 16
+field A: f32
+param center slider 0..0.2 step 0.01 default 0.08
+
+step {
+  stage blur "Blur" {
+    reads A
+    writes A
+    cell {
+      set A = mean n in kernel bell(center, 0.03) { A@n }
+    }
+  }
+}
+`);
+  const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
+  assert(pass.kernelSpecs.length === 1, "kernel spec should be carried to runtime");
+  assert(pass.kernelSpecs[0].center.name === "center", "param-driven kernel center should be preserved");
+  assert(pass.source.includes("var<storage, read> k_kernel_0_offsets"), "kernel offsets binding missing");
+  assert(pass.source.includes("var<storage, read> k_kernel_0_entries"), "kernel packed entries binding missing");
+  assert(pass.source.includes("nr_0_sum / nr_0_weight_sum"), "kernel mean should normalize by weight sum");
+});
+
+test("two metric kernels stay within the portable storage binding budget", () => {
+  const recipe = compileV2(`
+recipe "Two kernels"
+substrate geodesic frequency 16
+field A: f32
+
+step {
+  stage blur "Blur" {
+    reads A
+    writes A
+    cell {
+      let inner = mean n in kernel bell(0, 0.03) { A@n }
+      let outer = mean n in kernel bell(0.08, 0.02) { A@n }
+      set A = inner + outer
+    }
+  }
+}
+`);
+  const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
+  assert(pass.kernelSpecs.length === 2, "expected two distinct kernel specs");
+  assert(pass.source.includes("@binding(7) var<storage, read> k_kernel_1_entries"), "second packed kernel binding missing");
+  assert(!pass.source.includes("@binding(8)"), "two kernel-only reductions should not exceed binding 7");
+});
+
+test("type checker rejects weighted max/min kernels", () => {
+  let threw = null;
+  try {
+    compileV2(`
+recipe "Bad kernel"
+substrate geodesic frequency 16
+field A: f32
+
+step {
+  stage bad "Bad" {
+    reads A
+    writes A
+    cell {
+      set A = max n in kernel bell(0.1, 0.02) { A@n }
+    }
+  }
+}
+`);
+  } catch (error) { threw = error.message; }
+  assert(threw && threw.includes("weighted kernel reductions support sum/mean only"), `expected weighted max rejection, got: ${threw}`);
+});
+
 test("validator rejects unsupported ring/disk radii", () => {
   let threw = null;
   try {

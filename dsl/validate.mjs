@@ -118,6 +118,10 @@ function collectParamRefsFromExpr(ast, add) {
     case "NeighborReduce":
       // Bindings introduce locals, but the body itself can still
       // reference params freely. Recurse — `add` will skip non-params.
+      if (ast.source?.kind === "kernel") {
+        if (ast.source.center?.kind === "param") add(ast.source.center.name);
+        if (ast.source.width?.kind === "param") add(ast.source.width.name);
+      }
       collectParamRefsFromExpr(ast.body, add);
       return;
     case "CoordRead":
@@ -620,7 +624,7 @@ function validateNeighborReduce(ast, visibleFields, locals, label, declaredParam
     throw new Error(`${label}: neighbor reduction has unknown op '${ast.op}'`);
   }
   requireImport(imports, "core", "neighbor", label);
-  validateNeighborReductionSource(ast.source, label);
+  validateNeighborReductionSource(ast.source, label, declaredParams);
 
   // Two AST shapes:
   //   v2 CoordRead: ast carries `coord` (the binding name); the body
@@ -666,16 +670,52 @@ function validateLocalName(name, label, visibleFields, locals) {
   }
 }
 
-function validateNeighborReductionSource(source, label) {
+function validateNeighborReductionSource(source, label, declaredParams = new Set()) {
   if (!source || source.kind === "neighbors") return;
+  if (source.kind === "kernel") {
+    validateKernelSource(source, label, declaredParams);
+    return;
+  }
   if (source.kind !== "ring" && source.kind !== "disk") {
-    throw new Error(`${label}: neighbor reduction source must be neighbors, ring(k), or disk(k)`);
+    throw new Error(`${label}: neighbor reduction source must be neighbors, ring(k), disk(k), or kernel bell(center, width)`);
   }
   if (!Number.isInteger(source.radius)) {
     throw new Error(`${label}: ${source.kind}(k) requires a literal integer radius`);
   }
   if (source.radius < 1 || source.radius > 3) {
     throw new Error(`${label}: ${source.kind}(${source.radius}) is outside the supported radius range 1..3`);
+  }
+}
+
+function validateKernelSource(source, label, declaredParams = new Set()) {
+  if (source.kernel !== "bell") {
+    throw new Error(`${label}: only kernel bell(center, width) is supported`);
+  }
+  validateKernelArg(source.center, label, "center", declaredParams);
+  validateKernelArg(source.width, label, "width", declaredParams);
+  if (source.center?.kind === "literal" && source.center.value < 0) {
+    throw new Error(`${label}: kernel bell center must be >= 0`);
+  }
+  if (source.width?.kind === "literal" && source.width.value <= 0) {
+    throw new Error(`${label}: kernel bell width must be > 0`);
+  }
+  if (source.center?.kind === "literal" && source.width?.kind === "literal") {
+    const cutoff = source.center.value + 3 * source.width.value;
+    if (cutoff > 0.35) {
+      throw new Error(`${label}: kernel bell cutoff ${cutoff.toFixed(4)} exceeds max 0.35`);
+    }
+  }
+}
+
+function validateKernelArg(arg, label, name, declaredParams) {
+  if (!arg || (arg.kind !== "literal" && arg.kind !== "param")) {
+    throw new Error(`${label}: kernel bell ${name} must be a number literal or param name`);
+  }
+  if (arg.kind === "literal" && !Number.isFinite(arg.value)) {
+    throw new Error(`${label}: kernel bell ${name} must be finite`);
+  }
+  if (arg.kind === "param" && !declaredParams.has(arg.name)) {
+    throw new Error(`${label}: kernel bell ${name} param "${arg.name}" is not declared`);
   }
 }
 

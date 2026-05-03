@@ -114,7 +114,7 @@ const MUTATIONS = [
     apply(dsl, rng) {
       // `sum n in neighbors { ... }` ↔ `mean n in disk(2) { ... }` etc.
       const SWAPS = { sum: "mean", mean: "sum", max: "min", min: "max" };
-      const re = new RegExp(`\\b(${Object.keys(SWAPS).join("|")})( n in (?:neighbors|ring\\(2\\)|disk\\(2\\)|disk\\(3\\)))\\b`, "g");
+      const re = new RegExp(`\\b(${Object.keys(SWAPS).join("|")})( n in (?:neighbors|ring\\(2\\)|disk\\(2\\)|disk\\(3\\)|kernel bell\\(0\\.08, 0\\.025\\)))\\b`, "g");
       const matches = [...dsl.matchAll(re)];
       if (matches.length === 0) return null;
       const target = matches[pickIdx(rng, matches.length)];

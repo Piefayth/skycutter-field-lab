@@ -897,6 +897,30 @@ function tryParseReductionSource(tokens, index) {
       nextIndex: index + 1,
     };
   }
+  if (source.value === "kernel") {
+    const kernel = tokens[index + 1];
+    const open = tokens[index + 2];
+    const center = tokens[index + 3];
+    const comma = tokens[index + 4];
+    const width = tokens[index + 5];
+    const close = tokens[index + 6];
+    if (kernel?.kind !== "identifier" || kernel.value !== "bell") return null;
+    if (open?.value !== "(" || comma?.value !== "," || close?.value !== ")") return null;
+    const centerArg = parseKernelArgToken(center);
+    const widthArg = parseKernelArgToken(width);
+    if (!centerArg || !widthArg) return null;
+    return {
+      value: {
+        kind: "kernel",
+        kernel: "bell",
+        center: centerArg,
+        width: widthArg,
+        from: source.from,
+        to: close.to,
+      },
+      nextIndex: index + 7,
+    };
+  }
   if (source.value !== "ring" && source.value !== "disk") return null;
   const open = tokens[index + 1];
   const radius = tokens[index + 2];
@@ -912,6 +936,12 @@ function tryParseReductionSource(tokens, index) {
     },
     nextIndex: index + 4,
   };
+}
+
+function parseKernelArgToken(tok) {
+  if (tok?.kind === "number") return { kind: "literal", value: Number(tok.value), text: tok.value };
+  if (tok?.kind === "identifier") return { kind: "param", name: tok.value };
+  return null;
 }
 
 function missingNode(from, label) {
@@ -952,7 +982,8 @@ function coordReadsInExpression(text, base) {
 
 function reductionsInExpression(text, base) {
   const out = [];
-  const re = /\b(sum|mean|max|min)\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+(neighbors|(?:ring|disk)\s*\(\s*[+-]?(?:\d+\.\d*|\.\d+|\d+)(?:e[+-]?\d+)?\s*\))\s*\{/g;
+  const atom = String.raw`(?:[A-Za-z_][A-Za-z0-9_]*|[+-]?(?:\d+\.\d*|\.\d+|\d+)(?:e[+-]?\d+)?)`;
+  const re = new RegExp(String.raw`\b(sum|mean|max|min)\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+(neighbors|(?:ring|disk)\s*\(\s*[+-]?(?:\d+\.\d*|\.\d+|\d+)(?:e[+-]?\d+)?\s*\)|kernel\s+bell\s*\(\s*${atom}\s*,\s*${atom}\s*\))\s*\{`, "g");
   for (const match of text.matchAll(re)) {
     const bodyOpenRel = match.index + match[0].length - 1;
     const bodyCloseRel = findMatchingBraceInText(text, bodyOpenRel);
@@ -977,9 +1008,23 @@ function reductionsInExpression(text, base) {
 function reductionSourceFromText(text) {
   const compact = text.replace(/\s+/g, "");
   if (compact === "neighbors") return { kind: "neighbors" };
-  const match = /^(ring|disk)\(([+-]?(?:\d+\.\d*|\.\d+|\d+)(?:e[+-]?\d+)?)\)$/.exec(compact);
-  if (!match) return { kind: "unknown", raw: text };
-  return { kind: match[1], radius: Number(match[2]), radiusText: match[2] };
+  const ringMatch = /^(ring|disk)\(([+-]?(?:\d+\.\d*|\.\d+|\d+)(?:e[+-]?\d+)?)\)$/.exec(compact);
+  if (ringMatch) return { kind: ringMatch[1], radius: Number(ringMatch[2]), radiusText: ringMatch[2] };
+  const kernelMatch = /^kernelbell\(([^,]+),([^)]+)\)$/.exec(compact);
+  if (kernelMatch) {
+    return {
+      kind: "kernel",
+      kernel: "bell",
+      center: kernelArgFromText(kernelMatch[1]),
+      width: kernelArgFromText(kernelMatch[2]),
+    };
+  }
+  return { kind: "unknown", raw: text };
+}
+
+function kernelArgFromText(text) {
+  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(text)) return { kind: "param", name: text };
+  return { kind: "literal", value: Number(text), text };
 }
 
 function coordExpectedZonesInExpression(text, base, coordReads) {

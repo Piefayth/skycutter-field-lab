@@ -19,6 +19,7 @@ export const FEATURE_NAMES = [
   "neighborRed",
   "ringReduce",
   "diskReduce",
+  "kernelReduce",
   "ternary",
   "when",
   "countWhere",
@@ -178,6 +179,7 @@ function visitExpr(node, vec) {
     vec.neighborRed++;
     if (node.source?.kind === "ring") vec.ringReduce++;
     if (node.source?.kind === "disk") vec.diskReduce++;
+    if (node.source?.kind === "kernel") vec.kernelReduce++;
   }
 
   for (const value of Object.values(node)) {

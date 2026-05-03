@@ -260,7 +260,22 @@ function projectReductionSource(source) {
   if (source.kind === "ring" || source.kind === "disk") {
     return { kind: source.kind, radius: source.radius };
   }
+  if (source.kind === "kernel") {
+    return {
+      kind: "kernel",
+      kernel: source.kernel,
+      center: projectKernelArg(source.center),
+      width: projectKernelArg(source.width),
+    };
+  }
   return { kind: source.kind ?? "unknown" };
+}
+
+function projectKernelArg(arg) {
+  if (!arg) return { kind: "unknown" };
+  if (arg.kind === "literal") return { kind: "literal", value: Number(arg.value) };
+  if (arg.kind === "param") return { kind: "param", name: arg.name };
+  return { kind: arg.kind ?? "unknown" };
 }
 
 export function cellActionsCstToAst(cst, cellBlock) {

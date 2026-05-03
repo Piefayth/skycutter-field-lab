@@ -695,16 +695,48 @@ function walkExprForImports(ast, ctx, label) {
   }
 }
 
-function validateNeighborReductionSource(source, label) {
+function validateNeighborReductionSource(source, label, paramNames = null) {
   if (!source || source.kind === "neighbors") return;
+  if (source.kind === "kernel") {
+    if (source.kernel !== "bell") {
+      throw new Error(`${label}: only kernel bell(center, width) is supported`);
+    }
+    validateKernelArg(source.center, label, "center", paramNames);
+    validateKernelArg(source.width, label, "width", paramNames);
+    if (source.center?.kind === "literal" && source.center.value < 0) {
+      throw new Error(`${label}: kernel bell center must be >= 0`);
+    }
+    if (source.width?.kind === "literal" && source.width.value <= 0) {
+      throw new Error(`${label}: kernel bell width must be > 0`);
+    }
+    if (source.center?.kind === "literal" && source.width?.kind === "literal") {
+      const cutoff = source.center.value + 3 * source.width.value;
+      if (cutoff > 0.35) {
+        throw new Error(`${label}: kernel bell cutoff ${cutoff.toFixed(4)} exceeds max 0.35`);
+      }
+    }
+    return;
+  }
   if (source.kind !== "ring" && source.kind !== "disk") {
-    throw new Error(`${label}: neighbor reduction source must be neighbors, ring(k), or disk(k)`);
+    throw new Error(`${label}: neighbor reduction source must be neighbors, ring(k), disk(k), or kernel bell(center, width)`);
   }
   if (!Number.isInteger(source.radius)) {
     throw new Error(`${label}: ${source.kind}(k) requires a literal integer radius`);
   }
   if (source.radius < 1 || source.radius > 3) {
     throw new Error(`${label}: ${source.kind}(${source.radius}) is outside the supported radius range 1..3`);
+  }
+}
+
+function validateKernelArg(arg, label, name, paramNames) {
+  if (!arg || (arg.kind !== "literal" && arg.kind !== "param")) {
+    throw new Error(`${label}: kernel bell ${name} must be a number literal or param name`);
+  }
+  if (arg.kind === "literal" && !Number.isFinite(arg.value)) {
+    throw new Error(`${label}: kernel bell ${name} must be finite`);
+  }
+  if (arg.kind === "param" && paramNames && !paramNames.has(arg.name)) {
+    throw new Error(`${label}: kernel bell ${name} param "${arg.name}" is not declared`);
   }
 }
 
@@ -1051,7 +1083,7 @@ function validateMetricIdentifiers(metric, schema) {
         if (importedNames && !importedNames.includes("neighbor")) {
           throw new Error(`${label}: core.neighbor is not imported (required for \`<op> n in neighbors|ring(k)|disk(k) { ... }\`)`);
         }
-        validateNeighborReductionSource(ast.source, label);
+        validateNeighborReductionSource(ast.source, label, paramNames);
         const bodyLocals = new Set(locals);
         for (const b of ast.bindings ?? []) {
           if (b.name) bodyLocals.add(b.name);

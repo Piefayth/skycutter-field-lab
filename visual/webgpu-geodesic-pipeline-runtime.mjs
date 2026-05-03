@@ -109,6 +109,8 @@ export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGri
             reads: pass.reads,
             prevReads: pass.prevReads ?? [],
             needsNeighbors: pass.needsNeighbors,
+            kernelSpecs: pass.kernelSpecs ?? [],
+            params,
             swapAfter,
             uniforms: buildWebGpuGeodesicUniforms(pass.layout, {
               dt,
@@ -133,7 +135,7 @@ export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGri
       // (the just-written value) for each field. Async readback
       // populates the metric runtime's value cache; consumers see the
       // latest completed readback via readDslMetrics() below.
-      if (metricRuntime) metricRuntime.dispatch();
+      if (metricRuntime) metricRuntime.dispatch(null, params);
     },
     // Returns the most recent post-readback values for every metric
     // declared in the recipe. Values may be null until the first
@@ -154,4 +156,3 @@ function recipeFieldNames(dsl) {
   const declared = (dsl.declared ?? []).map((decl) => (typeof decl === "string" ? decl : decl?.name)).filter(Boolean);
   return [...new Set([...fields, ...declared])];
 }
-

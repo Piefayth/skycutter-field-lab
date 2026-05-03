@@ -52,7 +52,7 @@ const DECLARATION_KEYWORDS = new Set([
 // styling rather than control-keyword styling.
 const CONTROL_KEYWORDS = new Set([
   "cell", "for", "when", "if", "else",
-  "neighbors", "neighbor", "ring", "disk",
+  "neighbors", "neighbor", "ring", "disk", "kernel", "bell",
   "views", "stamps", "scenarios",
 ]);
 

@@ -578,6 +578,8 @@ sum  n in neighbors { u@n - u }
 mean n in neighbors { u@n }
 mean n in disk(2) { u@n }
 sum  n in ring(3) { activator@n }
+mean n in kernel bell(0, 0.05) { u@n }
+mean n in kernel bell(0.12, 0.03) { u@n }
 max  n in neighbors { temperature@n }
 min  n in neighbors { distance(self, n) }
 ```
@@ -595,13 +597,35 @@ Reduction sources:
 - `neighbors` means immediate topological adjacency in the geodesic mesh.
 - `ring(k)` means exact topological graph distance `k`.
 - `disk(k)` means topological graph distances `1..k`.
+- `kernel bell(center, width)` means a weighted metric neighborhood over
+  great-circle distance on the unit sphere.
 
 `ring(k)` / `disk(k)` currently require a literal integer `k` in `1..3`.
-The center cell is excluded from all three source forms. These are
+The center cell is excluded from the topological source forms. These are
 topological neighborhoods: most cells have six immediate neighbors, the
 twelve pentagonal cells have five, and wider rings inherit that geodesic
 mesh irregularity. They are not metric radial kernels and not same-radius
 stencils everywhere.
+
+Metric kernel semantics:
+
+```
+weight(d) = exp(-0.5 * ((d - center) / width)^2)
+cutoff    = center + 3 * width
+```
+
+Cells with great-circle distance `d <= cutoff` are gathered. `center` and
+`width` may be number literals or global params, but not locals or fields.
+The compiler/runtime precomputes packed gather tables for each resolved
+kernel and rebuilds them lazily when kernel params change. Guardrails:
+`center >= 0`, `width > 0`, `cutoff <= 0.35`, and max 128 gathered cells per
+cell. `mean` normalizes by total weight; `sum` returns the raw weighted sum.
+Weighted kernels support `sum` and `mean` only. `max` / `min` are deliberately
+not defined for weighted kernels.
+
+Self-inclusion is literal: `bell(0, width)` strongly includes the current
+cell and works as a smoother; `bell(center > 0, width)` is annular and gives
+the current cell little weight.
 
 Canonical scalar diffusion / Laplacian spelling for authored recipes:
 
@@ -614,8 +638,8 @@ separate tangent-frame operator `divergence(gradient(u))`. The two are not
 numerically identical on a geodesic mesh, especially near pentagons. Do not
 add a `laplacian(u)` helper until the numerical contract it names is settled.
 
-Metric radial kernels remain a separate future feature; do not overload
-`ring` / `disk` to mean metric radius or distance-weighted sampling.
+Do not overload `ring` / `disk` to mean metric radius or distance-weighted
+sampling. Use `kernel bell(...)` when authored semantics are metric.
 
 ### Math functions and globals (always available, no `use` clauses)
 
@@ -957,8 +981,6 @@ Reserved in grammar, not implemented:
 - `@prev(N)` for N>1
 - `@anti`, `@boundary` queries
 - explicit vector transport between tangent bases
-- topological `ring` / `disk` reductions
-- metric radial kernels
 - `step at Nhz` multi-rate
 - Multiple substrates (square, torus, voxel)
 - Eager metric evaluation (`metric x rate Nhz`)

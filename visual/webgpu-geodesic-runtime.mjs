@@ -6,6 +6,12 @@
 // one invocation per cell and use neighbor indices rather than texture offsets.
 // =============================================================================
 
+import {
+  buildMetricKernelTable,
+  metricKernelCacheKey,
+  resolveMetricKernelSpec,
+} from "../kernel/metric-kernel-table.mjs";
+
 const WORKGROUP_SIZE = 128;
 const PARAMS_BUFFER_SIZE = 4096;
 
@@ -64,6 +70,7 @@ export class WebGpuGeodesicRuntime {
     this.fields = new Map();
     this.pipelines = new Map();
     this.bindLayouts = new Map();
+    this.metricKernels = new Map();
 
     this.positionsBuffer = makeStorageBuffer(device, grid.positions, GPUBufferUsage.STORAGE);
     this.neighborsBuffer = makeStorageBuffer(device, grid.neighbors, GPUBufferUsage.STORAGE);
@@ -266,7 +273,7 @@ export class WebGpuGeodesicRuntime {
     }
   }
 
-  runCellPass({ key, source, field, reads = [], prevReads = [], uniforms = null, needsNeighbors = false, swapAfter = true }) {
+  runCellPass({ key, source, field, reads = [], prevReads = [], uniforms = null, needsNeighbors = false, kernelSpecs = [], params = {}, swapAfter = true }) {
     const pipeline = this.pipeline(key, source);
     this.writeUniforms(uniforms ?? new Float32Array([0, 0, this.cellCount, 0]));
     const entries = [];
@@ -293,12 +300,35 @@ export class WebGpuGeodesicRuntime {
       entries.push({ binding, resource: { buffer: this.neighborCountsBuffer } });
       binding++;
     }
+    for (const spec of kernelSpecs ?? []) {
+      const table = this.metricKernelBuffers(spec, params);
+      entries.push({ binding, resource: { buffer: table.offsetsBuffer } });
+      binding++;
+      entries.push({ binding, resource: { buffer: table.entriesBuffer } });
+      binding++;
+    }
     const bindGroup = this.device.createBindGroup({
       layout: pipeline.getBindGroupLayout(0),
       entries,
     });
     this.dispatch(pipeline, bindGroup);
     if (swapAfter) this.swap(field);
+  }
+
+  metricKernelBuffers(spec, params = {}) {
+    const resolved = resolveMetricKernelSpec(spec, params);
+    const key = metricKernelCacheKey(resolved);
+    let cached = this.metricKernels.get(key);
+    if (cached) return cached;
+    const table = buildMetricKernelTable(this.grid, resolved);
+    const entries = packMetricKernelEntries(table);
+    cached = {
+      offsetsBuffer: makeStorageBuffer(this.device, table.offsets, GPUBufferUsage.STORAGE),
+      entriesBuffer: makeStorageBuffer(this.device, entries, GPUBufferUsage.STORAGE),
+      entryCount: table.indices.length,
+    };
+    this.metricKernels.set(key, cached);
+    return cached;
   }
 
   dispatch(pipeline, bindGroup) {
@@ -336,6 +366,10 @@ export class WebGpuGeodesicRuntime {
     this.positionsBuffer.destroy();
     this.neighborsBuffer.destroy();
     this.neighborCountsBuffer.destroy();
+    for (const kernel of this.metricKernels.values()) {
+      kernel.offsetsBuffer.destroy();
+      kernel.entriesBuffer.destroy();
+    }
     this.paramsBuffer.destroy();
     this.readbackBuffer.destroy();
     for (const field of this.fields.values()) {
@@ -358,7 +392,17 @@ function makeStorageBuffer(device, typedArray, extraUsage = 0) {
   return buffer;
 }
 
+function packMetricKernelEntries(table) {
+  const buffer = new ArrayBuffer(table.indices.length * 8);
+  const view = new DataView(buffer);
+  for (let i = 0; i < table.indices.length; i++) {
+    const offset = i * 8;
+    view.setUint32(offset, table.indices[i], true);
+    view.setFloat32(offset + 4, table.weights[i], true);
+  }
+  return new Uint32Array(buffer);
+}
+
 function alignTo(value, alignment) {
   return Math.ceil(value / alignment) * alignment;
 }
-
