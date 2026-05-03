@@ -131,6 +131,15 @@ function typecheckScenarioOrStamp(decl, ctx, kind) {
         );
       }
     } else if (action.type === "eachCell") {
+      // `for each cell where PRED { … }`: type-check the optional
+      // predicate as bool, then walk the body. Same shape as a `when`
+      // condition but at the iteration boundary.
+      if (action.predicate) {
+        const t = typeOfExpr(action.predicate, new Map(), ctx, `${label} for each cell where`);
+        if (t !== "bool" && t !== "unknown") {
+          throwTypeError(`${label} for each cell where: expected bool predicate, got ${t}`);
+        }
+      }
       typecheckActionList(action.actions ?? [], new Map(), ctx, `${label} for each cell`);
     }
     // Other action types (e.g. raw set/add at scenario top level for

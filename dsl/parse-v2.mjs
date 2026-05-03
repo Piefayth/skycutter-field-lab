@@ -455,8 +455,23 @@ function parseInitActions(text, label, allowBrush = false) {
       consumeKeyword(ctx, "for");
       consumeKeyword(ctx, "each");
       consumeKeyword(ctx, "cell");
+      // Optional `where PRED` filter — runs the body only on cells
+      // whose predicate is truthy. Without this, "init only the
+      // northern hemisphere" requires wrapping the body in a `when`
+      // block; with it, the filter is at the iteration boundary
+      // where authors intuitively expect it.
+      skipInlineWs(ctx);
+      let predicate = null;
+      if (/^where\b/.test(ctx.source.slice(ctx.i))) {
+        consumeKeyword(ctx, "where");
+        predicate = parseExpressionUntilBrace(ctx);
+      }
       const body = readBracedBlock(ctx);
-      actions.push({ type: "eachCell", actions: parseCellActions(body, `${label} eachCell`, /*forScenario=*/true) });
+      actions.push({
+        type: "eachCell",
+        predicate,
+        actions: parseCellActions(body, `${label} eachCell`, /*forScenario=*/true),
+      });
     } else {
       throw new Error(`v2 parse: ${label}: unknown action "${kw}"`);
     }

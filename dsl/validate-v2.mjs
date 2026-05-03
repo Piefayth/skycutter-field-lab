@@ -86,9 +86,14 @@ function validateInitExpressions(schema) {
 function walkInitActionsForExpressionSubset(actions, label) {
   for (const action of actions) {
     if (!action) continue;
+    // `predicate` covers the `for each cell where PRED { ... }` filter
+    // expression, which lives at the iteration boundary rather than
+    // inside the body. The runtime evaluates it for every cell to
+    // decide whether to run the body, so it sees the same in-scope
+    // identifiers and is subject to the same init-context subset.
     for (const key of ["lon", "lat", "radius", "amount", "value", "rx", "ry",
                        "angle", "lonMin", "lonMax", "latMin", "latMax",
-                       "expr", "condition"]) {
+                       "expr", "condition", "predicate"]) {
       if (action[key]) walkExprForInitSubset(action[key], label);
     }
     if (action.actions) {

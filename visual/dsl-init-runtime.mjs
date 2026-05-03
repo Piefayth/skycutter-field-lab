@@ -129,14 +129,24 @@ function runPresetAction(state, action, cell) {
         const components = fieldComponents(state, name);
         field[name] = readCellComponents(state.fields[name], i, components);
       }
-      runPresetCellActions(state, action.actions ?? [], {
+      const cellCtx = {
         ...coords, i,
         locals: Object.create(null),
         field,
         consts: cell?.consts ?? {},
         planet: cell?.planet ?? {},
         params: cell?.params ?? {},
-      });
+      };
+      // Optional `where PRED` filter on the iteration. PRED is
+      // evaluated against the cell's coords / field reads / params /
+      // consts; truthy result lets the body run, falsy skips the cell
+      // entirely (no field state changes). Without this, recipes had
+      // to wrap the body in a `when` block at the cost of one indent
+      // level for every conditional init.
+      if (action.predicate) {
+        if (!evalInitExpr(action.predicate, state, cellCtx)) continue;
+      }
+      runPresetCellActions(state, action.actions ?? [], cellCtx);
     }
     return;
   }

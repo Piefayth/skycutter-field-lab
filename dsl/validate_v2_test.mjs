@@ -699,6 +699,54 @@ step {
 // evaluator; some cell-stage grammar constructs aren't implemented there).
 // -----------------------------------------------------------------------------
 
+test("for-each-cell where filter parses + type-checks as bool", () => {
+  // Sanity: bool predicate compiles. Body runs only on the matching
+  // cells; the runtime test for that semantics is at the integration
+  // layer (state changes), this just verifies the parser + validators
+  // accept the shape.
+  compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+scenario polar "Polar init" {
+  for each cell where lat > 1.0 {
+    set u = 1
+  }
+}
+step { stage s { reads u; writes u; cell { set u = u } } }
+`);
+});
+
+test("for-each-cell where rejects non-bool predicate", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+scenario init "init" {
+  for each cell where lat {
+    set u = 1
+  }
+}
+step { stage s { reads u; writes u; cell { set u = u } } }
+`), "expected bool predicate");
+});
+
+test("for-each-cell where predicate is subject to init-context subset", () => {
+  // Same restrictions as the body — no neighbor reductions, no
+  // CoordRead, etc.
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+scenario init "init" {
+  for each cell where u@prev > 0.5 {
+    set u = 1
+  }
+}
+step { stage s { reads u; writes u; cell { set u = u } } }
+`), "u@prev");
+});
+
 test("scenario for-each-cell rejects gradient(...)", () => {
   expectThrow(() => compileV2(`
 recipe "X"
