@@ -44,44 +44,6 @@ field u: f32
 field v: f32
 field w: f32
 
-palette U_RAMP {
-  stop 0 color [14, 18, 26]
-  stop 1 color [255, 200, 70]
-}
-
-palette V_RAMP {
-  stop 0 color [14, 18, 26]
-  stop 1 color [80, 220, 100]
-}
-
-palette W_RAMP {
-  stop 0 color [14, 18, 26]
-  stop 1 color [120, 100, 240]
-}
-
-view composite "Composite (u/v/w)" {
-  color expr {
-    let uc = clamp(u, 0, 1.4)
-    let vc = clamp(v, 0, 1.4)
-    let wc = clamp(w, 0, 1.4)
-    set red   = 28 + uc * 220 - vc * 50 - wc * 10
-    set green = 22 + vc * 200 - uc * 20
-    set blue  = 50 + wc * 180 - uc * 30
-  }
-}
-
-view u "U (autocatalyst)" {
-  color ramp u range [0, 1] palette U_RAMP
-}
-
-view v "V (inhibitor)" {
-  color ramp v range [0, 1] palette V_RAMP
-}
-
-view w "W (slow recovery)" {
-  color ramp w range [0, 1] palette W_RAMP
-}
-
 param simRateHz  slider 0..360   step 1     default 60    label "SIM RATE"
 param rate       slider 1..100   step 1     default 30    label "RATE"
 param diffU      slider 0..4     step 0.05  default 0.55  label "DIFF U"
@@ -93,55 +55,6 @@ param eps1Mul    slider 0.1..5   step 0.05  default 1.0   label "EPS1·"
 param eps2Mul    slider 0.1..5   step 0.05  default 1.0   label "EPS2·"
 param wCoupling  slider 0..2     step 0.05  default 0.55  label "W→U"
 param vDamping   slider 0..2     step 0.05  default 1.0   label "V→U"
-
-stamp pulse "Pulse u" {
-  spot u at brush.pos, radius=brush.r, amount=1
-}
-
-stamp inhibitor "Inhibitor pad" {
-  spot v at brush.pos, radius=brush.r, amount=0.6
-}
-
-scenario blank "Empty" {
-  set u = 0
-  set v = 0
-  set w = 0
-}
-
-scenario spiral "Spiral seed" {
-  set u = 0
-  set v = 0
-  set w = 0
-  region u at lonMin=-0.6, lonMax=0.6, latMin=0,    latMax=PI/2, amount=1
-  region v at lonMin=-0.2, lonMax=0.4, latMin=-0.5, latMax=0,    amount=0.5
-}
-
-scenario rings "Concentric target waves" {
-  set u = 0
-  set v = 0
-  set w = 0
-  spot u at lon=0, lat=0, radius=0.18, amount=1
-}
-
-scenario random "Random pulses" {
-  set u = 0
-  set v = 0
-  set w = 0
-  for each cell {
-    when cellNoise(11, 0.45) > 0.55 {
-      set u = 1
-    }
-  }
-}
-
-scenario bands "Latitude bands" {
-  set u = 0
-  set v = 0
-  set w = 0
-  region u at lonMin=-PI, lonMax=PI, latMin=0.4,  latMax=0.8,  amount=1
-  region u at lonMin=-PI, lonMax=PI, latMin=-0.8, latMax=-0.4, amount=1
-  region v at lonMin=-PI, lonMax=PI, latMin=-0.2, latMax=0.2,  amount=0.5
-}
 
 step {
   stage diffuseFields "Diffuse u, v, w (different rates)" {
@@ -175,6 +88,99 @@ step {
       set v = clamp(v, -0.4, 1.2)
       set w = clamp(w, -0.4, 1.2)
     }
+  }
+}
+
+views {
+  palette U_RAMP {
+    stop 0 color [14, 18, 26]
+    stop 1 color [255, 200, 70]
+  }
+
+  palette V_RAMP {
+    stop 0 color [14, 18, 26]
+    stop 1 color [80, 220, 100]
+  }
+
+  palette W_RAMP {
+    stop 0 color [14, 18, 26]
+    stop 1 color [120, 100, 240]
+  }
+
+  view composite "Composite (u/v/w)" {
+    color expr {
+      let uc = clamp(u, 0, 1.4)
+      let vc = clamp(v, 0, 1.4)
+      let wc = clamp(w, 0, 1.4)
+      set red   = 28 + uc * 220 - vc * 50 - wc * 10
+      set green = 22 + vc * 200 - uc * 20
+      set blue  = 50 + wc * 180 - uc * 30
+    }
+  }
+
+  view u "U (autocatalyst)" {
+    color ramp u range [0, 1] palette U_RAMP
+  }
+
+  view v "V (inhibitor)" {
+    color ramp v range [0, 1] palette V_RAMP
+  }
+
+  view w "W (slow recovery)" {
+    color ramp w range [0, 1] palette W_RAMP
+  }
+}
+
+stamps {
+  stamp pulse "Pulse u" {
+    spot u at brush.pos, radius=brush.r, amount=1
+  }
+
+  stamp inhibitor "Inhibitor pad" {
+    spot v at brush.pos, radius=brush.r, amount=0.6
+  }
+}
+
+scenarios {
+  scenario blank "Empty" {
+    set u = 0
+    set v = 0
+    set w = 0
+  }
+
+  scenario spiral "Spiral seed" {
+    set u = 0
+    set v = 0
+    set w = 0
+    region u at lonMin=-0.6, lonMax=0.6, latMin=0,    latMax=PI/2, amount=1
+    region v at lonMin=-0.2, lonMax=0.4, latMin=-0.5, latMax=0,    amount=0.5
+  }
+
+  scenario rings "Concentric target waves" {
+    set u = 0
+    set v = 0
+    set w = 0
+    spot u at lon=0, lat=0, radius=0.18, amount=1
+  }
+
+  scenario random "Random pulses" {
+    set u = 0
+    set v = 0
+    set w = 0
+    for each cell {
+      when cellNoise(11, 0.45) > 0.55 {
+        set u = 1
+      }
+    }
+  }
+
+  scenario bands "Latitude bands" {
+    set u = 0
+    set v = 0
+    set w = 0
+    region u at lonMin=-PI, lonMax=PI, latMin=0.4,  latMax=0.8,  amount=1
+    region u at lonMin=-PI, lonMax=PI, latMin=-0.8, latMax=-0.4, amount=1
+    region v at lonMin=-PI, lonMax=PI, latMin=-0.2, latMax=0.2,  amount=0.5
   }
 }
 `;

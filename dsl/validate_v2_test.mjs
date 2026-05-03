@@ -49,37 +49,41 @@ step {
 // -----------------------------------------------------------------------------
 
 test("scenario writing a derived field is rejected", () => {
-  expectThrow(() => compileV2(`
-recipe "X"
+  expectThrow(() => compileV2(`recipe "X"
 substrate geodesic frequency 16
 field u: f32
 field abs_u: f32 derived
-scenario init "init" {
-  spot abs_u at lon=0, lat=0, radius=0.1, amount=1
+
+scenarios {
+  scenario init "init" {
+    spot abs_u at lon=0, lat=0, radius=0.1, amount=1
+  }
 }
+
 step {
   stage step1 { reads u; writes u; cell { set u = u } }
   stage derive { reads u; writes abs_u; cell { set abs_u = abs(u) } }
-}
-`), "writes derived field");
+}`), "writes derived field");
 });
 
 test("scenario for-each-cell setting a derived field is rejected", () => {
-  expectThrow(() => compileV2(`
-recipe "X"
+  expectThrow(() => compileV2(`recipe "X"
 substrate geodesic frequency 16
 field u: f32
 field abs_u: f32 derived
-scenario init "init" {
-  for each cell {
-    set abs_u = 0
+
+scenarios {
+  scenario init "init" {
+    for each cell {
+      set abs_u = 0
+    }
   }
 }
+
 step {
   stage step1 { reads u; writes u; cell { set u = u } }
   stage derive { reads u; writes abs_u; cell { set abs_u = abs(u) } }
-}
-`), "writes derived field");
+}`), "writes derived field");
 });
 
 // -----------------------------------------------------------------------------
@@ -87,19 +91,21 @@ step {
 // -----------------------------------------------------------------------------
 
 test("stamp writing a derived field is rejected", () => {
-  expectThrow(() => compileV2(`
-recipe "X"
+  expectThrow(() => compileV2(`recipe "X"
 substrate geodesic frequency 16
 field u: f32
 field abs_u: f32 derived
-stamp paint "paint" {
-  spot abs_u at brush.pos, radius=brush.r, amount=1
+
+stamps {
+  stamp paint "paint" {
+    spot abs_u at brush.pos, radius=brush.r, amount=1
+  }
 }
+
 step {
   stage step1 { reads u; writes u; cell { set u = u } }
   stage derive { reads u; writes abs_u; cell { set abs_u = abs(u) } }
-}
-`), "writes derived field");
+}`), "writes derived field");
 });
 
 // -----------------------------------------------------------------------------
@@ -745,20 +751,23 @@ step {
 // -----------------------------------------------------------------------------
 
 test("render DSL: palette + ramp view compiles", () => {
-  const out = compileV2(`
-recipe "X"
+  const out = compileV2(`recipe "X"
 substrate geodesic frequency 16
 field h: f32
-palette WAVE {
-  stop 0.0 color [40, 90, 200]
-  stop 0.5 color [240, 240, 240]
-  stop 1.0 color [200, 50, 30]
+
+views {
+  palette WAVE {
+    stop 0.0 color [40, 90, 200]
+    stop 0.5 color [240, 240, 240]
+    stop 1.0 color [200, 50, 30]
+  }
+
+  view height "Height" {
+    color ramp h range [-1, 1] palette WAVE
+  }
 }
-view height "Height" {
-  color ramp h range [-1, 1] palette WAVE
-}
-step { stage s { reads h; writes h; cell { set h = h } } }
-`);
+
+step { stage s { reads h; writes h; cell { set h = h } } }`);
   assert(out.dsl.palettes.length === 1, "palette in output");
   assert(out.dsl.views.length === 1, "view in output");
   assert(out.dsl.views[0].kind === "ramp" && out.dsl.views[0].paletteName === "WAVE",
@@ -766,248 +775,281 @@ step { stage s { reads h; writes h; cell { set h = h } } }
 });
 
 test("render DSL: wheel view", () => {
-  const out = compileV2(`
-recipe "X"
+  const out = compileV2(`recipe "X"
 substrate geodesic frequency 16
 field theta: f32
-view phase "Phase" {
-  color wheel theta range [0, 6.283]
+
+views {
+  view phase "Phase" {
+    color wheel theta range [0, 6.283]
+  }
 }
-step { stage s { reads theta; writes theta; cell { set theta = theta } } }
-`);
+
+step { stage s { reads theta; writes theta; cell { set theta = theta } } }`);
   const v = out.dsl.views[0];
   assert(v.kind === "wheel" && v.field === "theta", "wheel view shape");
 });
 
 test("render DSL: expr view requires red+green+blue assignments", () => {
-  expectThrow(() => compileV2(`
-recipe "X"
+  expectThrow(() => compileV2(`recipe "X"
 substrate geodesic frequency 16
 field h: f32
-view custom "Custom" {
-  color expr {
-    set red = 100
-    set green = 200
+
+views {
+  view custom "Custom" {
+    color expr {
+      set red = 100
+      set green = 200
+    }
   }
 }
-step { stage s { reads h; writes h; cell { set h = h } } }
-`), "missing top-level `set blue");
+
+step { stage s { reads h; writes h; cell { set h = h } } }`), "missing top-level `set blue");
 });
 
 test("render DSL: expr view rejects red/green/blue assigned only inside when", () => {
   // Default-black silently masking a missing assignment was the
   // pre-fix bug — the validator counted assignments inside any branch.
-  expectThrow(() => compileV2(`
-recipe "X"
+  expectThrow(() => compileV2(`recipe "X"
 substrate geodesic frequency 16
 field h: f32
-view custom "Custom" {
-  color expr {
-    set red = 100
-    set green = 200
-    when h > 0 {
-      set blue = 250
+
+views {
+  view custom "Custom" {
+    color expr {
+      set red = 100
+      set green = 200
+      when h > 0 {
+        set blue = 250
+      }
     }
   }
 }
-step { stage s { reads h; writes h; cell { set h = h } } }
-`), "missing top-level `set blue");
+
+step { stage s { reads h; writes h; cell { set h = h } } }`), "missing top-level `set blue");
 });
 
 test("render DSL: expr view rejects unknown identifier", () => {
-  expectThrow(() => compileV2(`
-recipe "X"
+  expectThrow(() => compileV2(`recipe "X"
 substrate geodesic frequency 16
 field h: f32
-view custom "Custom" {
-  color expr {
-    set red   = nope
-    set green = 0
-    set blue  = 0
+
+views {
+  view custom "Custom" {
+    color expr {
+      set red   = nope
+      set green = 0
+      set blue  = 0
+    }
   }
 }
-step { stage s { reads h; writes h; cell { set h = h } } }
-`), 'unknown identifier "nope"');
+
+step { stage s { reads h; writes h; cell { set h = h } } }`), 'unknown identifier "nope"');
 });
 
 test("render DSL: expr view rejects vec2 field used as scalar", () => {
-  expectThrow(() => compileV2(`
-recipe "X"
+  expectThrow(() => compileV2(`recipe "X"
 substrate geodesic frequency 16
 field h: f32
 field wind: vec2
-view custom "Custom" {
-  color expr {
-    set red   = wind * 100
-    set green = 0
-    set blue  = 0
+
+views {
+  view custom "Custom" {
+    color expr {
+      set red   = wind * 100
+      set green = 0
+      set blue  = 0
+    }
   }
 }
-step { stage s { reads h, wind; writes h; cell { set h = h + wind.x } } }
-`), "vec2 field `wind` can't be used as a scalar");
+
+step { stage s { reads h, wind; writes h; cell { set h = h + wind.x } } }`), "vec2 field `wind` can't be used as a scalar");
 });
 
 test("render DSL: expr view rejects unsupported call", () => {
-  expectThrow(() => compileV2(`
-recipe "X"
+  expectThrow(() => compileV2(`recipe "X"
 substrate geodesic frequency 16
 field h: f32
-view custom "Custom" {
-  color expr {
-    set red   = cellNoise(7)
-    set green = 0
-    set blue  = 0
+
+views {
+  view custom "Custom" {
+    color expr {
+      set red   = cellNoise(7)
+      set green = 0
+      set blue  = 0
+    }
   }
 }
-step { stage s { reads h; writes h; cell { set h = h } } }
-`), "unsupported call `cellNoise");
+
+step { stage s { reads h; writes h; cell { set h = h } } }`), "unsupported call `cellNoise");
 });
 
 test("render DSL: expr view accepts allowed math + length(vec2)", () => {
   // Positive case: every legal feature exercised in one body.
-  const out = compileV2(`
-recipe "X"
+  const out = compileV2(`recipe "X"
 substrate geodesic frequency 16
 const SCALE = 2.5
 field h: f32
 field wind: vec2
 param k slider 0..1 step 0.01 default 0.5 label "K"
-view custom "Custom" {
-  color expr {
-    let mag = length(wind)
-    let lit = clamp(h * SCALE * k, 0, 1)
-    set red   = sin(lit * PI) * 200 + 40
-    set green = mag * 100 + wind.x * 5
-    set blue  = sqrt(max(lit, 0)) * 255
+
+views {
+  view custom "Custom" {
+    color expr {
+      let mag = length(wind)
+      let lit = clamp(h * SCALE * k, 0, 1)
+      set red   = sin(lit * PI) * 200 + 40
+      set green = mag * 100 + wind.x * 5
+      set blue  = sqrt(max(lit, 0)) * 255
+    }
   }
 }
-step { stage s { reads h, wind; writes h; cell { set h = h + wind.x } } }
-`);
+
+step { stage s { reads h, wind; writes h; cell { set h = h + wind.x } } }`);
   assert(out.dsl.views[0].kind === "expr", "expr view present");
 });
 
 test("render DSL: range accepts const identifiers + PI / TAU", () => {
-  const out = compileV2(`
-recipe "X"
+  const out = compileV2(`recipe "X"
 substrate geodesic frequency 16
 const HOT = 1.5
 field theta: f32
 field h: f32
-view phaseV "Phase" {
-  color wheel theta range [0, TAU]
-}
-view heatV "Heat" {
-  color ramp h range [0, HOT] stops {
-    stop 0 color [0, 0, 0]
-    stop 1 color [255, 80, 0]
+
+views {
+  view phaseV "Phase" {
+    color wheel theta range [0, TAU]
+  }
+
+  view heatV "Heat" {
+    color ramp h range [0, HOT] stops {
+      stop 0 color [0, 0, 0]
+      stop 1 color [255, 80, 0]
+    }
   }
 }
-step { stage s { reads h, theta; writes h; cell { set h = h } } }
-`);
+
+step { stage s { reads h, theta; writes h; cell { set h = h } } }`);
   assert(out.dsl.views[0].range[1] > 6 && out.dsl.views[0].range[1] < 7, "TAU resolved");
   assert(out.dsl.views[1].range[1] === 1.5, "HOT resolved");
 });
 
 test("render DSL: range rejects unknown const identifier", () => {
-  expectThrow(() => compileV2(`
-recipe "X"
+  expectThrow(() => compileV2(`recipe "X"
 substrate geodesic frequency 16
 field theta: f32
-view phaseV "Phase" {
-  color wheel theta range [0, NOPE]
+
+views {
+  view phaseV "Phase" {
+    color wheel theta range [0, NOPE]
+  }
 }
-step { stage s { reads theta; writes theta; cell { set theta = theta } } }
-`), 'unknown constant "NOPE"');
+
+step { stage s { reads theta; writes theta; cell { set theta = theta } } }`), 'unknown constant "NOPE"');
 });
 
 test("render DSL: expr view rejects non-channel set targets", () => {
-  expectThrow(() => compileV2(`
-recipe "X"
+  expectThrow(() => compileV2(`recipe "X"
 substrate geodesic frequency 16
 field h: f32
-view custom "Custom" {
-  color expr {
-    set h     = 1
-    set red   = 100
-    set green = 200
-    set blue  = 50
+
+views {
+  view custom "Custom" {
+    color expr {
+      set h     = 1
+      set red   = 100
+      set green = 200
+      set blue  = 50
+    }
   }
 }
-step { stage s { reads h; writes h; cell { set h = h } } }
-`), "only `red` / `green` / `blue` are valid `set` targets");
+
+step { stage s { reads h; writes h; cell { set h = h } } }`), "only `red` / `green` / `blue` are valid `set` targets");
 });
 
 test("render DSL: expr view rejects neighbor reductions", () => {
-  expectThrow(() => compileV2(`
-recipe "X"
+  expectThrow(() => compileV2(`recipe "X"
 substrate geodesic frequency 16
 field h: f32
-view custom "Custom" {
-  color expr {
-    let avg = mean n in neighbors { h@n }
-    set red   = avg * 255
-    set green = avg * 255
-    set blue  = avg * 255
+
+views {
+  view custom "Custom" {
+    color expr {
+      let avg = mean n in neighbors { h@n }
+      set red   = avg * 255
+      set green = avg * 255
+      set blue  = avg * 255
+    }
   }
 }
-step { stage s { reads h; writes h; cell { set h = h } } }
-`), "neighbor reductions aren't allowed");
+
+step { stage s { reads h; writes h; cell { set h = h } } }`), "neighbor reductions aren't allowed");
 });
 
 test("render DSL: ramp range must have a != b", () => {
-  expectThrow(() => compileV2(`
-recipe "X"
+  expectThrow(() => compileV2(`recipe "X"
 substrate geodesic frequency 16
 field h: f32
-palette P {
-  stop 0 color [0, 0, 0]
-  stop 1 color [255, 255, 255]
-}
-view bad "Bad" { color ramp h range [0.5, 0.5] palette P }
-step { stage s { reads h; writes h; cell { set h = h } } }
-`), "empty");
-});
 
-test("render DSL: ramp references undeclared palette", () => {
-  expectThrow(() => compileV2(`
-recipe "X"
-substrate geodesic frequency 16
-field h: f32
-view bad "Bad" { color ramp h range [0, 1] palette MISSING }
-step { stage s { reads h; writes h; cell { set h = h } } }
-`), "references undefined palette \"MISSING\"");
-});
-
-test("render DSL: overlay grid", () => {
-  const out = compileV2(`
-recipe "X"
-substrate geodesic frequency 16
-field h: f32
-overlay grid
-view h "H" {
-  color ramp h range [0, 1] stops {
+views {
+  palette P {
     stop 0 color [0, 0, 0]
     stop 1 color [255, 255, 255]
   }
+
+  view bad "Bad" { color ramp h range [0.5, 0.5] palette P }
 }
-step { stage s { reads h; writes h; cell { set h = h } } }
-`);
+
+step { stage s { reads h; writes h; cell { set h = h } } }`), "empty");
+});
+
+test("render DSL: ramp references undeclared palette", () => {
+  expectThrow(() => compileV2(`recipe "X"
+substrate geodesic frequency 16
+field h: f32
+
+views {
+  view bad "Bad" { color ramp h range [0, 1] palette MISSING }
+}
+
+step { stage s { reads h; writes h; cell { set h = h } } }`), "references undefined palette \"MISSING\"");
+});
+
+test("render DSL: overlay grid", () => {
+  const out = compileV2(`recipe "X"
+substrate geodesic frequency 16
+field h: f32
+
+views {
+  overlay grid
+
+  view h "H" {
+    color ramp h range [0, 1] stops {
+      stop 0 color [0, 0, 0]
+      stop 1 color [255, 255, 255]
+    }
+  }
+}
+
+step { stage s { reads h; writes h; cell { set h = h } } }`);
   assert(out.dsl.overlays.length === 1 && out.dsl.overlays[0].name === "grid");
 });
 
 test("render DSL: inline stops form (no named palette)", () => {
-  const out = compileV2(`
-recipe "X"
+  const out = compileV2(`recipe "X"
 substrate geodesic frequency 16
 field h: f32
-view h "Heat" {
-  color ramp h range [0, 1] stops {
-    stop 0 color [20, 22, 18]
-    stop 1 color [80, 220, 90]
+
+views {
+  view h "Heat" {
+    color ramp h range [0, 1] stops {
+      stop 0 color [20, 22, 18]
+      stop 1 color [80, 220, 90]
+    }
   }
 }
-step { stage s { reads h; writes h; cell { set h = h } } }
-`);
+
+step { stage s { reads h; writes h; cell { set h = h } } }`);
   const v = out.dsl.views[0];
   assert(v.kind === "ramp" && Array.isArray(v.stops) && v.stops.length === 2,
     "inline stops should land on the view");
@@ -1080,179 +1122,203 @@ test("for-each-cell where filter parses + type-checks as bool", () => {
   // cells; the runtime test for that semantics is at the integration
   // layer (state changes), this just verifies the parser + validators
   // accept the shape.
-  compileV2(`
-recipe "X"
+  compileV2(`recipe "X"
 substrate geodesic frequency 16
 field u: f32
-scenario polar "Polar init" {
-  for each cell where lat > 1.0 {
-    set u = 1
+
+scenarios {
+  scenario polar "Polar init" {
+    for each cell where lat > 1.0 {
+      set u = 1
+    }
   }
 }
-step { stage s { reads u; writes u; cell { set u = u } } }
-`);
+
+step { stage s { reads u; writes u; cell { set u = u } } }`);
 });
 
 test("for-each-cell where rejects non-bool predicate", () => {
-  expectThrow(() => compileV2(`
-recipe "X"
+  expectThrow(() => compileV2(`recipe "X"
 substrate geodesic frequency 16
 field u: f32
-scenario init "init" {
-  for each cell where lat {
-    set u = 1
+
+scenarios {
+  scenario init "init" {
+    for each cell where lat {
+      set u = 1
+    }
   }
 }
-step { stage s { reads u; writes u; cell { set u = u } } }
-`), "expected bool predicate");
+
+step { stage s { reads u; writes u; cell { set u = u } } }`), "expected bool predicate");
 });
 
 test("for-each-cell where predicate is subject to init-context subset", () => {
   // Same restrictions as the body — no neighbor reductions, no
   // CoordRead, etc.
-  expectThrow(() => compileV2(`
-recipe "X"
+  expectThrow(() => compileV2(`recipe "X"
 substrate geodesic frequency 16
 field u: f32
-scenario init "init" {
-  for each cell where u@prev > 0.5 {
-    set u = 1
+
+scenarios {
+  scenario init "init" {
+    for each cell where u@prev > 0.5 {
+      set u = 1
+    }
   }
 }
-step { stage s { reads u; writes u; cell { set u = u } } }
-`), "u@prev");
+
+step { stage s { reads u; writes u; cell { set u = u } } }`), "u@prev");
 });
 
 test("scenario for-each-cell rejects gradient(...)", () => {
-  expectThrow(() => compileV2(`
-recipe "X"
+  expectThrow(() => compileV2(`recipe "X"
 substrate geodesic frequency 16
 field u: f32
 field wind: vec2
-scenario init "init" {
-  for each cell {
-    set wind = gradient(u)
+
+scenarios {
+  scenario init "init" {
+    for each cell {
+      set wind = gradient(u)
+    }
   }
 }
-step { stage s { reads u, wind; writes u, wind; cell { set u = u; set wind = wind } } }
-`), "tangent-frame stencil builtin");
+
+step { stage s { reads u, wind; writes u, wind; cell { set u = u; set wind = wind } } }`), "tangent-frame stencil builtin");
 });
 
 test("scenario for-each-cell rejects neighbor reductions", () => {
-  expectThrow(() => compileV2(`
-recipe "X"
+  expectThrow(() => compileV2(`recipe "X"
 substrate geodesic frequency 16
 field u: f32
-scenario init "init" {
-  for each cell {
-    set u = sum n in neighbors { u@n }
+
+scenarios {
+  scenario init "init" {
+    for each cell {
+      set u = sum n in neighbors { u@n }
+    }
   }
 }
-step { stage s { reads u; writes u; cell { set u = u } } }
-`), "neighbor reductions");
+
+step { stage s { reads u; writes u; cell { set u = u } } }`), "neighbor reductions");
 });
 
 test("scenario for-each-cell rejects @upstream", () => {
-  expectThrow(() => compileV2(`
-recipe "X"
+  expectThrow(() => compileV2(`recipe "X"
 substrate geodesic frequency 16
 field u: f32
 field slope: vec2
-scenario init "init" {
-  for each cell {
-    set u = u@upstream(slope.x, slope.y, dt)
+
+scenarios {
+  scenario init "init" {
+    for each cell {
+      set u = u@upstream(slope.x, slope.y, dt)
+    }
   }
 }
-step { stage s { reads u; writes u; cell { set u = u } } }
-`), "u@upstream");
+
+step { stage s { reads u; writes u; cell { set u = u } } }`), "u@upstream");
 });
 
 test("scenario for-each-cell rejects @prev (no previous tick at start)", () => {
-  expectThrow(() => compileV2(`
-recipe "X"
+  expectThrow(() => compileV2(`recipe "X"
 substrate geodesic frequency 16
 field u: f32
-scenario init "init" {
-  for each cell {
-    set u = u@prev
+
+scenarios {
+  scenario init "init" {
+    for each cell {
+      set u = u@prev
+    }
   }
 }
-step { stage s { reads u; writes u; cell { set u = u } } }
-`), "u@prev");
+
+step { stage s { reads u; writes u; cell { set u = u } } }`), "u@prev");
 });
 
 test("stamp body rejects gradient(...) too", () => {
-  expectThrow(() => compileV2(`
-recipe "X"
+  expectThrow(() => compileV2(`recipe "X"
 substrate geodesic frequency 16
 field u: f32
 field wind: vec2
-stamp paint "paint" {
-  spot wind at brush.pos, radius=brush.r, amount=vec2(0, 0)
-  spot u at brush.pos, radius=brush.r, amount=length(gradient(u))
+
+stamps {
+  stamp paint "paint" {
+    spot wind at brush.pos, radius=brush.r, amount=vec2(0, 0)
+    spot u at brush.pos, radius=brush.r, amount=length(gradient(u))
+  }
 }
-step { stage s { reads u, wind; writes u, wind; cell { set u = u; set wind = wind } } }
-`), "tangent-frame stencil builtin");
+
+step { stage s { reads u, wind; writes u, wind; cell { set u = u; set wind = wind } } }`), "tangent-frame stencil builtin");
 });
 
 test("scenario for-each-cell accepts the cell-local subset", () => {
   // Sanity: the stuff scenarios CAN do (math, conditionals, locals,
   // bare-field reads, cellNoise / cellRand) compiles fine.
-  compileV2(`
-recipe "X"
+  compileV2(`recipe "X"
 substrate geodesic frequency 16
 field u: f32
 field wind: vec2
-scenario init "init" {
-  for each cell {
-    let phase = lon * 2 + cellNoise(31, 1.5) * 0.1
-    when phase > 0 {
-      set u = sin(phase) * 0.5 + 0.5
+
+scenarios {
+  scenario init "init" {
+    for each cell {
+      let phase = lon * 2 + cellNoise(31, 1.5) * 0.1
+      when phase > 0 {
+        set u = sin(phase) * 0.5 + 0.5
+      }
+      set wind = vec2(cos(phase), sin(phase))
     }
-    set wind = vec2(cos(phase), sin(phase))
   }
 }
-step { stage s { reads u, wind; writes u, wind; cell { set u = u; set wind = wind } } }
-`);
+
+step { stage s { reads u, wind; writes u, wind; cell { set u = u; set wind = wind } } }`);
 });
 
 test("type-check rejects scalar amount on vec2 stamp", () => {
   // Reviewer-flagged: typecheck used to allow scalar `amount` for a
   // vec2 field, claiming "broadcast." The runtime does not broadcast;
   // it errors mid-paint. Catch at recipe load.
-  expectThrow(() => compileV2(`
-recipe "X"
+  expectThrow(() => compileV2(`recipe "X"
 substrate geodesic frequency 16
 field wind: vec2
-stamp blow "blow" {
-  spot wind at brush.pos, radius=brush.r, amount=1
+
+stamps {
+  stamp blow "blow" {
+    spot wind at brush.pos, radius=brush.r, amount=1
+  }
 }
-step { stage s { reads wind; writes wind; cell { set wind = wind } } }
-`), "assigning f32 to vec2 field");
+
+step { stage s { reads wind; writes wind; cell { set wind = wind } } }`), "assigning f32 to vec2 field");
 });
 
 test("type-check accepts vec2 amount on vec2 stamp", () => {
-  compileV2(`
-recipe "X"
+  compileV2(`recipe "X"
 substrate geodesic frequency 16
 field wind: vec2
-stamp blow "blow" {
-  spot wind at brush.pos, radius=brush.r, amount=vec2(1, 0)
+
+stamps {
+  stamp blow "blow" {
+    spot wind at brush.pos, radius=brush.r, amount=vec2(1, 0)
+  }
 }
-step { stage s { reads wind; writes wind; cell { set wind = wind } } }
-`);
+
+step { stage s { reads wind; writes wind; cell { set wind = wind } } }`);
 });
 
 test("type-check rejects vec2 amount on scalar stamp", () => {
-  expectThrow(() => compileV2(`
-recipe "X"
+  expectThrow(() => compileV2(`recipe "X"
 substrate geodesic frequency 16
 field u: f32
-stamp drop "drop" {
-  spot u at brush.pos, radius=brush.r, amount=vec2(1, 0)
+
+stamps {
+  stamp drop "drop" {
+    spot u at brush.pos, radius=brush.r, amount=vec2(1, 0)
+  }
 }
-step { stage s { reads u; writes u; cell { set u = u } } }
-`), "assigning vec2 to f32 field");
+
+step { stage s { reads u; writes u; cell { set u = u } } }`), "assigning vec2 to f32 field");
 });
 
 test("metric body @upstream rejects unknown identifier in coord args", () => {

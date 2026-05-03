@@ -63,29 +63,6 @@ field albedo: f32 derived
 // ice line — the actually-interesting part of the simulation —
 // visually unmistakable. Stop t-values normalized into [0, 1] across
 // the chosen range [-0.8, 1.5].
-palette TEMP {
-  stop 0.000 color [30, 60, 140]
-  stop 0.174 color [120, 170, 230]
-  stop 0.326 color [240, 248, 255]
-  stop 0.370 color [255, 252, 240]
-  stop 0.457 color [110, 180, 130]
-  stop 0.609 color [230, 200, 90]
-  stop 0.783 color [220, 80, 40]
-  stop 1.000 color [120, 20, 20]
-}
-
-palette ALBEDO {
-  stop 0 color [0, 0, 0]
-  stop 1 color [255, 255, 255]
-}
-
-view T "Temperature" {
-  color ramp T range [-0.8, 1.5] palette TEMP
-}
-
-view albedo "Albedo" {
-  color ramp albedo range [0, 1] palette ALBEDO
-}
 
 param simRateHz   slider 0..360    step 1     default 60    label "SIM RATE"
 // Solar constant. Around 1.0 is "modern Earth"; below ~0.6 the system
@@ -100,30 +77,6 @@ param orbital     slider 0..0.5    step 0.005 default 0.18  label "ORBITAL VAR"
 param orbitalRate slider 100..5000 step 50    default 1200  label "ORBIT FRAMES"
 param volcanic    slider 0..0.5    step 0.005 default 0.04  label "VOLCANIC"
 param rate        slider 1..100    step 1     default 30    label "RATE"
-
-stamp warm "Warmth pulse" {
-  spot T at brush.pos, radius=brush.r, amount=0.8
-}
-
-stamp freeze "Freeze patch" {
-  spot T at brush.pos, radius=brush.r, amount=-0.8
-}
-
-scenario earth "Modern earth" {
-  for each cell {
-    set T = cos(lat) * 0.9 - 0.3
-  }
-}
-
-scenario snowball "Snowball earth" {
-  set T = -0.6
-}
-
-scenario edge "Edge of bistability" {
-  for each cell {
-    set T = 0.05 * cos(lat) + 0.02 * cellNoise(7, 1.5)
-  }
-}
 
 step {
   stage diffuseT "Surface heat conduction" {
@@ -147,6 +100,60 @@ step {
       let volcanism  = cellRand(frame) * volcanic
       add T = (absorbed - emitted + volcanism) * dt * rate
       set albedo = alb
+    }
+  }
+}
+
+views {
+  palette TEMP {
+    stop 0.000 color [30, 60, 140]
+    stop 0.174 color [120, 170, 230]
+    stop 0.326 color [240, 248, 255]
+    stop 0.370 color [255, 252, 240]
+    stop 0.457 color [110, 180, 130]
+    stop 0.609 color [230, 200, 90]
+    stop 0.783 color [220, 80, 40]
+    stop 1.000 color [120, 20, 20]
+  }
+
+  palette ALBEDO {
+    stop 0 color [0, 0, 0]
+    stop 1 color [255, 255, 255]
+  }
+
+  view T "Temperature" {
+    color ramp T range [-0.8, 1.5] palette TEMP
+  }
+
+  view albedo "Albedo" {
+    color ramp albedo range [0, 1] palette ALBEDO
+  }
+}
+
+stamps {
+  stamp warm "Warmth pulse" {
+    spot T at brush.pos, radius=brush.r, amount=0.8
+  }
+
+  stamp freeze "Freeze patch" {
+    spot T at brush.pos, radius=brush.r, amount=-0.8
+  }
+}
+
+scenarios {
+  scenario earth "Modern earth" {
+    for each cell {
+      set T = cos(lat) * 0.9 - 0.3
+    }
+  }
+
+  scenario snowball "Snowball earth" {
+    set T = -0.6
+  }
+
+  scenario edge "Edge of bistability" {
+    for each cell {
+      set T = 0.05 * cos(lat) + 0.02 * cellNoise(7, 1.5)
     }
   }
 }

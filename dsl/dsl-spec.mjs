@@ -675,7 +675,7 @@ export const DECL_DIRECTIVES = [
 ];
 
 // ---------------------------------------------------------------------------
-// Block keywords — introduce stage / preset / stamp blocks.
+// Block keywords — introduce collapsible structural blocks.
 // ---------------------------------------------------------------------------
 
 export const BLOCK_KEYWORDS = [
@@ -693,26 +693,44 @@ export const BLOCK_KEYWORDS = [
   {
     name: "scenario",
     signature: 'scenario NAME [\"Label\"] { ... }',
-    doc: "An initial-state recipe. Fires on Reset / on first load (if `recommendedPreset` matches its id). Body uses init verbs (`set`, `spot`, `ellipse`, `region`, `for each cell`). Scenarios cannot write `derived` fields — derived fields are computed by stages.",
+    doc: "An initial-state recipe inside `scenarios { }`. Fires on Reset / on first load (if `recommendedPreset` matches its id). Body uses init verbs (`set`, `spot`, `ellipse`, `region`, `for each cell`). Scenarios cannot write `derived` fields — derived fields are computed by stages.",
     example: 'scenario droplet "Single droplet" {\n  set u = 0\n  spot u at lon=0, lat=0, radius=0.08, amount=1\n}',
   },
   {
     name: "stamp",
     signature: 'stamp NAME [\"Label\"] { ... }',
-    doc: "A paint-brush composite. User clicks the canvas with this stamp selected to apply. Body uses init verbs scoped to the click position via `brush.pos` and `brush.r`. Stamps cannot write `derived` fields. Stamps deliberately leave the prev buffer of history fields untouched — the asymmetry between current and prev is the launch velocity.",
+    doc: "A paint-brush composite inside `stamps { }`. User clicks the canvas with this stamp selected to apply. Body uses init verbs scoped to the click position via `brush.pos` and `brush.r`. Stamps cannot write `derived` fields. Stamps deliberately leave the prev buffer of history fields untouched — the asymmetry between current and prev is the launch velocity.",
     example: 'stamp ripple "Drop ripple" {\n  spot u at brush.pos, radius=brush.r, amount=1\n}',
   },
   {
     name: "palette",
     signature: "palette NAME { stop T color [R, G, B] ... }",
-    doc: "A reusable color ramp. Body lists ≥2 stops in ascending t order, with t in [0, 1] and r/g/b each in [0, 255]. Referenced by name from `view` blocks. Palettes are render-only — never read inside stage cells.",
+    doc: "A reusable color ramp inside `views { }`. Body lists ≥2 stops in ascending t order, with t in [0, 1] and r/g/b each in [0, 255]. Referenced by name from `view` blocks. Palettes are render-only — never read inside stage cells.",
     example: 'palette HEAT {\n  stop 0    color [12, 14, 30]\n  stop 0.5  color [240, 110, 40]\n  stop 1    color [255, 220, 90]\n}',
   },
   {
     name: "view",
     signature: 'view ID [\"Label\"] { color KIND ... }',
-    doc: "A render selectable from the panel. Body has exactly one `color KIND ...` clause. Three kinds: `color ramp FIELD range [a, b] palette NAME` (linear lookup against a named palette or inline `stops { ... }`); `color wheel FIELD range [a, b]` (cyclic HSV cycle, range defaults to [0, 2π]); `color expr { let ... ; set red = ... ; set green = ... ; set blue = ... }` (per-cell programmable RGB — must assign all three channels at the body's root level). Range bounds accept numbers, declared `const`s, or PI / TAU.",
+    doc: "A render selectable from the panel, declared inside `views { }`. Body has exactly one `color KIND ...` clause. Three kinds: `color ramp FIELD range [a, b] palette NAME` (linear lookup against a named palette or inline `stops { ... }`); `color wheel FIELD range [a, b]` (cyclic HSV cycle, range defaults to [0, 2π]); `color expr { let ... ; set red = ... ; set green = ... ; set blue = ... }` (per-cell programmable RGB — must assign all three channels at the body's root level). Range bounds accept numbers, declared `const`s, or PI / TAU.",
     example: 'view temperature "Temperature" {\n  color ramp T range [-0.8, 1.5] palette TEMP\n}\nview phase "Phase" {\n  color wheel theta range [0, TAU]\n}\nview composite "S / I / R" {\n  color expr {\n    let total = max(S + I + R, 0.000001)\n    set red   = (S / total) * 255\n    set green = (I / total) * 255\n    set blue  = (R / total) * 255\n  }\n}',
+  },
+  {
+    name: "views",
+    signature: "views { palette ... view ... overlay ... }",
+    doc: "Render declaration section. Contains `palette`, `view`, and optional `overlay` declarations. Conventionally placed after `step { }` in shipped recipes and folded by default so the simulation body stays easy to scan.",
+    example: 'views {\n  palette MONO {\n    stop 0 color [0, 0, 0]\n    stop 1 color [255, 255, 255]\n  }\n  view a "A" {\n    color ramp a range [0, 1] palette MONO\n  }\n}',
+  },
+  {
+    name: "stamps",
+    signature: "stamps { stamp ... }",
+    doc: "Paint-brush declaration section. Contains `stamp` blocks. Conventionally placed after `step { }` in shipped recipes and folded by default.",
+    example: 'stamps {\n  stamp ripple "Drop ripple" {\n    spot u at brush.pos, radius=brush.r, amount=1\n  }\n}',
+  },
+  {
+    name: "scenarios",
+    signature: "scenarios { scenario ... }",
+    doc: "Initial-state declaration section. Contains `scenario` blocks. Conventionally placed after `step { }` in shipped recipes and folded by default.",
+    example: 'scenarios {\n  scenario droplet "Single droplet" {\n    set u = 0\n    spot u at lon=0, lat=0, radius=0.08, amount=1\n  }\n}',
   },
 ];
 

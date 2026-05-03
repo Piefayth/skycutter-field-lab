@@ -27,13 +27,17 @@ field u: f32
 param speed   slider 0..0.29 default 0.25 label "WAVE SPEED"
 param damping slider 0..0.05 default 0    label "DAMPING γ"
 
-scenario droplet "Single droplet" {
-  set u = 0
-  spot u at lon=0, lat=0, radius=0.08, amount=1
+stamps {
+  stamp ripple "Drop ripple" {
+    spot u at brush.pos, radius=brush.r, amount=1
+  }
 }
 
-stamp ripple "Drop ripple" {
-  spot u at brush.pos, radius=brush.r, amount=1
+scenarios {
+  scenario droplet "Single droplet" {
+    set u = 0
+    spot u at lon=0, lat=0, radius=0.08, amount=1
+  }
 }
 
 step {
@@ -86,7 +90,9 @@ test("diagnoseV2 includes a source range for editor diagnostics", () => {
 recipe "Bad"
 substrate geodesic frequency 16
 field u: f32
-scenario init { set u = 0 }
+scenarios {
+  scenario init { set u = 0 }
+}
 step {
   stage broken {
     reads u
@@ -111,8 +117,10 @@ substrate geodesic frequency 64
 
 field a: f32
 
-scenario blank "Blank canvas" {
-  set a f 0
+scenarios {
+  scenario blank "Blank canvas" {
+    set a f 0
+  }
 }
 
 step {
@@ -127,5 +135,5 @@ step {
   const [error] = result.errors;
   assert(error.message.includes('expected "="'), `expected parse error, got ${error.message}`);
   assertEq(source.slice(error.from, error.to), "f", "diagnostic should point at the unexpected token");
-  assertEq(error.line, 10, "diagnostic should report the scenario action line");
+  assertEq(error.line, 11, "diagnostic should report the scenario action line");
 });

@@ -50,39 +50,10 @@ substrate geodesic frequency 64
 field N: f32
 field P: f32
 
-palette N_RAMP {
-  stop 0 color [22, 28, 22]
-  stop 1 color [120, 230, 110]
-}
-
-palette P_RAMP {
-  stop 0 color [28, 22, 22]
-  stop 1 color [240, 110, 80]
-}
-
 // Composite view: prey N → green tint, predator P → red tint.
 // Where both are low: dark / "extinction void." Where both are
 // moderate: brown-orange / "transition zone." Saturating mapping
 // keeps the field readable across orders of magnitude.
-view composite "N + P composite" {
-  color expr {
-    let n  = clamp(N, 0, 2.5)
-    let p  = clamp(P, 0, 2.5)
-    let ng = clamp(n * 0.8, 0, 1)
-    let pg = clamp(p * 1.2, 0, 1)
-    set red   = 40 + pg * 215
-    set green = 28 + ng * 200 - pg * 30
-    set blue  = 34 + ng * 60
-  }
-}
-
-view N "Prey (N)" {
-  color ramp N range [0, 1] palette N_RAMP
-}
-
-view P "Predator (P)" {
-  color ramp P range [0, 0.667] palette P_RAMP
-}
 
 param simRateHz slider 0..360    step 1    default 60    label "SIM RATE"
 param r         slider 0..2      step 0.01 default 0.55  label "r (PREY GROWTH)"
@@ -94,52 +65,6 @@ param m         slider 0..1      step 0.01 default 0.28  label "m (MORTALITY)"
 param Dn        slider 0..4      step 0.05 default 0.45  label "Dn (PREY DIFF)"
 param Dp        slider 0..4      step 0.05 default 0.85  label "Dp (PRED DIFF)"
 param rate      slider 1..100    step 1    default 14    label "RATE"
-
-stamp seedPrey "Seed prey patch" {
-  spot N at brush.pos, radius=brush.r, amount=0.5
-}
-
-stamp seedPredator "Seed predator patch" {
-  spot P at brush.pos, radius=brush.r, amount=0.4
-}
-
-stamp cull "Cull both" {
-  spot N at brush.pos, radius=brush.r, amount=-1.5
-  spot P at brush.pos, radius=brush.r, amount=-1.5
-}
-
-scenario patches "Random patches" {
-  set N = 0
-  set P = 0
-  for each cell {
-    let seedN = cellRand(11)
-    when seedN > 0.4 {
-      set N = 0.5 + cellRand(13) * 0.3
-    }
-    let seedP = cellRand(17)
-    when seedP > 0.85 {
-      set P = 0.4
-    }
-  }
-}
-
-scenario preyOnly "Prey-only world" {
-  set N = 0.6
-  set P = 0
-}
-
-scenario front "Predator invasion front" {
-  set N = 0.7
-  set P = 0
-  spot P at lon=-2.5, lat=0, radius=0.18, amount=0.6
-}
-
-scenario equilibrium "Near interior equilibrium" {
-  for each cell {
-    set N = 0.25 + cellNoise(7, 1.4) * 0.05
-    set P = 0.18 + cellNoise(13, 1.4) * 0.04
-  }
-}
 
 step {
   stage diffuseFields "Spatial spread (Dp > Dn — predators move further)" {
@@ -169,6 +94,88 @@ step {
     cell {
       set N = clamp(N, 0, 3)
       set P = clamp(P, 0, 3)
+    }
+  }
+}
+
+views {
+  palette N_RAMP {
+    stop 0 color [22, 28, 22]
+    stop 1 color [120, 230, 110]
+  }
+
+  palette P_RAMP {
+    stop 0 color [28, 22, 22]
+    stop 1 color [240, 110, 80]
+  }
+
+  view composite "N + P composite" {
+    color expr {
+      let n  = clamp(N, 0, 2.5)
+      let p  = clamp(P, 0, 2.5)
+      let ng = clamp(n * 0.8, 0, 1)
+      let pg = clamp(p * 1.2, 0, 1)
+      set red   = 40 + pg * 215
+      set green = 28 + ng * 200 - pg * 30
+      set blue  = 34 + ng * 60
+    }
+  }
+
+  view N "Prey (N)" {
+    color ramp N range [0, 1] palette N_RAMP
+  }
+
+  view P "Predator (P)" {
+    color ramp P range [0, 0.667] palette P_RAMP
+  }
+}
+
+stamps {
+  stamp seedPrey "Seed prey patch" {
+    spot N at brush.pos, radius=brush.r, amount=0.5
+  }
+
+  stamp seedPredator "Seed predator patch" {
+    spot P at brush.pos, radius=brush.r, amount=0.4
+  }
+
+  stamp cull "Cull both" {
+    spot N at brush.pos, radius=brush.r, amount=-1.5
+    spot P at brush.pos, radius=brush.r, amount=-1.5
+  }
+}
+
+scenarios {
+  scenario patches "Random patches" {
+    set N = 0
+    set P = 0
+    for each cell {
+      let seedN = cellRand(11)
+      when seedN > 0.4 {
+        set N = 0.5 + cellRand(13) * 0.3
+      }
+      let seedP = cellRand(17)
+      when seedP > 0.85 {
+        set P = 0.4
+      }
+    }
+  }
+
+  scenario preyOnly "Prey-only world" {
+    set N = 0.6
+    set P = 0
+  }
+
+  scenario front "Predator invasion front" {
+    set N = 0.7
+    set P = 0
+    spot P at lon=-2.5, lat=0, radius=0.18, amount=0.6
+  }
+
+  scenario equilibrium "Near interior equilibrium" {
+    for each cell {
+      set N = 0.25 + cellNoise(7, 1.4) * 0.05
+      set P = 0.18 + cellNoise(13, 1.4) * 0.04
     }
   }
 }

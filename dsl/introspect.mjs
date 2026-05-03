@@ -1,48 +1,15 @@
 // Lightweight DSL metadata extraction for editor/UI surfaces.
 
-import { parseV2 } from "./parse-v2.mjs";
+import { parseDslAst } from "./ast-v2.mjs";
 
 export function extractDslNames(source) {
-  try {
-    // parseV2 throws on incomplete recipes (no recipe/substrate/stage),
-    // which is exactly what the editor shows mid-edit. Wrap in try/catch
-    // and fall back to empty-name stubs so autocomplete doesn't crash
-    // while the user is typing.
-    const schema = parseV2(String(source ?? ""));
-    const fieldNames = (schema.fields ?? [])
-      .filter((decl) => decl?.kind !== "source")
-      .map((decl) => decl?.name)
-      .filter(Boolean);
-    const sourceNames = (schema.sources ?? [])
-      .map((decl) => decl?.name)
-      .filter(Boolean);
-    const parameterNames = (schema.parameters ?? [])
-      .map((decl) => decl?.name)
-      .filter(Boolean);
-    const constantNames = (schema.constants ?? [])
-      .map((decl) => decl?.name)
-      .filter(Boolean);
-    const planetNames = Object.keys(schema.planet ?? {});
-    return {
-      fields: unique(fieldNames),
-      sources: unique(sourceNames),
-      parameters: unique(parameterNames),
-      constants: unique(constantNames),
-      planet: unique(planetNames),
-      immutables: unique([...parameterNames, ...constantNames, ...planetNames]),
-    };
-  } catch {
-    return {
-      fields: [],
-      sources: [],
-      parameters: [],
-      constants: [],
-      planet: [],
-      immutables: [],
-    };
-  }
-}
-
-function unique(names) {
-  return [...new Set(names.map((name) => String(name ?? "").trim()).filter(Boolean))];
+  const names = parseDslAst(source).names;
+  return {
+    fields: names.fields,
+    sources: names.sources,
+    parameters: names.parameters,
+    constants: names.constants,
+    planet: names.planet,
+    immutables: names.immutables,
+  };
 }

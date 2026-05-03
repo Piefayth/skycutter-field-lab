@@ -119,9 +119,11 @@ recipe "S"
 substrate geodesic frequency 16
 field u: f32
 
-scenario droplet "Single droplet" {
-  set u = 0
-  spot u at lon=0, lat=0, radius=0.08, amount=1
+scenarios {
+  scenario droplet "Single droplet" {
+    set u = 0
+    spot u at lon=0, lat=0, radius=0.08, amount=1
+  }
 }
 
 step { stage s { reads u; writes u; cell { set u = u } } }
@@ -149,8 +151,10 @@ recipe "S"
 substrate geodesic frequency 16
 field u: f32
 
-stamp ripple "Drop ripple" {
-  spot u at brush.pos, radius=brush.r, amount=1
+stamps {
+  stamp ripple "Drop ripple" {
+    spot u at brush.pos, radius=brush.r, amount=1
+  }
 }
 
 step { stage s { reads u; writes u; cell { set u = u } } }
@@ -162,6 +166,66 @@ step { stage s { reads u; writes u; cell { set u = u } } }
   // brush.pos lowered to bare lon/lat identifiers (matches v1's stamp environment)
   assertEq(st.actions[0].lon, { type: "Identifier", name: "lon" });
   assertEq(st.actions[0].lat, { type: "Identifier", name: "lat" });
+});
+
+test("grouped views, stamps, and scenarios sections", () => {
+  const out = parseV2(`
+recipe "Sections"
+substrate geodesic frequency 16
+field u: f32
+
+views {
+  palette MONO {
+    stop 0 color [0, 0, 0]
+    stop 1 color [255, 255, 255]
+  }
+  view u "U" {
+    color ramp u palette MONO
+  }
+}
+
+stamps {
+  stamp pulse {
+    spot u at brush.pos, radius=brush.r, amount=1
+  }
+}
+
+scenarios {
+  scenario blank {
+    set u = 0
+  }
+}
+
+step { stage s { reads u; writes u; cell { set u = u } } }
+`);
+  assertEq(out.palettes.length, 1);
+  assertEq(out.views.length, 1);
+  assertEq(out.stamps.length, 1);
+  assertEq(out.presets.length, 1);
+});
+
+test("top-level view/stamp/scenario blocks are rejected", () => {
+  for (const [source, message] of [
+    [`view u "U" { color wheel u }`, "`view` blocks must live inside `views"],
+    [`palette P { stop 0 color [0,0,0] stop 1 color [1,1,1] }`, "`palette` blocks must live inside `views"],
+    [`overlay grid`, "`overlay` declarations must live inside `views"],
+    [`stamp paint { spot u at brush.pos, radius=brush.r, amount=1 }`, "`stamp` blocks must live inside `stamps"],
+    [`scenario init { set u = 0 }`, "`scenario` blocks must live inside `scenarios"],
+  ]) {
+    let threw = "";
+    try {
+      parseV2(`
+recipe "Reject"
+substrate geodesic frequency 16
+field u: f32
+${source}
+step { stage s { reads u; writes u; cell { set u = u } } }
+`);
+    } catch (error) {
+      threw = error.message;
+    }
+    assert(threw.includes(message), `expected ${message}, got ${threw}`);
+  }
 });
 
 // -----------------------------------------------------------------------------
@@ -327,13 +391,17 @@ field u: f32
 param speed   slider 0..0.29 default 0.25 label "WAVE SPEED"
 param damping slider 0..0.05 default 0    label "DAMPING γ"
 
-scenario droplet "Single droplet" {
-  set u = 0
-  spot u at lon=0, lat=0, radius=0.08, amount=1
+stamps {
+  stamp ripple "Drop ripple" {
+    spot u at brush.pos, radius=brush.r, amount=1
+  }
 }
 
-stamp ripple "Drop ripple" {
-  spot u at brush.pos, radius=brush.r, amount=1
+scenarios {
+  scenario droplet "Single droplet" {
+    set u = 0
+    spot u at lon=0, lat=0, radius=0.08, amount=1
+  }
 }
 
 step {

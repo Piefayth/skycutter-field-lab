@@ -57,72 +57,12 @@ field w: f32
 // scenario; the advect primitive reads it directly.
 field slope: vec2
 
-palette N_RAMP {
-  stop 0 color [22, 32, 22]
-  stop 1 color [120, 200, 80]
-}
-
-palette W_RAMP {
-  stop 0 color [80, 60, 40]
-  stop 1 color [60, 140, 220]
-}
-
-view n "Biomass (n)" {
-  color ramp n range [0, 0.6] palette N_RAMP
-}
-
-view w "Water (w)" {
-  color ramp w range [0, 0.5] palette W_RAMP
-}
-
 param simRateHz slider 0..360   step 1     default 60   label "SIM RATE"
 param rainfall  slider 0..4     step 0.01  default 1.80 label "RAINFALL a"
 param mortality slider 0..1     step 0.005 default 0.45 label "MORTALITY m"
 param flowSpeed slider 0..200   step 1     default 80   label "FLOW SPEED v"
 param diffusion slider 0..4     step 0.01  default 0.50 label "DIFFUSION D"
 param rate      slider 1..100   step 1     default 30   label "RATE"
-
-stamp seed "Plant patch" {
-  spot n at brush.pos, radius=brush.r, amount=0.4
-}
-
-stamp clearcut "Clear-cut" {
-  spot n at brush.pos, radius=brush.r, amount=-1
-}
-
-stamp irrigate "Add water" {
-  spot w at brush.pos, radius=brush.r, amount=1
-}
-
-scenario bands "Tiger-bush bands" {
-  set slope = vec2(1, 0)
-  set w = 1
-  set n = 0
-  for each cell {
-    when cellRand(7) > 0.65 {
-      set n = 0.4
-    }
-  }
-}
-
-scenario spots "Turing spots (no slope)" {
-  set slope = vec2(0, 0)
-  set w = 1
-  for each cell {
-    set n = cellRand(11) * 0.15 + 0.05
-  }
-}
-
-scenario desertEdge "Edge of vegetation" {
-  set slope = vec2(1, 0)
-  set w = 1
-  set n = 0
-  for each cell {
-    when cellRand(13) > 0.92 {
-      set n = 0.3
-    }
-  }
-}
 
 step {
   // Water flows downhill along the slope vec2. \`@upstream(velX, velY, dt)\`
@@ -163,6 +103,72 @@ step {
     cell {
       set n = clamp(n, 0, 4)
       set w = clamp(w, 0, 6)
+    }
+  }
+}
+
+views {
+  palette N_RAMP {
+    stop 0 color [22, 32, 22]
+    stop 1 color [120, 200, 80]
+  }
+
+  palette W_RAMP {
+    stop 0 color [80, 60, 40]
+    stop 1 color [60, 140, 220]
+  }
+
+  view n "Biomass (n)" {
+    color ramp n range [0, 0.6] palette N_RAMP
+  }
+
+  view w "Water (w)" {
+    color ramp w range [0, 0.5] palette W_RAMP
+  }
+}
+
+stamps {
+  stamp seed "Plant patch" {
+    spot n at brush.pos, radius=brush.r, amount=0.4
+  }
+
+  stamp clearcut "Clear-cut" {
+    spot n at brush.pos, radius=brush.r, amount=-1
+  }
+
+  stamp irrigate "Add water" {
+    spot w at brush.pos, radius=brush.r, amount=1
+  }
+}
+
+scenarios {
+  scenario bands "Tiger-bush bands" {
+    set slope = vec2(1, 0)
+    set w = 1
+    set n = 0
+    for each cell {
+      when cellRand(7) > 0.65 {
+        set n = 0.4
+      }
+    }
+  }
+
+  scenario spots "Turing spots (no slope)" {
+    set slope = vec2(0, 0)
+    set w = 1
+    for each cell {
+      set n = cellRand(11) * 0.15 + 0.05
+    }
+  }
+
+  scenario desertEdge "Edge of vegetation" {
+    set slope = vec2(1, 0)
+    set w = 1
+    set n = 0
+    for each cell {
+      when cellRand(13) > 0.92 {
+        set n = 0.3
+      }
     }
   }
 }

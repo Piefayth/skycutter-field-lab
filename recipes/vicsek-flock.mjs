@@ -71,24 +71,13 @@ field heading: vec2
 field dir: f32 derived       // atan2(heading.y, heading.x), for phase coloring
 field align: f32 derived     // |neighborhood-mean heading|, defect indicator
 
-palette ALIGN {
-  stop 0 color [12, 14, 28]
-  stop 1 color [220, 240, 255]
-}
-
 // Heading direction → color wheel. Defects appear where the wheel
 // wraps around a singularity (a topological vortex of order ±1). Two
 // adjacent cells with opposite phase colors = a defect line.
-view dir "Heading direction" {
-  color wheel dir
-}
 
 // Local alignment magnitude. 1 = neighbors all agree (interior of a
 // domain); 0 = neighbors cancel (a defect core). Defects show as dark
 // spots in an otherwise bright field.
-view align "Local alignment" {
-  color ramp align range [0, 0.833] palette ALIGN
-}
 
 // Single noise knob — Vicsek's order parameter is a function of η alone
 // at fixed density. The geodesic mesh fixes density, so noise is the
@@ -96,54 +85,6 @@ view align "Local alignment" {
 param noise     slider 0..1     step 0.005  default 0.15  label "NOISE η"
 param simRateHz slider 0..120   step 1      default 60    label "SIM RATE"
 param rate      slider 1..10    step 1      default 1     label "RATE"
-
-stamp swirl "Inject swirl" {
-  // Adds a ±1 vortex worth of heading at the brush position by
-  // rotating the existing heading 90° within a Gaussian footprint.
-  // The runtime adds the stamped vec2 to the existing field; the
-  // alignment stage will then renormalize to unit-length next tick.
-  spot heading at brush.pos, radius=brush.r, amount=vec2(0, 1)
-}
-
-stamp counterswirl "Inject counter-swirl" {
-  spot heading at brush.pos, radius=brush.r, amount=vec2(0, -1)
-}
-
-scenario random "Random heading per cell (default)" {
-  for each cell {
-    // cellRand returns [-1, 1]; scale to [-π, π] for full angle range.
-    let theta = cellRand(7) * PI
-    set heading = vec2(cos(theta), sin(theta))
-  }
-}
-
-scenario zonal "Eastward initial flow" {
-  // All cells start aligned to the east. Should remain perfectly
-  // aligned if NOISE is zero, slowly randomize as NOISE rises.
-  set heading = vec2(1, 0)
-}
-
-scenario stripes "Striped initial alignment" {
-  // Alternating bands of east/west by latitude. The boundaries
-  // between stripes are domain walls that the alignment dynamics
-  // either heal (low noise) or thicken into chaos (high noise).
-  for each cell {
-    let theta = sin(lat * 4) * PI * 0.5
-    set heading = vec2(cos(theta), sin(theta))
-  }
-}
-
-scenario antipodes "Two source points" {
-  // Two regions of strong eastward flow at antipodes. The
-  // intervening regions start random; watch the eastward domains
-  // grow and meet.
-  for each cell {
-    let theta = cellRand(13) * PI
-    set heading = vec2(cos(theta), sin(theta))
-  }
-  spot heading at lon=-PI/2, lat=0.3, radius=0.4, amount=vec2(2, 0)
-  spot heading at lon=PI/2,  lat=-0.3, radius=0.4, amount=vec2(2, 0)
-}
 
 step {
   stage align "Align with neighbors + random kick" {
@@ -207,6 +148,73 @@ metric meanAlign = mean cells { align }
 // moderate noise the count fluctuates around a slowly-decaying
 // baseline as defects annihilate in pairs.
 metric defects = count cells where align < 0.5
+
+views {
+  palette ALIGN {
+    stop 0 color [12, 14, 28]
+    stop 1 color [220, 240, 255]
+  }
+
+  view dir "Heading direction" {
+    color wheel dir
+  }
+
+  view align "Local alignment" {
+    color ramp align range [0, 0.833] palette ALIGN
+  }
+}
+
+stamps {
+  stamp swirl "Inject swirl" {
+    // Adds a ±1 vortex worth of heading at the brush position by
+    // rotating the existing heading 90° within a Gaussian footprint.
+    // The runtime adds the stamped vec2 to the existing field; the
+    // alignment stage will then renormalize to unit-length next tick.
+    spot heading at brush.pos, radius=brush.r, amount=vec2(0, 1)
+  }
+
+  stamp counterswirl "Inject counter-swirl" {
+    spot heading at brush.pos, radius=brush.r, amount=vec2(0, -1)
+  }
+}
+
+scenarios {
+  scenario random "Random heading per cell (default)" {
+    for each cell {
+      // cellRand returns [-1, 1]; scale to [-π, π] for full angle range.
+      let theta = cellRand(7) * PI
+      set heading = vec2(cos(theta), sin(theta))
+    }
+  }
+
+  scenario zonal "Eastward initial flow" {
+    // All cells start aligned to the east. Should remain perfectly
+    // aligned if NOISE is zero, slowly randomize as NOISE rises.
+    set heading = vec2(1, 0)
+  }
+
+  scenario stripes "Striped initial alignment" {
+    // Alternating bands of east/west by latitude. The boundaries
+    // between stripes are domain walls that the alignment dynamics
+    // either heal (low noise) or thicken into chaos (high noise).
+    for each cell {
+      let theta = sin(lat * 4) * PI * 0.5
+      set heading = vec2(cos(theta), sin(theta))
+    }
+  }
+
+  scenario antipodes "Two source points" {
+    // Two regions of strong eastward flow at antipodes. The
+    // intervening regions start random; watch the eastward domains
+    // grow and meet.
+    for each cell {
+      let theta = cellRand(13) * PI
+      set heading = vec2(cos(theta), sin(theta))
+    }
+    spot heading at lon=-PI/2, lat=0.3, radius=0.4, amount=vec2(2, 0)
+    spot heading at lon=PI/2,  lat=-0.3, radius=0.4, amount=vec2(2, 0)
+  }
+}
 `;
 
 export const pipeline = compileV2(pipelineDsl);

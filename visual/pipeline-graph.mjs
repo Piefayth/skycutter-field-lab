@@ -38,7 +38,7 @@
 import { createEditorView } from "./editor-core.mjs";
 import { extractDslFieldNames, extractDslSourceNames, extractDslImmutableNames } from "./editor-fieldlab-lang.mjs";
 import { configureFieldColorPalette } from "./field-colors.mjs";
-import { extractTopLevelBlocks, findStageRange, splitPipelineDsl } from "./pipeline-dsl-split.mjs";
+import { findStageRange } from "./pipeline-dsl-ranges.mjs";
 import { buildGraphModel, computeDepths, orderColumns } from "./pipeline-graph-model.mjs";
 import {
   fieldAccent,
@@ -82,31 +82,26 @@ export function mountPipelineGraph(rootEl, api) {
 
   const dslTitle = document.createElement("div");
   dslTitle.className = "pg-dsl-pane__title";
-  dslTitle.textContent = "DSLS";
+  dslTitle.textContent = "DSL";
   dslHeader.appendChild(dslTitle);
 
   const dslStatus = document.createElement("div");
   dslStatus.className = "pg-dsl-pane__status";
   dslHeader.appendChild(dslStatus);
 
-  let activeDslSection = "pipeline";
-  let suppressDslToggle = false;
+  const dslCmHost = document.createElement("div");
+  dslCmHost.className = "pg-dsl-pane__cm";
+  dslPane.appendChild(dslCmHost);
 
-  const dslStack = document.createElement("div");
-  dslStack.className = "pg-dsl-stack";
-  dslStack.dataset.active = activeDslSection;
-  dslPane.appendChild(dslStack);
-
-  const pipelineDslSection = makeDslEditorSection("pipeline", "pipeline", { open: true });
-  const stampDslSection = makeDslEditorSection("stamps", "stamp");
-  // Section title is the v2 surface keyword "scenarios"; the kind
-  // tag stays "preset" because downstream code (split keys, count
-  // bindings, dom selectors) keys off that string.
-  const presetDslSection = makeDslEditorSection("scenarios", "preset");
-  // Render-config slice — palette + view blocks live here. Section
-  // count is total decl count (palettes + views).
-  const viewDslSection = makeDslEditorSection("views", "view");
-  dslStack.append(pipelineDslSection.root, viewDslSection.root, stampDslSection.root, presetDslSection.root);
+  const dslEditor = createEditorView({
+    parent: dslCmHost,
+    language: "fieldlab",
+    onApply: () => applyPipelineDsl(),
+    onDocChange: () => {
+      dslDirty = true;
+      validatePipelineDsl();
+    },
+  });
 
   const dslButtons = document.createElement("div");
   dslButtons.className = "pg-dsl-pane__buttons";
@@ -120,11 +115,6 @@ export function mountPipelineGraph(rootEl, api) {
   const dslDiagnostics = document.createElement("pre");
   dslDiagnostics.className = "pg-dsl-pane__diagnostics";
   dslPane.appendChild(dslDiagnostics);
-
-  const dslCmHost = pipelineDslSection.editorHost;
-  const dslEditor = pipelineDslSection.editor;
-  const dslSections = [pipelineDslSection, viewDslSection, stampDslSection, presetDslSection];
-  setupDslAccordion();
 
   // Draggable handle between the DSL pane and the graph. The
   // handle slot is a fixed-height grid row; the dsl row gets a
@@ -242,71 +232,6 @@ export function mountPipelineGraph(rootEl, api) {
     return button;
   }
 
-  function makeDslEditorSection(title, kind, { open = false } = {}) {
-    const root = document.createElement("details");
-    root.className = "pg-dsl-section";
-    root.dataset.dslSection = kind;
-    root.open = open;
-
-    const summary = document.createElement("summary");
-    summary.className = "pg-dsl-section__summary";
-    root.appendChild(summary);
-
-    const label = document.createElement("span");
-    label.className = "pg-dsl-section__title";
-    label.textContent = title;
-    summary.appendChild(label);
-
-    const count = document.createElement("span");
-    count.className = "pg-dsl-section__count";
-    summary.appendChild(count);
-
-    const editorHost = document.createElement("div");
-    editorHost.className = "pg-dsl-section__editor";
-    if (kind === "pipeline") editorHost.classList.add("pg-dsl-pane__cm");
-    root.appendChild(editorHost);
-
-    const editor = createEditorView({
-      parent: editorHost,
-      language: "fieldlab",
-      onApply: () => applyPipelineDsl(),
-      onDocChange: () => {
-        dslDirty = true;
-        validatePipelineDsl();
-      },
-    });
-
-    return { kind, root, count, editorHost, editor };
-  }
-
-  function setupDslAccordion() {
-    for (const section of dslSections) {
-      section.root.addEventListener("toggle", () => {
-        if (suppressDslToggle) return;
-        if (section.root.open) {
-          activateDslSection(section.kind);
-          return;
-        }
-        if (activeDslSection === section.kind) {
-          activateDslSection(section.kind);
-        }
-      });
-    }
-    activateDslSection(activeDslSection);
-  }
-
-  function activateDslSection(kind) {
-    activeDslSection = kind;
-    dslStack.dataset.active = kind;
-    suppressDslToggle = true;
-    for (const section of dslSections) {
-      section.root.open = section.kind === kind;
-    }
-    suppressDslToggle = false;
-    const active = dslSections.find((section) => section.kind === kind);
-    requestAnimationFrame(() => active?.editor.refreshLayout?.());
-  }
-
   function setupDslPaneResize() {
     const STORAGE_KEY = "fieldlab.pipelineGraph.dslHeightPx";
     const MIN_DSL = 96;
@@ -379,7 +304,7 @@ export function mountPipelineGraph(rootEl, api) {
     if (!dslDirty || text !== loadedDslSource) {
       loadedDslSource = text;
       dslDirty = false;
-      setSplitDslSource(text);
+      setDslSource(text);
       if (hasSource) {
         validatePipelineDsl();
       } else {
@@ -396,7 +321,6 @@ export function mountPipelineGraph(rootEl, api) {
     const source = composed.source;
     refreshDslFieldNames();
     dslCmHost.classList.toggle("pg-dsl-pane__cm--empty", !dslEditor.getSource());
-    updateDslExtractCounts();
     const result = diagnoseDsl(source);
     dslStatus.classList.toggle("is-error", !result.ok);
     if (result.ok) {
@@ -438,30 +362,23 @@ export function mountPipelineGraph(rootEl, api) {
   }
 
   function revertPipelineDsl() {
-    setSplitDslSource(loadedDslSource ?? "");
+    setDslSource(loadedDslSource ?? "");
     dslDirty = false;
     validatePipelineDsl();
   }
 
-  function setSplitDslSource(source) {
-    const split = splitPipelineDsl(source);
-    refreshDslFieldNames(split);
-    dslEditor.setSource(split.main);
-    viewDslSection.editor.setSource(split.views ?? "");
-    stampDslSection.editor.setSource(split.stamps);
-    presetDslSection.editor.setSource(split.presets);
-    updateDslExtractCounts();
+  function setDslSource(source) {
+    refreshDslFieldNames(source);
+    dslEditor.setSource(source ?? "");
   }
 
-  function refreshDslFieldNames(split = null) {
-    const source = split
-      ? `${split.main}\n${split.views ?? ""}\n${split.stamps}\n${split.presets}`
-      : composePipelineDsl();
+  function refreshDslFieldNames(source = null) {
+    source = source ?? composePipelineDsl();
     const names = extractDslFieldNames(source);
     const sources = extractDslSourceNames(source);
     const immutables = extractDslImmutableNames(source);
     configureFieldColorPalette(names);
-    for (const section of dslSections) section.editor.setFieldNames?.(names, sources, immutables);
+    dslEditor.setFieldNames?.(names, sources, immutables);
   }
 
   function composePipelineDsl() {
@@ -469,43 +386,29 @@ export function mountPipelineGraph(rootEl, api) {
   }
 
   function composePipelineDslWithOffsets() {
-    // Order matters for human readability of saved/exported DSL but
-    // not for the parser (top-level decls are order-agnostic).
-    // Render config (palettes + views) is grouped right after the
-    // main pipeline body; stamps/scenarios trail.
-    const rawParts = [
-      { kind: "pipeline", editor: dslEditor, source: dslEditor.getSource() },
-      { kind: "view", editor: viewDslSection.editor, source: viewDslSection.editor.getSource() },
-      { kind: "stamps", editor: stampDslSection.editor, source: stampDslSection.editor.getSource() },
-      { kind: "presets", editor: presetDslSection.editor, source: presetDslSection.editor.getSource() },
-    ].filter((part) => part.source.trim().length > 0);
-    let source = "";
-    const parts = [];
-    for (const part of rawParts) {
-      if (source.length > 0) source += "\n\n";
-      const from = source.length;
-      source += part.source;
-      parts.push({ ...part, from, to: from + part.source.length });
-    }
-    return { source, parts };
+    const source = dslEditor.getSource();
+    return {
+      source,
+      parts: [{ kind: "dsl", editor: dslEditor, source, from: 0, to: source.length }],
+    };
   }
 
   function applyEditorDiagnostics(errors = [], parts = composePipelineDslWithOffsets().parts) {
-    const byEditor = new Map(dslSections.map((section) => [section.editor, []]));
+    const diagnostics = [];
     for (const error of errors) {
       const part = findDiagnosticPart(error, parts) ?? parts[0];
       if (!part) continue;
       const docLength = part.editor.getSource().length;
       const from = clampNumber(Number.isFinite(error.from) ? error.from - part.from : 0, 0, Math.max(0, docLength));
       const to = clampNumber(Number.isFinite(error.to) ? error.to - part.from : from + 1, from + 1, Math.max(from + 1, docLength));
-      byEditor.get(part.editor)?.push({
+      diagnostics.push({
         from,
         to,
         severity: error.severity ?? "error",
         message: error.message,
       });
     }
-    for (const [editor, diagnostics] of byEditor) editor.setDiagnostics?.(diagnostics);
+    dslEditor.setDiagnostics?.(diagnostics);
   }
 
   function findDiagnosticPart(error, parts) {
@@ -518,22 +421,6 @@ export function mountPipelineGraph(rootEl, api) {
       ? `${error.line}:${error.column}: `
       : "";
     return `error: ${where}${error.message}`;
-  }
-
-  function updateDslExtractCounts() {
-    pipelineDslSection.count.textContent = `${extractTopLevelBlocks(dslEditor.getSource(), "stage").length}`;
-    stampDslSection.count.textContent = `${extractTopLevelBlocks(stampDslSection.editor.getSource(), "stamp").length}`;
-    // Count both v2 `scenario` and any leftover v1 `preset` blocks
-    // so the badge stays accurate after the keyword rename.
-    const scenarioCount = extractTopLevelBlocks(presetDslSection.editor.getSource(), "scenario").length;
-    const presetCount = extractTopLevelBlocks(presetDslSection.editor.getSource(), "preset").length;
-    presetDslSection.count.textContent = `${scenarioCount + presetCount}`;
-    // Views badge counts palettes + views together — both live in
-    // this slice and both contribute to the recipe's render config.
-    const viewSrc = viewDslSection.editor.getSource();
-    const paletteCount = extractTopLevelBlocks(viewSrc, "palette").length;
-    const viewCount = extractTopLevelBlocks(viewSrc, "view").length;
-    viewDslSection.count.textContent = `${paletteCount + viewCount}`;
   }
 
   dslApplyBtn.addEventListener("click", applyPipelineDsl);

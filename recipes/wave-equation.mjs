@@ -51,18 +51,6 @@ field u: f32
 // wavefront reads as a sharp line. Asymmetric saturation: small
 // amplitudes already pop, large ones don't blow out to pure white.
 // Stop t-values normalized into [0, 1] across the chosen range [-1, 1].
-palette WAVE {
-  stop 0.000 color [40, 90, 200]
-  stop 0.350 color [120, 170, 230]
-  stop 0.475 color [240, 240, 240]
-  stop 0.525 color [240, 240, 240]
-  stop 0.650 color [240, 160, 110]
-  stop 1.000 color [200, 50, 30]
-}
-
-view u "Amplitude (u)" {
-  color ramp u range [-1, 1] palette WAVE
-}
 
 // Effective wave speed coefficient. Per-tick update for a wavefront
 // at a sharp gradient is ~ speed² · neighbor-count, so this also
@@ -75,49 +63,6 @@ param speed   slider 0..0.29 step 0.005 default 0.25 label "WAVE SPEED"
 // the system feel like a viscous medium — like ringing a struck bell
 // underwater.
 param damping slider 0..0.05 step 0.001 default 0    label "DAMPING γ"
-
-stamp ripple "Drop ripple" {
-  // A pulse on u; prev(u) is unchanged (paint never mirrors to prev),
-  // so the asymmetry between current and prev creates an outgoing
-  // wave with launch velocity equal to the stamp amplitude.
-  spot u at brush.pos, radius=brush.r, amount=1
-}
-
-stamp lift "Lift surface" {
-  // Smaller bump, broader area — gentler wavetrain.
-  spot u at brush.pos, radius=brush.r * 1.6, amount=0.4
-}
-
-stamp dampen "Quiet zone" {
-  // Negative spot — pushes the medium toward zero locally.
-  spot u at brush.pos, radius=brush.r, amount=-1
-}
-
-scenario still "Still surface" {
-  set u = 0
-}
-
-scenario droplet "Single droplet" {
-  set u = 0
-  spot u at lon=0, lat=0, radius=0.08, amount=1
-}
-
-scenario twoStones "Two pebbles" {
-  // Two drops at antipodes — wave fronts will meet at the equator.
-  set u = 0
-  spot u at lon=-PI/2, lat=0.4,  radius=0.06, amount=1
-  spot u at lon= PI/2, lat=-0.4, radius=0.06, amount=1
-}
-
-scenario standing "Standing wave seed" {
-  // cos(2·lon) pattern. With zero initial velocity (prev = current
-  // after init), this splits into two counter-rotating travelling
-  // waves whose superposition oscillates.
-  set u = 0
-  for each cell {
-    set u = cos(lon * 2) * 0.6
-  }
-}
 
 step {
   stage propagate "Leapfrog wave step" {
@@ -144,6 +89,68 @@ step {
 // The post-step state (final u after history rotation) is what reduces.
 metric peak   = max cells { abs(u) }
 metric active = count cells where abs(u) > 0.1
+
+views {
+  palette WAVE {
+    stop 0.000 color [40, 90, 200]
+    stop 0.350 color [120, 170, 230]
+    stop 0.475 color [240, 240, 240]
+    stop 0.525 color [240, 240, 240]
+    stop 0.650 color [240, 160, 110]
+    stop 1.000 color [200, 50, 30]
+  }
+
+  view u "Amplitude (u)" {
+    color ramp u range [-1, 1] palette WAVE
+  }
+}
+
+stamps {
+  stamp ripple "Drop ripple" {
+    // A pulse on u; prev(u) is unchanged (paint never mirrors to prev),
+    // so the asymmetry between current and prev creates an outgoing
+    // wave with launch velocity equal to the stamp amplitude.
+    spot u at brush.pos, radius=brush.r, amount=1
+  }
+
+  stamp lift "Lift surface" {
+    // Smaller bump, broader area — gentler wavetrain.
+    spot u at brush.pos, radius=brush.r * 1.6, amount=0.4
+  }
+
+  stamp dampen "Quiet zone" {
+    // Negative spot — pushes the medium toward zero locally.
+    spot u at brush.pos, radius=brush.r, amount=-1
+  }
+}
+
+scenarios {
+  scenario still "Still surface" {
+    set u = 0
+  }
+
+  scenario droplet "Single droplet" {
+    set u = 0
+    spot u at lon=0, lat=0, radius=0.08, amount=1
+  }
+
+  scenario twoStones "Two pebbles" {
+    // Two drops at antipodes — wave fronts will meet at the equator.
+    set u = 0
+    spot u at lon=-PI/2, lat=0.4,  radius=0.06, amount=1
+    spot u at lon= PI/2, lat=-0.4, radius=0.06, amount=1
+  }
+
+  scenario standing "Standing wave seed" {
+    // cos(2·lon) pattern. With zero initial velocity (prev = current
+    // after init), this splits into two counter-rotating travelling
+    // waves whose superposition oscillates.
+    set u = 0
+    for each cell {
+      set u = cos(lon * 2) * 0.6
+    }
+  }
+}
 `;
 
 export const pipeline = compileV2(pipelineDsl);

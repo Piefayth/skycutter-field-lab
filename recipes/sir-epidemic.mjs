@@ -59,53 +59,6 @@ field R: f32
 //   I = [255,  85,  35]
 //   R = [ 36,  50,  85]
 
-palette I_RAMP {
-  stop 0 color [12, 12, 22]
-  stop 1 color [255, 110, 50]
-}
-
-palette R_RAMP {
-  stop 0 color [16, 22, 28]
-  stop 1 color [120, 200, 240]
-}
-
-palette S_RAMP {
-  stop 0 color [0, 0, 0]
-  stop 1 color [255, 255, 255]
-}
-
-view composite "S / I / R" {
-  color expr {
-    let total     = max(S + I + R, 0.000001)
-    let ws        = S / total
-    let wi        = I / total
-    let wr        = R / total
-    // Boost the Infected contribution — even a 5% I share saturates
-    // the orange channel, so the wavefront stays visible against the
-    // surrounding S+R blend.
-    let iBoost    = clamp(wi * 6, 0, 1)
-    let remaining = 1 - iBoost
-    let srSum     = max(ws + wr, 0.000001)
-    let sw        = ws / srSum * remaining
-    let rw        = wr / srSum * remaining
-    set red   = 248 * sw + 255 * iBoost + 36 * rw
-    set green = 232 * sw + 85  * iBoost + 50 * rw
-    set blue  = 175 * sw + 35  * iBoost + 85 * rw
-  }
-}
-
-view I "Infected (I)" {
-  color ramp I range [0, 1.5] palette I_RAMP
-}
-
-view R "Recovered (R)" {
-  color ramp R range [0, 1] palette R_RAMP
-}
-
-view S "Susceptible (S)" {
-  color ramp S range [0, 1] palette S_RAMP
-}
-
 param simRateHz slider 0..360 step 1 default 60 label "SIM RATE"
 // Infection rate per S·I contact. Together with gamma sets R0 = β/γ.
 // Default 1.4 gives R0 = 4 — moderate epidemic, visible but stable.
@@ -125,58 +78,6 @@ param immigration slider 0..0.001 step 0.000005 default 0.00002 label "IMMIGRATE
 // Time scaling. Effective dt per tick = (1/60)·rate. Keep \`β·dt·rate\`
 // well below 1 for stable wavefronts.
 param rate        slider 1..100   step 1        default 12      label "RATE"
-
-stamp seed "Plant outbreak" {
-  spot I at brush.pos, radius=brush.r, amount=0.4
-  spot S at brush.pos, radius=brush.r, amount=-0.3
-}
-
-stamp vaccinate "Vaccinate region" {
-  spot R at brush.pos, radius=brush.r, amount=0.6
-  spot S at brush.pos, radius=brush.r, amount=-0.6
-}
-
-stamp barrier "Recovered firewall" {
-  spot R at brush.pos, radius=brush.r * 0.5, amount=0.85
-  spot S at brush.pos, radius=brush.r * 0.5, amount=-0.85
-}
-
-scenario patientZero "Single seed" {
-  set S = 0.95
-  set I = 0
-  set R = 0
-  spot I at lon=0, lat=0, radius=0.08, amount=0.4
-  spot S at lon=0, lat=0, radius=0.08, amount=-0.3
-}
-
-scenario multiSeed "Three seeds" {
-  set S = 0.95
-  set I = 0
-  set R = 0
-  spot I at lon=-1.5, lat=0.4,  radius=0.08, amount=0.4
-  spot S at lon=-1.5, lat=0.4,  radius=0.08, amount=-0.3
-  spot I at lon=1.5,  lat=-0.4, radius=0.08, amount=0.4
-  spot S at lon=1.5,  lat=-0.4, radius=0.08, amount=-0.3
-  spot I at lon=0,    lat=1.0,  radius=0.08, amount=0.4
-  spot S at lon=0,    lat=1.0,  radius=0.08, amount=-0.3
-}
-
-scenario preVaccinated "Partial herd immunity" {
-  set I = 0
-  for each cell {
-    let immune = cellNoise(11, 1.5) * 0.5 + 0.5
-    when immune > 0.5 {
-      set R = 0.7
-      set S = 0.3
-    }
-    when immune <= 0.5 {
-      set R = 0
-      set S = 1
-    }
-  }
-  spot I at lon=0, lat=0, radius=0.08, amount=0.4
-  spot S at lon=0, lat=0, radius=0.08, amount=-0.3
-}
 
 step {
   stage spread "Spatial mobility of infected" {
@@ -209,6 +110,111 @@ step {
       set I = clamp(I, 0, 1)
       set R = clamp(R, 0, 1)
     }
+  }
+}
+
+views {
+  palette I_RAMP {
+    stop 0 color [12, 12, 22]
+    stop 1 color [255, 110, 50]
+  }
+
+  palette R_RAMP {
+    stop 0 color [16, 22, 28]
+    stop 1 color [120, 200, 240]
+  }
+
+  palette S_RAMP {
+    stop 0 color [0, 0, 0]
+    stop 1 color [255, 255, 255]
+  }
+
+  view composite "S / I / R" {
+    color expr {
+      let total     = max(S + I + R, 0.000001)
+      let ws        = S / total
+      let wi        = I / total
+      let wr        = R / total
+      // Boost the Infected contribution — even a 5% I share saturates
+      // the orange channel, so the wavefront stays visible against the
+      // surrounding S+R blend.
+      let iBoost    = clamp(wi * 6, 0, 1)
+      let remaining = 1 - iBoost
+      let srSum     = max(ws + wr, 0.000001)
+      let sw        = ws / srSum * remaining
+      let rw        = wr / srSum * remaining
+      set red   = 248 * sw + 255 * iBoost + 36 * rw
+      set green = 232 * sw + 85  * iBoost + 50 * rw
+      set blue  = 175 * sw + 35  * iBoost + 85 * rw
+    }
+  }
+
+  view I "Infected (I)" {
+    color ramp I range [0, 1.5] palette I_RAMP
+  }
+
+  view R "Recovered (R)" {
+    color ramp R range [0, 1] palette R_RAMP
+  }
+
+  view S "Susceptible (S)" {
+    color ramp S range [0, 1] palette S_RAMP
+  }
+}
+
+stamps {
+  stamp seed "Plant outbreak" {
+    spot I at brush.pos, radius=brush.r, amount=0.4
+    spot S at brush.pos, radius=brush.r, amount=-0.3
+  }
+
+  stamp vaccinate "Vaccinate region" {
+    spot R at brush.pos, radius=brush.r, amount=0.6
+    spot S at brush.pos, radius=brush.r, amount=-0.6
+  }
+
+  stamp barrier "Recovered firewall" {
+    spot R at brush.pos, radius=brush.r * 0.5, amount=0.85
+    spot S at brush.pos, radius=brush.r * 0.5, amount=-0.85
+  }
+}
+
+scenarios {
+  scenario patientZero "Single seed" {
+    set S = 0.95
+    set I = 0
+    set R = 0
+    spot I at lon=0, lat=0, radius=0.08, amount=0.4
+    spot S at lon=0, lat=0, radius=0.08, amount=-0.3
+  }
+
+  scenario multiSeed "Three seeds" {
+    set S = 0.95
+    set I = 0
+    set R = 0
+    spot I at lon=-1.5, lat=0.4,  radius=0.08, amount=0.4
+    spot S at lon=-1.5, lat=0.4,  radius=0.08, amount=-0.3
+    spot I at lon=1.5,  lat=-0.4, radius=0.08, amount=0.4
+    spot S at lon=1.5,  lat=-0.4, radius=0.08, amount=-0.3
+    spot I at lon=0,    lat=1.0,  radius=0.08, amount=0.4
+    spot S at lon=0,    lat=1.0,  radius=0.08, amount=-0.3
+  }
+
+  scenario preVaccinated "Partial herd immunity" {
+    set I = 0
+    for each cell {
+      let immune = cellNoise(11, 1.5) * 0.5 + 0.5
+      when immune > 0.5 {
+        set R = 0.7
+        set S = 0.3
+      }
+      when immune <= 0.5 {
+        set R = 0
+        set S = 1
+      }
+    }
+    spot I at lon=0, lat=0, radius=0.08, amount=0.4
+    spot S at lon=0, lat=0, radius=0.08, amount=-0.3
   }
 }
 `;

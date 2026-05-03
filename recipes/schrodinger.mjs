@@ -95,40 +95,18 @@ field V: f32                   // Potential V(x), paintable
 field prob: f32 derived        // |ψ|² for visualization
 field phase: f32 derived       // arg(ψ) for the phase colorer
 
-palette PROB {
-  stop 0 color [4, 6, 16]
-  stop 1 color [255, 220, 90]
-}
-
-palette DIVERGE {
-  stop 0 color [40, 100, 240]
-  stop 1 color [235, 76, 70]
-}
-
 // |ψ|² — standard quantum probability density. Black where the
 // particle isn't, bright where it is.
-view prob "Probability |ψ|²" {
-  color ramp prob range [0, 0.2] palette PROB
-}
 
 // arg(ψ) — color wheel. The richest visualization: a dispersing
 // wavepacket fills with rapid color rotations, two wavepackets
 // meeting trace clear hyperbolic interference fringes.
-view phase "Phase arg(ψ)" {
-  color wheel phase
-}
 
 // Re(ψ) directly — signed, so use the diverging palette. Reads like
 // the amplitude of a real wave; the carrier oscillation is visible
 // as it traverses the sphere.
-view re "Re(ψ)" {
-  color ramp re range [-0.667, 0.667] palette DIVERGE
-}
 
 // V(x) — paintable potential. Wells appear blue, barriers red.
-view V "Potential V(x)" {
-  color ramp V range [-0.2, 0.2] palette DIVERGE
-}
 
 // CFL: the leapfrog step is stable when K·Δt·max_eig(∇²) < 2. With
 // the graph Laplacian's max eigenvalue ≈ 12 and Δt = (1/60)·rate at
@@ -147,87 +125,6 @@ param damping   slider 0..0.02 step 0.0005 default 0.001  label "DAMPING"
 param k0        slider 0..40   step 1      default 12     label "INITIAL k"
 param simRateHz slider 0..120  step 1      default 60     label "SIM RATE"
 param rate      slider 1..10   step 1      default 4      label "RATE"
-
-stamp packetStamp "Wavepacket (no momentum)" {
-  // Drop a Gaussian bump in re. Spreads outward immediately
-  // (zero-momentum packets disperse fastest because every
-  // wavevector contributes equally to the spreading rate).
-  spot re at brush.pos, radius=brush.r, amount=1
-}
-
-stamp well "Potential well" {
-  // Negative V — attractive. The wave gets trapped, oscillating
-  // in place at the well's bound-state frequency.
-  spot V at brush.pos, radius=brush.r, amount=-3
-}
-
-stamp barrier "Potential barrier" {
-  // Positive V — repulsive. The wave reflects off the wall,
-  // some leaks through (quantum tunneling). The reflection picks
-  // up a phase shift visible in the phase view.
-  spot V at brush.pos, radius=brush.r, amount=3
-}
-
-stamp clearV "Clear potential" {
-  spot V at brush.pos, radius=brush.r, amount=-1000
-}
-
-scenario packet "Eastward Gaussian wavepacket" {
-  // ψ(x) = exp(-r²/(2σ²)) · exp(i·k·lon)
-  // Real and imaginary parts encode position localization × plane-
-  // wave momentum. The packet starts off-center so its travel is
-  // visually obvious: it propagates eastward at group velocity
-  // proportional to k, dispersing as it goes.
-  set re = 0
-  set im = 0
-  set V = 0
-  for each cell {
-    let dlon = lon - 0.6
-    let dlat = lat
-    let r2 = dlon*dlon + dlat*dlat
-    let env = exp(-r2 / 0.04)
-    let theta = lon * k0
-    set re = env * cos(theta)
-    set im = env * sin(theta)
-  }
-}
-
-scenario doubleSlit "Two packets meeting" {
-  // Antipodal release — packets travel toward each other and
-  // collide at the equator. The collision is a clean two-source
-  // interference pattern.
-  set re = 0
-  set im = 0
-  set V = 0
-  for each cell {
-    let env1 = exp(-(((lon + 1.2)*(lon + 1.2)) + lat*lat) / 0.04)
-    let env2 = exp(-(((lon - 1.2)*(lon - 1.2)) + lat*lat) / 0.04)
-    let theta1 = lon * k0
-    let theta2 = lon * (-k0)
-    set re = env1 * cos(theta1) + env2 * cos(theta2)
-    set im = env1 * sin(theta1) + env2 * sin(theta2)
-  }
-}
-
-scenario eigenmode "Standing wave (eigenmode-like)" {
-  // cos(2·lat) initial real part with zero imaginary. A standing
-  // wave that oscillates in place rather than traveling — the
-  // ‖ψ‖² is constant in time, only the phase rotates uniformly.
-  set re = 0
-  set im = 0
-  set V = 0
-  for each cell {
-    set re = cos(lat * 4) * 0.5
-  }
-}
-
-scenario quietGround "Flat low-amplitude background" {
-  // Tiny uniform amplitude — useful for seeing how the WELL stamp
-  // localizes the wavefunction from a near-zero ground state.
-  set re = 0.05
-  set im = 0
-  set V = 0
-}
 
 step {
   // Stage 1 — Real part update.
@@ -295,6 +192,119 @@ metric norm   = sum  cells { prob }
 metric vPot   = sum  cells { V * prob }
 metric peak   = max  cells { prob }
 metric spread = mean cells { prob }
+
+views {
+  palette PROB {
+    stop 0 color [4, 6, 16]
+    stop 1 color [255, 220, 90]
+  }
+
+  palette DIVERGE {
+    stop 0 color [40, 100, 240]
+    stop 1 color [235, 76, 70]
+  }
+
+  view prob "Probability |ψ|²" {
+    color ramp prob range [0, 0.2] palette PROB
+  }
+
+  view phase "Phase arg(ψ)" {
+    color wheel phase
+  }
+
+  view re "Re(ψ)" {
+    color ramp re range [-0.667, 0.667] palette DIVERGE
+  }
+
+  view V "Potential V(x)" {
+    color ramp V range [-0.2, 0.2] palette DIVERGE
+  }
+}
+
+stamps {
+  stamp packetStamp "Wavepacket (no momentum)" {
+    // Drop a Gaussian bump in re. Spreads outward immediately
+    // (zero-momentum packets disperse fastest because every
+    // wavevector contributes equally to the spreading rate).
+    spot re at brush.pos, radius=brush.r, amount=1
+  }
+
+  stamp well "Potential well" {
+    // Negative V — attractive. The wave gets trapped, oscillating
+    // in place at the well's bound-state frequency.
+    spot V at brush.pos, radius=brush.r, amount=-3
+  }
+
+  stamp barrier "Potential barrier" {
+    // Positive V — repulsive. The wave reflects off the wall,
+    // some leaks through (quantum tunneling). The reflection picks
+    // up a phase shift visible in the phase view.
+    spot V at brush.pos, radius=brush.r, amount=3
+  }
+
+  stamp clearV "Clear potential" {
+    spot V at brush.pos, radius=brush.r, amount=-1000
+  }
+}
+
+scenarios {
+  scenario packet "Eastward Gaussian wavepacket" {
+    // ψ(x) = exp(-r²/(2σ²)) · exp(i·k·lon)
+    // Real and imaginary parts encode position localization × plane-
+    // wave momentum. The packet starts off-center so its travel is
+    // visually obvious: it propagates eastward at group velocity
+    // proportional to k, dispersing as it goes.
+    set re = 0
+    set im = 0
+    set V = 0
+    for each cell {
+      let dlon = lon - 0.6
+      let dlat = lat
+      let r2 = dlon*dlon + dlat*dlat
+      let env = exp(-r2 / 0.04)
+      let theta = lon * k0
+      set re = env * cos(theta)
+      set im = env * sin(theta)
+    }
+  }
+
+  scenario doubleSlit "Two packets meeting" {
+    // Antipodal release — packets travel toward each other and
+    // collide at the equator. The collision is a clean two-source
+    // interference pattern.
+    set re = 0
+    set im = 0
+    set V = 0
+    for each cell {
+      let env1 = exp(-(((lon + 1.2)*(lon + 1.2)) + lat*lat) / 0.04)
+      let env2 = exp(-(((lon - 1.2)*(lon - 1.2)) + lat*lat) / 0.04)
+      let theta1 = lon * k0
+      let theta2 = lon * (-k0)
+      set re = env1 * cos(theta1) + env2 * cos(theta2)
+      set im = env1 * sin(theta1) + env2 * sin(theta2)
+    }
+  }
+
+  scenario eigenmode "Standing wave (eigenmode-like)" {
+    // cos(2·lat) initial real part with zero imaginary. A standing
+    // wave that oscillates in place rather than traveling — the
+    // ‖ψ‖² is constant in time, only the phase rotates uniformly.
+    set re = 0
+    set im = 0
+    set V = 0
+    for each cell {
+      set re = cos(lat * 4) * 0.5
+    }
+  }
+
+  scenario quietGround "Flat low-amplitude background" {
+    // Tiny uniform amplitude — useful for seeing how the WELL stamp
+    // localizes the wavefunction from a near-zero ground state.
+    set re = 0.05
+    set im = 0
+    set V = 0
+  }
+}
 `;
 
 export const pipeline = compileV2(pipelineDsl);

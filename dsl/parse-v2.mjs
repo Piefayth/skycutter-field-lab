@@ -8,7 +8,9 @@
 // v2 surface in one breath:
 //   - `substrate geodesic frequency N`
 //   - `field u: f32 [derived]` (typed, with optional derived annotation)
-//   - `scenario id "..." { ... }`
+//   - `scenarios { scenario id "..." { ... } }`
+//   - `stamps { stamp id "..." { ... } }`
+//   - `views { palette ... view ... overlay ... }`
 //   - `step { stages... }` wrapper around stages
 //   - exactly one `cell { }` per stage (no multi-block, no `each`/`event`)
 //   - `u@prev` / `u@n` / `u@upstream(velX, velY, dt)` coordinate queries
@@ -58,13 +60,22 @@ export function parseV2(source) {
       case "field":              fields.push(parseField(ctx)); break;
       case "param":              params.push(parseParam(ctx)); break;
       case "const":              constants.push(parseConst(ctx)); break;
-      case "scenario":           scenarios.push(parseScenario(ctx)); break;
-      case "stamp":              stamps.push(parseStamp(ctx)); break;
+      case "scenarios":          scenarios.push(...parseScenariosSection(ctx)); break;
+      case "scenario":           throw new Error("v2 parse: `scenario` blocks must live inside `scenarios { ... }`");
+      case "stamps":             stamps.push(...parseStampsSection(ctx)); break;
+      case "stamp":              throw new Error("v2 parse: `stamp` blocks must live inside `stamps { ... }`");
       case "step":               stages.push(...parseStep(ctx)); break;
       case "metric":             metrics.push(parseMetric(ctx)); break;
-      case "palette":            palettes.push(parsePalette(ctx)); break;
-      case "view":               views.push(parseView(ctx)); break;
-      case "overlay":            overlays.push(parseOverlay(ctx)); break;
+      case "views": {
+        const render = parseViewsSection(ctx);
+        palettes.push(...render.palettes);
+        views.push(...render.views);
+        overlays.push(...render.overlays);
+        break;
+      }
+      case "palette":            throw new Error("v2 parse: `palette` blocks must live inside `views { ... }`");
+      case "view":               throw new Error("v2 parse: `view` blocks must live inside `views { ... }`");
+      case "overlay":            throw new Error("v2 parse: `overlay` declarations must live inside `views { ... }`");
       case "import":             importedNames.push(...parseImport(ctx)); break;
       default:
         throw new Error(`v2 parse: unknown top-level keyword "${kw}"`);
@@ -107,6 +118,25 @@ export function parseV2(source) {
 // =============================================================================
 // Render DSL — palette / view / overlay
 // =============================================================================
+
+function parseViewsSection(ctx) {
+  consumeKeyword(ctx, "views");
+  const body = readBracedBlock(ctx);
+  const inner = makeCtx(body);
+  const palettes = [];
+  const views = [];
+  const overlays = [];
+  while (true) {
+    skipTrivia(inner);
+    if (atEnd(inner)) break;
+    const kw = peekKeyword(inner);
+    if (kw === "palette") palettes.push(parsePalette(inner));
+    else if (kw === "view") views.push(parseView(inner));
+    else if (kw === "overlay") overlays.push(parseOverlay(inner));
+    else throw new Error(`v2 parse: views section: expected palette, view, or overlay; got "${kw ?? currentLine(inner)}"`);
+  }
+  return { palettes, views, overlays };
+}
 
 // Top-level palette declaration:
 //
@@ -634,6 +664,40 @@ function parseConst(ctx) {
 // =============================================================================
 // Scenario / Stamp blocks
 // =============================================================================
+
+function parseScenariosSection(ctx) {
+  consumeKeyword(ctx, "scenarios");
+  const body = readBracedBlock(ctx);
+  const inner = makeCtx(body);
+  const scenarios = [];
+  while (true) {
+    skipTrivia(inner);
+    if (atEnd(inner)) break;
+    const kw = peekKeyword(inner);
+    if (kw !== "scenario") {
+      throw new Error(`v2 parse: scenarios section: expected scenario, got "${kw ?? currentLine(inner)}"`);
+    }
+    scenarios.push(parseScenario(inner));
+  }
+  return scenarios;
+}
+
+function parseStampsSection(ctx) {
+  consumeKeyword(ctx, "stamps");
+  const body = readBracedBlock(ctx);
+  const inner = makeCtx(body);
+  const stamps = [];
+  while (true) {
+    skipTrivia(inner);
+    if (atEnd(inner)) break;
+    const kw = peekKeyword(inner);
+    if (kw !== "stamp") {
+      throw new Error(`v2 parse: stamps section: expected stamp, got "${kw ?? currentLine(inner)}"`);
+    }
+    stamps.push(parseStamp(inner));
+  }
+  return stamps;
+}
 
 function parseScenario(ctx) {
   consumeKeyword(ctx, "scenario");

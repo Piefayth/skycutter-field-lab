@@ -27,7 +27,7 @@ const RECIPE_KEYWORDS = new Set([
 // Schema declarations — introduce names into the recipe.
 const SCHEMA_KEYWORDS = new Set([
   "const", "field", "param", "import", "metric",
-  // Render decls — `palette NAME { ... }`, `overlay grid`, `view ID …`.
+  // Render decls — inside `views { ... }`.
   "palette", "overlay",
 ]);
 
@@ -53,6 +53,7 @@ const DECLARATION_KEYWORDS = new Set([
 const CONTROL_KEYWORDS = new Set([
   "cell", "for", "when", "if", "else",
   "neighbors", "neighbor",
+  "views", "stamps", "scenarios",
 ]);
 
 // Statement verbs inside stage / scenario / stamp bodies.

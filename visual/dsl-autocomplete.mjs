@@ -27,7 +27,7 @@ import {
 import { StateField, StateEffect, Prec } from "@codemirror/state";
 
 import { DSL_SYMBOLS } from "./dsl-symbols.mjs";
-import { extractDslNames } from "../dsl/introspect.mjs";
+import { blockStackAt, parseDslAst } from "../dsl/ast-v2.mjs";
 
 // ---------------------------------------------------------------------------
 // Catalog buckets — precomputed once so context-filtered lookups are cheap.
@@ -53,6 +53,10 @@ const STAGE_BODY_KINDS = new Set([
 const PRESET_BODY_KINDS = new Set([
   "initVerb", "controlKw", "mathFn", "mathConst", "builtin",
   "logicalOp", "literal", "modifier",
+]);
+const VIEW_BODY_KINDS = new Set([
+  "actionVerb", "mathFn", "mathConst", "builtin", "logicalOp",
+  "literal", "modifier",
 ]);
 const INIT_CELL_KINDS = new Set([
   "actionVerb", "controlKw", "mathFn", "mathConst", "builtin",
@@ -160,6 +164,7 @@ function roleToCmType(role) {
     case "declared":  return "variable";
     case "param":
     case "const":
+    case "palette":
     case "planet":    return "constant";
     default:          return "variable";
   }
@@ -170,6 +175,7 @@ function declaredBoost(role) {
     case "field":
     case "param":     return 9;
     case "const":
+    case "palette":
     case "planet":
     case "source":
     case "declared":  return 8;
@@ -178,52 +184,16 @@ function declaredBoost(role) {
 }
 
 // ---------------------------------------------------------------------------
-// Context detection. Walk the document up to the cursor, ignoring strings
-// and line comments, tracking which block-keyword opened each `{`.
+// Context detection. Use the tolerant DSL AST scanner so folding,
+// autocomplete, and name extraction share one structural model even
+// while the compiler parser would reject the half-typed document.
 // ---------------------------------------------------------------------------
 
 function detectContext(state, pos) {
-  const text = state.doc.sliceString(0, pos);
-  const stack = [];
-  let i = 0;
-  while (i < text.length) {
-    const ch = text[i];
-    if (ch === '"' || ch === "'") {
-      const quote = ch;
-      i++;
-      while (i < text.length && text[i] !== quote) {
-        if (text[i] === "\\") i++;
-        i++;
-      }
-      i++;
-      continue;
-    }
-    if (ch === "/" && text[i + 1] === "/") {
-      while (i < text.length && text[i] !== "\n") i++;
-      continue;
-    }
-    if (ch === "{") {
-      // Look back to the keyword that opened this block — limit lookback
-      // to the previous newline so a `{` on its own line still finds
-      // the keyword on the line above. v2 block keywords: stage,
-      // scenario, stamp, step, cell, when. (`for each cell { ... }` —
-      // we match `cell` at the end which is good enough for context.)
-      const before = text.slice(Math.max(0, i - 200), i);
-      const m = /\b(stage|scenario|stamp|step|cell|when)\b[^{]*$/.exec(before);
-      stack.push(m ? m[1] : "?");
-      i++;
-      continue;
-    }
-    if (ch === "}") {
-      stack.pop();
-      i++;
-      continue;
-    }
-    i++;
-  }
   const lineStart = state.doc.lineAt(pos).from;
   const lineUpToCursor = state.doc.sliceString(lineStart, pos);
-  return { stack, lineUpToCursor };
+  const ast = parseDslAst(state.doc.toString());
+  return { stack: blockStackAt(ast, pos).map((block) => block.keyword), lineUpToCursor, ast };
 }
 
 // Map context → completion mode. `when` is treated as transparent so a
@@ -246,8 +216,13 @@ function classifyContext(ctx) {
   }
   if (!inner) return { mode: "topLevel" };
   if (inner === "cell") return { mode: "cellBody" };
+  if (inner === "view") return { mode: "viewBody" };
+  if (inner === "palette") return { mode: "paletteBody" };
   if (inner === "stage") return { mode: "stageBody" };
   if (inner === "step") return { mode: "stepBody" };
+  if (inner === "views") return { mode: "viewsSection" };
+  if (inner === "stamps") return { mode: "stampsSection" };
+  if (inner === "scenarios") return { mode: "scenariosSection" };
   if (inner === "scenario" || inner === "stamp") return { mode: "presetBody" };
   return { mode: "topLevel" };
 }
@@ -259,7 +234,11 @@ function classifyContext(ctx) {
 function symbolsForMode(mode) {
   switch (mode.mode) {
     case "topLevel":
-      return DSL_SYMBOLS.filter((s) => TOP_LEVEL_KINDS.has(s.kind));
+      return DSL_SYMBOLS.filter((s) => {
+        if (s.kind === "declKeyword") return s.name !== "overlay";
+        if (s.kind === "blockKeyword") return ["step", "views", "stamps", "scenarios"].includes(s.name);
+        return TOP_LEVEL_KINDS.has(s.kind);
+      });
     case "stageBody":
       return DSL_SYMBOLS.filter((s) =>
         s.kind === "declarationKw" || s.kind === "primVerb" || s.kind === "controlKw"
@@ -268,11 +247,21 @@ function symbolsForMode(mode) {
       return DSL_SYMBOLS.filter((s) => STAGE_BODY_KINDS.has(s.kind));
     case "presetBody":
       return DSL_SYMBOLS.filter((s) => PRESET_BODY_KINDS.has(s.kind));
+    case "viewBody":
+      return DSL_SYMBOLS.filter((s) => VIEW_BODY_KINDS.has(s.kind));
+    case "paletteBody":
+      return DSL_SYMBOLS.filter((s) => s.name === "stop" || s.name === "color");
     case "initCellBody":
       return DSL_SYMBOLS.filter((s) => INIT_CELL_KINDS.has(s.kind));
     case "stepBody":
       // Inside `step { ... }` only stage declarations belong here.
-      return DSL_SYMBOLS.filter((s) => s.kind === "definitionKw" || s.name === "stage");
+      return DSL_SYMBOLS.filter((s) => s.name === "stage");
+    case "viewsSection":
+      return DSL_SYMBOLS.filter((s) => ["palette", "view", "overlay"].includes(s.name));
+    case "stampsSection":
+      return DSL_SYMBOLS.filter((s) => s.name === "stamp");
+    case "scenariosSection":
+      return DSL_SYMBOLS.filter((s) => s.name === "scenario");
     case "v2Import":
       // Flat list of every importable builtin (filtered to symbols that
       // actually need importing — built-in syntax keywords don't).
@@ -283,23 +272,268 @@ function symbolsForMode(mode) {
 }
 
 function declaredFromDoc(doc) {
-  try {
-    const names = extractDslNames(doc);
-    const out = [];
-    for (const n of names.fields ?? []) out.push({ name: n, role: "field" });
-    for (const n of names.sources ?? []) out.push({ name: n, role: "source" });
-    for (const n of names.parameters ?? []) out.push({ name: n, role: "param" });
-    for (const n of names.constants ?? []) out.push({ name: n, role: "const" });
-    for (const n of names.planet ?? []) out.push({ name: n, role: "planet" });
-    return out;
-  } catch {
-    return [];
+  const names = parseDslAst(doc).names;
+  const out = [];
+  for (const n of names.fields ?? []) out.push({ name: n, role: "field" });
+  for (const n of names.sources ?? []) out.push({ name: n, role: "source" });
+  for (const n of names.parameters ?? []) out.push({ name: n, role: "param" });
+  for (const n of names.constants ?? []) out.push({ name: n, role: "const" });
+  for (const n of names.planet ?? []) out.push({ name: n, role: "planet" });
+  for (const n of names.palettes ?? []) out.push({ name: n, role: "palette" });
+  return out;
+}
+
+const TOP_LEVEL_COMPLETIONS = [
+  keywordOption("recipe", "recipe \"Name\""),
+  keywordOption("summary", "summary \"Short description\""),
+  keywordOption("recommendedPreset", "recommendedPreset scenarioId"),
+  keywordOption("substrate", "substrate geodesic frequency 64"),
+  keywordOption("field", "field name: f32"),
+  keywordOption("source", "source name: vec2"),
+  keywordOption("const", "const NAME = value"),
+  keywordOption("import", "import builtinName"),
+  keywordOption("param", "param name slider lo..hi default value"),
+  keywordOption("metric", "metric name = reduction cells { expr }"),
+  keywordOption("step", "step { stage ... }"),
+  keywordOption("views", "views { ... }"),
+  keywordOption("stamps", "stamps { ... }"),
+  keywordOption("scenarios", "scenarios { ... }"),
+];
+
+const FIELD_TYPE_COMPLETIONS = [
+  keywordOption("f32", "scalar field"),
+  keywordOption("vec2", "2-component vector field"),
+  keywordOption("u32", "unsigned integer field"),
+  keywordOption("bool", "boolean field"),
+];
+
+function keywordOption(label, detail = undefined, boost = 20) {
+  return { label, type: "keyword", detail, boost };
+}
+
+function structuralOption(label, detail = undefined, boost = 30) {
+  return { label, type: "keyword", detail, boost };
+}
+
+function optionsFromNames(names, role) {
+  return [...new Set(names ?? [])].map((name) => declaredCompletion(name, role));
+}
+
+function astNames(ctx) {
+  return ctx.ast?.names ?? {};
+}
+
+function fieldsFromAst(ctx) {
+  return optionsFromNames(astNames(ctx).fields, "field");
+}
+
+function palettesFromAst(ctx) {
+  return optionsFromNames(astNames(ctx).palettes, "palette");
+}
+
+function scenariosFromAst(ctx) {
+  return optionsFromNames(astNames(ctx).scenarios, "declared");
+}
+
+function constantsFromAst(ctx) {
+  const names = astNames(ctx);
+  return [
+    ...optionsFromNames(names.constants, "const"),
+    ...optionsFromNames(names.parameters, "param"),
+    declaredCompletion("PI", "const"),
+    declaredCompletion("TAU", "const"),
+  ];
+}
+
+function filterOptions(options, prefix) {
+  const q = String(prefix ?? "").toLowerCase();
+  const seen = new Set();
+  const out = [];
+  for (const option of options) {
+    if (!option?.label) continue;
+    if (q && !option.label.toLowerCase().startsWith(q)) continue;
+    if (seen.has(option.label)) continue;
+    seen.add(option.label);
+    out.push(option);
   }
+  return out;
+}
+
+function lineWithoutPrefix(ctx) {
+  // `detectContext` is called at the start of the currently matched word,
+  // so `lineUpToCursor` is already the structural text before the prefix.
+  return ctx.lineUpToCursor ?? "";
+}
+
+function activeLineSegment(line) {
+  const brace = line.lastIndexOf("{");
+  const semi = line.lastIndexOf(";");
+  const cut = Math.max(brace, semi);
+  return cut >= 0 ? line.slice(cut + 1) : line;
+}
+
+function optionsForGrammarPosition(ctx, mode, prefix) {
+  const before = lineWithoutPrefix(ctx);
+  const fullLine = before.replace(/\/\/.*$/, "");
+  const line = mode.mode === "topLevel" || mode.mode === "v2Import"
+    ? fullLine
+    : activeLineSegment(fullLine);
+  const trimmed = line.trimStart();
+  const initial = /^\s*$/.test(trimmed);
+  const structural = (options) => filterOptions(options, prefix);
+
+  if (mode.mode === "topLevel") {
+    if (/^\s*recommendedPreset\s+$/.test(line)) return structural(scenariosFromAst(ctx));
+    if (/^\s*field\s+[A-Za-z_][A-Za-z0-9_]*\s*:\s*$/.test(line)) {
+      return structural(FIELD_TYPE_COMPLETIONS);
+    }
+    if (/^\s*source\s+[A-Za-z_][A-Za-z0-9_]*\s*:\s*$/.test(line)) {
+      return structural([keywordOption("vec2", "2-component source vector")]);
+    }
+    if (/^\s*field\s+[A-Za-z_][A-Za-z0-9_]*\s*:\s+\w+\s+$/.test(line)) {
+      return structural([keywordOption("derived", "computed field")]);
+    }
+    if (/^\s*param\s+[A-Za-z_][A-Za-z0-9_]*\s+$/.test(line)) {
+      return structural([
+        keywordOption("slider", "numeric parameter"),
+        keywordOption("toggle", "boolean parameter"),
+      ]);
+    }
+    if (/^\s*param\s+[A-Za-z_][A-Za-z0-9_]*\s+(slider|toggle)\s+.*\s+$/.test(line)) {
+      return structural([
+        keywordOption("default"),
+        keywordOption("label"),
+        keywordOption("step"),
+      ]);
+    }
+    if (/^\s*substrate\s+$/.test(line)) return structural([keywordOption("geodesic")]);
+    if (/^\s*substrate\s+geodesic\s+$/.test(line)) return structural([keywordOption("frequency")]);
+    if (/^\s*import(\s|$)/.test(line)) return null;
+    if (/^\s*[A-Za-z_]*$/.test(trimmed)) return structural(TOP_LEVEL_COMPLETIONS);
+  }
+
+  if (mode.mode === "stepBody") {
+    if (/^\s*[A-Za-z_]*$/.test(trimmed)) {
+      return structural([structuralOption("stage", "stage id \"Label\" { ... }")]);
+    }
+  }
+
+  if (mode.mode === "stageBody") {
+    if (/^\s*(reads|writes)\s+[\w\s,]*$/.test(line)) return structural(fieldsFromAst(ctx));
+    if (/^\s*[A-Za-z_]*$/.test(trimmed)) {
+      return structural([
+        structuralOption("reads", "reads field1, field2"),
+        structuralOption("writes", "writes field1, field2"),
+        structuralOption("cell", "cell { ... }"),
+      ]);
+    }
+  }
+
+  if (mode.mode === "viewsSection") {
+    if (/^\s*overlay\s+$/.test(line)) return structural([keywordOption("grid")]);
+    if (/^\s*[A-Za-z_]*$/.test(trimmed)) {
+      return structural([
+        structuralOption("palette", "palette NAME { stop ... }"),
+        structuralOption("view", "view id \"Label\" { color ... }"),
+        structuralOption("overlay", "overlay grid"),
+      ]);
+    }
+  }
+
+  if (mode.mode === "stampsSection") {
+    if (/^\s*[A-Za-z_]*$/.test(trimmed)) {
+      return structural([structuralOption("stamp", "stamp id \"Label\" { ... }")]);
+    }
+  }
+
+  if (mode.mode === "scenariosSection") {
+    if (/^\s*[A-Za-z_]*$/.test(trimmed)) {
+      return structural([structuralOption("scenario", "scenario id \"Label\" { ... }")]);
+    }
+  }
+
+  if (mode.mode === "paletteBody") {
+    if (/^\s*stop\s+[-+.\w]+\s+$/.test(line)) return structural([keywordOption("color")]);
+    if (/^\s*[A-Za-z_]*$/.test(trimmed)) return structural([structuralOption("stop", "stop 0 color [0, 0, 0]")]);
+  }
+
+  if (mode.mode === "viewBody") {
+    if (/^\s*color\s+$/.test(line)) {
+      return structural([
+        structuralOption("ramp", "color ramp field palette PALETTE"),
+        structuralOption("wheel", "color wheel field"),
+        structuralOption("expr", "color expr { ... }"),
+      ]);
+    }
+    if (/^\s*color\s+(ramp|wheel)\s+$/.test(line)) return structural(fieldsFromAst(ctx));
+    if (/^\s*color\s+ramp\s+[A-Za-z_][A-Za-z0-9_]*\s+$/.test(line)) {
+      return structural([
+        keywordOption("range", "range [lo, hi]"),
+        keywordOption("palette", "palette NAME"),
+        keywordOption("stops", "stops { stop ... }"),
+      ]);
+    }
+    if (/^\s*color\s+ramp\s+[A-Za-z_][A-Za-z0-9_]*\s+range\s+\[[^\]]+\]\s+$/.test(line)) {
+      return structural([
+        keywordOption("palette", "palette NAME"),
+        keywordOption("stops", "stops { stop ... }"),
+      ]);
+    }
+    if (/^\s*color\s+wheel\s+[A-Za-z_][A-Za-z0-9_]*\s+$/.test(line)) {
+      return structural([keywordOption("range", "range [lo, hi]")]);
+    }
+    if (/\bpalette\s+$/.test(line)) return structural(palettesFromAst(ctx));
+    if (/\brange\s+\[\s*$/.test(line) || /\brange\s+\[[^,\]]*,\s*$/.test(line)) {
+      return structural(constantsFromAst(ctx));
+    }
+    if (/^\s*set\s+$/.test(line)) {
+      return structural([
+        declaredCompletion("red", "declared"),
+        declaredCompletion("green", "declared"),
+        declaredCompletion("blue", "declared"),
+      ]);
+    }
+    if (/^\s*[A-Za-z_]*$/.test(trimmed)) return structural([structuralOption("color", "color ramp|wheel|expr")]);
+  }
+
+  if (mode.mode === "presetBody") {
+    if (/^\s*(set|spot|ellipse|region)\s+$/.test(line)) return structural(fieldsFromAst(ctx));
+    if (/\bat\s+$/.test(line) && ctx.stack.includes("stamp")) {
+      return structural([declaredCompletion("brush", "declared")]);
+    }
+    if (initial || /^\s*[A-Za-z_]*$/.test(trimmed)) {
+      return structural([
+        structuralOption("set", "set field = expr"),
+        structuralOption("spot", "spot field at ..."),
+        structuralOption("ellipse", "ellipse field at ..."),
+        structuralOption("region", "region field where ..."),
+        structuralOption("for", "for each cell { ... }"),
+      ]);
+    }
+  }
+
+  if (mode.mode === "cellBody") {
+    if (/^\s*(set|add)\s+$/.test(line)) return structural(fieldsFromAst(ctx));
+    if (initial || /^\s*[A-Za-z_]*$/.test(trimmed)) {
+      return structural([
+        structuralOption("let", "let name = expr"),
+        structuralOption("set", "set field = expr"),
+        structuralOption("add", "add field = expr"),
+        structuralOption("when", "when condition { ... }"),
+      ]);
+    }
+  }
+
+  return null;
 }
 
 function buildOptions(state, ctx, mode, prefix) {
+  const grammarOptions = optionsForGrammarPosition(ctx, mode, prefix);
+  if (grammarOptions) return grammarOptions;
+
   const allowDeclared = mode.mode === "cellBody" || mode.mode === "initCellBody"
-    || mode.mode === "presetBody" || mode.mode === "stageBody";
+    || mode.mode === "presetBody" || mode.mode === "stageBody"
+    || mode.mode === "viewBody";
 
   const declared = allowDeclared ? declaredFromDoc(state.doc.toString()) : [];
 

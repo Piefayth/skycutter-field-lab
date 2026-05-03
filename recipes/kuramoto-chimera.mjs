@@ -46,53 +46,11 @@ field theta: f32
 field omega: f32
 field cosTheta: f32 derived
 
-palette OMEGA {
-  stop 0 color [10, 14, 22]
-  stop 1 color [240, 240, 240]
-}
-
-view phase "Phase (θ)" {
-  color wheel theta
-}
-
-view omega "Intrinsic ω" {
-  color ramp omega range [0, 2] palette OMEGA
-}
-
 param simRateHz   slider 0..360 step 1    default 60   label "SIM RATE"
 param K           slider 0..2   step 0.01 default 1.58 label "COUPLING K"
 param alpha       slider 0..1.6 step 0.01 default 0.15 label "PHASE LAG α"
 param omegaSpread slider 0..2   step 0.01 default 1.45 label "ω SPREAD"
 param rate        slider 0..8   step 0.05 default 2.05 label "RATE"
-
-stamp pulse "Phase pulse" {
-  spot theta at brush.pos, radius=brush.r, amount=PI
-}
-
-stamp randomize "Randomize phase" {
-  spot theta at brush.pos, radius=brush.r, amount=cellRand(frame) * PI
-}
-
-scenario spiral "Spiral seed" {
-  for each cell {
-    set theta = lon * 2
-    set omega = cellRand(7) * omegaSpread
-  }
-}
-
-scenario uniform "Uniform ω, random θ" {
-  for each cell {
-    set theta = cellRand(11) * PI
-    set omega = 0
-  }
-}
-
-scenario bands "Latitudinal bands" {
-  for each cell {
-    set theta = lat * 4
-    set omega = cellRand(13) * omegaSpread
-  }
-}
 
 step {
   stage couple "Sakaguchi-Kuramoto coupling" {
@@ -114,6 +72,54 @@ step {
       let wrapped = wrapAngle(theta)
       set theta = wrapped
       set cosTheta = cos(wrapped)
+    }
+  }
+}
+
+views {
+  palette OMEGA {
+    stop 0 color [10, 14, 22]
+    stop 1 color [240, 240, 240]
+  }
+
+  view phase "Phase (θ)" {
+    color wheel theta
+  }
+
+  view omega "Intrinsic ω" {
+    color ramp omega range [0, 2] palette OMEGA
+  }
+}
+
+stamps {
+  stamp pulse "Phase pulse" {
+    spot theta at brush.pos, radius=brush.r, amount=PI
+  }
+
+  stamp randomize "Randomize phase" {
+    spot theta at brush.pos, radius=brush.r, amount=cellRand(frame) * PI
+  }
+}
+
+scenarios {
+  scenario spiral "Spiral seed" {
+    for each cell {
+      set theta = lon * 2
+      set omega = cellRand(7) * omegaSpread
+    }
+  }
+
+  scenario uniform "Uniform ω, random θ" {
+    for each cell {
+      set theta = cellRand(11) * PI
+      set omega = 0
+    }
+  }
+
+  scenario bands "Latitudinal bands" {
+    for each cell {
+      set theta = lat * 4
+      set omega = cellRand(13) * omegaSpread
     }
   }
 }

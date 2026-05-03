@@ -81,51 +81,17 @@ field divM: f32 derived       // divergence(m) — diagnostic only
 // warm red crests. Built from the 2-stop diverge() factory's pair —
 // stop t-values normalized into [0, 1] across whatever range each
 // view picks.
-palette DIVERGE {
-  stop 0 color [40, 100, 240]
-  stop 1 color [235, 76, 70]
-}
-
-palette HEIGHT {
-  stop 0 color [70, 35, 25]
-  stop 1 color [60, 160, 230]
-}
-
-palette SPEED {
-  stop 0 color [12, 14, 30]
-  stop 1 color [255, 200, 50]
-}
-
-palette DYE {
-  stop 0 color [8, 10, 14]
-  stop 1 color [80, 240, 255]
-}
 
 // Height anomaly: signed deviation from rest depth. dh = h - 1.
-view dh "Height anomaly" {
-  color ramp dh range [-0.667, 0.667] palette DIVERGE
-}
 
 // Raw absolute height — bare-seabed brown to deep-water blue.
-view h "Height (h)" {
-  color ramp h range [0, 2] palette HEIGHT
-}
 
 // Speed magnitude — calm to hot.
-view speed "Speed |m|" {
-  color ramp speed range [0, 0.25] palette SPEED
-}
 
 // Dye tracer — black background, bright cyan accumulation.
-view dye "Dye tracer" {
-  color ramp dye range [0, 1] palette DYE
-}
 
 // Divergence diagnostic — sources red, sinks blue. Useful for
 // debugging mass conservation drift.
-view divM "div(m)" {
-  color ramp divM range [-0.125, 0.125] palette DIVERGE
-}
 
 // CFL: the explicit forward-Euler step requires
 // effective-dt · sqrt(g · h_max) < cell-size. With cell≈0.02 at
@@ -161,90 +127,6 @@ param dyeFade   slider 0..0.05    step 0.0005  default 0.003  label "DYE FADE"
 param flowScale slider 0..1       step 0.01    default 0.3    label "DYE FLOW"
 param simRateHz slider 0..360     step 1       default 60     label "SIM RATE"
 param rate      slider 1..40      step 1       default 12     label "RATE"
-
-stamp bulge "Bulge (drop wave)" {
-  spot h at brush.pos, radius=brush.r, amount=1.5
-}
-
-stamp dimple "Dimple (suck wave)" {
-  spot h at brush.pos, radius=brush.r, amount=-0.6
-}
-
-stamp paintDye "Paint dye" {
-  spot dye at brush.pos, radius=brush.r, amount=1
-}
-
-stamp clearDye "Erase dye" {
-  spot dye at brush.pos, radius=brush.r, amount=-1
-}
-
-scenario bulge "Single bulge at the equator" {
-  // Pre-paint zonal dye stripes so the flow is visible from the
-  // first tick — the stripes get stretched and folded along the
-  // wavefronts as the bulge releases. A bigger amplitude (h goes
-  // from 1 to 3 at center) gives more potential energy and a wave
-  // that propagates with substantial momentum, otherwise the dye
-  // motion is too subtle to see at default tuning.
-  set h = 1
-  set m = vec2(0, 0)
-  for each cell {
-    set dye = sin(lat * 8) * 0.5 + 0.5
-  }
-  spot h at lon=0, lat=0, radius=0.25, amount=2
-}
-
-scenario tsunami "Tsunami line source" {
-  // A long strip of elevated water — collapses into a north/south-
-  // running wave train. Useful for testing dispersion.
-  set h = 1
-  set m = vec2(0, 0)
-  set dye = 0
-  ellipse h at lon=-1.2, lat=0, rx=0.15, ry=0.8, amount=2.5, angle=0
-}
-
-scenario stripes "Painted dye stripes" {
-  // Pre-paint zonal dye stripes; the BULGE stamp then drops a wave
-  // and the stripes show its propagation pattern. Quietest of the
-  // scenarios — water is at rest until you click.
-  set h = 1
-  set m = vec2(0, 0)
-  for each cell {
-    set dye = sin(lat * 6) * 0.5 + 0.5
-  }
-}
-
-scenario dipole "Bulge + dimple dipole" {
-  // Asymmetric initial condition — drives a circulating flow rather
-  // than a symmetric expanding ring. The longitudinal dye stripes
-  // make the rotation visible.
-  set h = 1
-  set m = vec2(0, 0)
-  for each cell {
-    set dye = sin(lon * 4) * 0.5 + 0.5
-  }
-  spot h at lon=-0.4, lat=0, radius=0.2, amount=1.5
-  spot h at lon=0.4,  lat=0, radius=0.2, amount=-0.7
-}
-
-scenario cyclones "Cyclones (rotation comparison)" {
-  // Three identical bulges along a north-south axis: equator, mid-
-  // latitude, near-pole. With rotation=0 they all release as
-  // identical symmetric ring waves. With rotation>0 the equatorial
-  // bulge still releases symmetrically (f=0 there), the mid-
-  // latitude bulge twists into a cyclonic spiral, and the polar
-  // bulge spins up tightly into a localized vortex. Side-by-side
-  // demonstration that one parameter changes everything about the
-  // dynamics.
-  set h = 1
-  set m = vec2(0, 0)
-  for each cell {
-    // Faint background dye so the spirals are visible from frame 1.
-    set dye = sin(lon * 5) * 0.4 + 0.5
-  }
-  spot h at lon=0, lat=-1.2, radius=0.18, amount=2     // near south pole
-  spot h at lon=0, lat=0,    radius=0.18, amount=2     // equator
-  spot h at lon=0, lat=1.2,  radius=0.18, amount=2     // near north pole
-}
 
 step {
   // Stage 1 — Momentum.
@@ -382,6 +264,136 @@ metric meanH   = mean cells { h }
 metric ke      = sum  cells { h * speed * speed }      // proxy for kinetic energy
 metric maxSpd  = max  cells { speed }
 metric active  = count cells where speed > 0.05        // share of cells in motion
+
+views {
+  palette DIVERGE {
+    stop 0 color [40, 100, 240]
+    stop 1 color [235, 76, 70]
+  }
+
+  palette HEIGHT {
+    stop 0 color [70, 35, 25]
+    stop 1 color [60, 160, 230]
+  }
+
+  palette SPEED {
+    stop 0 color [12, 14, 30]
+    stop 1 color [255, 200, 50]
+  }
+
+  palette DYE {
+    stop 0 color [8, 10, 14]
+    stop 1 color [80, 240, 255]
+  }
+
+  view dh "Height anomaly" {
+    color ramp dh range [-0.667, 0.667] palette DIVERGE
+  }
+
+  view h "Height (h)" {
+    color ramp h range [0, 2] palette HEIGHT
+  }
+
+  view speed "Speed |m|" {
+    color ramp speed range [0, 0.25] palette SPEED
+  }
+
+  view dye "Dye tracer" {
+    color ramp dye range [0, 1] palette DYE
+  }
+
+  view divM "div(m)" {
+    color ramp divM range [-0.125, 0.125] palette DIVERGE
+  }
+}
+
+stamps {
+  stamp bulge "Bulge (drop wave)" {
+    spot h at brush.pos, radius=brush.r, amount=1.5
+  }
+
+  stamp dimple "Dimple (suck wave)" {
+    spot h at brush.pos, radius=brush.r, amount=-0.6
+  }
+
+  stamp paintDye "Paint dye" {
+    spot dye at brush.pos, radius=brush.r, amount=1
+  }
+
+  stamp clearDye "Erase dye" {
+    spot dye at brush.pos, radius=brush.r, amount=-1
+  }
+}
+
+scenarios {
+  scenario bulge "Single bulge at the equator" {
+    // Pre-paint zonal dye stripes so the flow is visible from the
+    // first tick — the stripes get stretched and folded along the
+    // wavefronts as the bulge releases. A bigger amplitude (h goes
+    // from 1 to 3 at center) gives more potential energy and a wave
+    // that propagates with substantial momentum, otherwise the dye
+    // motion is too subtle to see at default tuning.
+    set h = 1
+    set m = vec2(0, 0)
+    for each cell {
+      set dye = sin(lat * 8) * 0.5 + 0.5
+    }
+    spot h at lon=0, lat=0, radius=0.25, amount=2
+  }
+
+  scenario tsunami "Tsunami line source" {
+    // A long strip of elevated water — collapses into a north/south-
+    // running wave train. Useful for testing dispersion.
+    set h = 1
+    set m = vec2(0, 0)
+    set dye = 0
+    ellipse h at lon=-1.2, lat=0, rx=0.15, ry=0.8, amount=2.5, angle=0
+  }
+
+  scenario stripes "Painted dye stripes" {
+    // Pre-paint zonal dye stripes; the BULGE stamp then drops a wave
+    // and the stripes show its propagation pattern. Quietest of the
+    // scenarios — water is at rest until you click.
+    set h = 1
+    set m = vec2(0, 0)
+    for each cell {
+      set dye = sin(lat * 6) * 0.5 + 0.5
+    }
+  }
+
+  scenario dipole "Bulge + dimple dipole" {
+    // Asymmetric initial condition — drives a circulating flow rather
+    // than a symmetric expanding ring. The longitudinal dye stripes
+    // make the rotation visible.
+    set h = 1
+    set m = vec2(0, 0)
+    for each cell {
+      set dye = sin(lon * 4) * 0.5 + 0.5
+    }
+    spot h at lon=-0.4, lat=0, radius=0.2, amount=1.5
+    spot h at lon=0.4,  lat=0, radius=0.2, amount=-0.7
+  }
+
+  scenario cyclones "Cyclones (rotation comparison)" {
+    // Three identical bulges along a north-south axis: equator, mid-
+    // latitude, near-pole. With rotation=0 they all release as
+    // identical symmetric ring waves. With rotation>0 the equatorial
+    // bulge still releases symmetrically (f=0 there), the mid-
+    // latitude bulge twists into a cyclonic spiral, and the polar
+    // bulge spins up tightly into a localized vortex. Side-by-side
+    // demonstration that one parameter changes everything about the
+    // dynamics.
+    set h = 1
+    set m = vec2(0, 0)
+    for each cell {
+      // Faint background dye so the spirals are visible from frame 1.
+      set dye = sin(lon * 5) * 0.4 + 0.5
+    }
+    spot h at lon=0, lat=-1.2, radius=0.18, amount=2     // near south pole
+    spot h at lon=0, lat=0,    radius=0.18, amount=2     // equator
+    spot h at lon=0, lat=1.2,  radius=0.18, amount=2     // near north pole
+  }
+}
 `;
 
 export const pipeline = compileV2(pipelineDsl);

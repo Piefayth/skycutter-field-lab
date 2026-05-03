@@ -8,8 +8,9 @@
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers, drawSelection, highlightActiveLine, highlightActiveLineGutter, tooltips } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import {
-  syntaxHighlighting, indentOnInput, bracketMatching, foldGutter, foldKeymap, foldService,
+  syntaxHighlighting, indentOnInput, bracketMatching, foldGutter, foldKeymap, foldService, foldEffect, indentService, indentUnit,
 } from "@codemirror/language";
 import { lintGutter, setDiagnostics as setLintDiagnostics } from "@codemirror/lint";
 import { javascript } from "@codemirror/lang-javascript";
@@ -18,6 +19,7 @@ import {
 } from "./editor-fieldlab-lang.mjs";
 import { dslHoverTooltip } from "./dsl-tooltip.mjs";
 import { dslAutocomplete } from "./dsl-autocomplete.mjs";
+import { defaultFoldRanges, foldRangeForLine, lineIndentDepth, parseDslAst } from "../dsl/ast-v2.mjs";
 
 export const fieldLabTheme = EditorView.theme({
   "&": {
@@ -93,6 +95,8 @@ export function createEditorView({ parent, onApply, onDocChange, language = "jav
         highlightActiveLineGutter(),
         history(),
         drawSelection(),
+        closeBrackets(),
+        ...(isFieldLab ? [indentUnit.of("  ")] : []),
         indentOnInput(),
         bracketMatching(),
         foldGutter(),
@@ -102,6 +106,7 @@ export function createEditorView({ parent, onApply, onDocChange, language = "jav
           ? createFieldLabExtensions([])
           : [syntaxHighlighting(fieldLabHighlight), javascript()]),
         ...(isFieldLab ? [fieldLabBraceFoldService] : []),
+        ...(isFieldLab ? [fieldLabIndentService] : []),
         ...(isFieldLab ? [dslHoverTooltip(), dslAutocomplete()] : []),
         // Tooltips render at the body level with `position: fixed` so
         // they (a) escape the floating window's `overflow: hidden`
@@ -120,6 +125,7 @@ export function createEditorView({ parent, onApply, onDocChange, language = "jav
             key: "Mod-Enter",
             run: () => { onApply?.(); return true; },
           },
+          ...closeBracketsKeymap,
           ...defaultKeymap,
           ...historyKeymap,
           ...foldKeymap,
@@ -144,6 +150,7 @@ export function createEditorView({ parent, onApply, onDocChange, language = "jav
       // pointing past the new content.
       selection: { anchor: 0 },
     });
+    if (isFieldLab) foldDefaultDslSections(view);
     suppressDocChange = false;
   }
   function getSource() {
@@ -172,96 +179,28 @@ export function createEditorView({ parent, onApply, onDocChange, language = "jav
 }
 
 const fieldLabBraceFoldService = foldService.of((state, lineStart, lineEnd) => {
-  const line = state.doc.sliceString(lineStart, lineEnd);
-  const openOffset = findFoldOpeningBrace(line);
-  if (openOffset < 0) return null;
-
-  const openPos = lineStart + openOffset;
-  const closePos = findMatchingBrace(state.doc.toString(), openPos);
-  if (closePos < 0) return null;
-
-  const openLine = state.doc.lineAt(openPos);
-  const closeLine = state.doc.lineAt(closePos);
-  if (closeLine.number <= openLine.number) return null;
-
-  return { from: openPos + 1, to: closePos };
+  const ast = parseDslAst(state.doc.toString());
+  const range = foldRangeForLine(ast, lineStart, lineEnd);
+  if (!range) return null;
+  const openLine = state.doc.lineAt(range.from - 1);
+  const closeLine = state.doc.lineAt(range.to);
+  return closeLine.number > openLine.number ? range : null;
 });
 
-function findFoldOpeningBrace(line) {
-  let quote = null;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    const next = line[i + 1];
-    if (quote) {
-      if (ch === "\\") {
-        i++;
-      } else if (ch === quote) {
-        quote = null;
-      }
-      continue;
-    }
-    if (ch === "/" && next === "/") return -1;
-    if (ch === "\"" || ch === "'") {
-      quote = ch;
-      continue;
-    }
-    if (ch === "{") return i;
-  }
-  return -1;
-}
+const FIELD_LAB_INDENT_UNIT = 2;
 
-function findMatchingBrace(text, openPos) {
-  let depth = 1;
-  let quote = null;
-  let lineComment = false;
-  let blockComment = false;
+const fieldLabIndentService = indentService.of((context, pos) => {
+  const state = context.state;
+  if (!state) return null;
+  const source = state.doc.toString();
+  const line = state.doc.lineAt(pos);
+  const ast = parseDslAst(source);
+  return lineIndentDepth(ast, source, line.from) * FIELD_LAB_INDENT_UNIT;
+});
 
-  for (let i = openPos + 1; i < text.length; i++) {
-    const ch = text[i];
-    const next = text[i + 1];
-
-    if (lineComment) {
-      if (ch === "\n") lineComment = false;
-      continue;
-    }
-    if (blockComment) {
-      if (ch === "*" && next === "/") {
-        blockComment = false;
-        i++;
-      }
-      continue;
-    }
-    if (quote) {
-      if (ch === "\\") {
-        i++;
-      } else if (ch === quote) {
-        quote = null;
-      }
-      continue;
-    }
-
-    if (ch === "/" && next === "/") {
-      lineComment = true;
-      i++;
-      continue;
-    }
-    if (ch === "/" && next === "*") {
-      blockComment = true;
-      i++;
-      continue;
-    }
-    if (ch === "\"" || ch === "'") {
-      quote = ch;
-      continue;
-    }
-    if (ch === "{") {
-      depth++;
-      continue;
-    }
-    if (ch === "}") {
-      depth--;
-      if (depth === 0) return i;
-    }
-  }
-  return -1;
+function foldDefaultDslSections(view) {
+  const ast = parseDslAst(view.state.doc.toString());
+  const ranges = defaultFoldRanges(ast);
+  if (ranges.length === 0) return;
+  view.dispatch({ effects: ranges.map((range) => foldEffect.of(range)) });
 }

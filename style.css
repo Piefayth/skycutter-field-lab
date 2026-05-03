@@ -2187,7 +2187,7 @@ input[type="range"]::-moz-range-thumb {
 }
 
 .pg-dsl-pane__cm--empty .cm-content::before {
-  content: "stage id \"Name\" { ... }";
+  content: "recipe \"Name\" ... step { stage id { ... } }";
   color: var(--bone-mute);
 }
 
@@ -2218,124 +2218,6 @@ input[type="range"]::-moz-range-thumb {
 
 .pg-dsl-pane__diagnostics[hidden] {
   display: none;
-}
-
-.pg-dsl-stack {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 6px;
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.pg-dsl-stack > .pg-dsl-section {
-  align-self: stretch;
-  max-height: 100%;
-}
-
-/* The accordion has four sections in DOM order: pipeline, view,
-   stamp, preset. Exactly one is open at a time; the open row gets
-   `minmax(0, 1fr)` so it grows to fill the available pane height,
-   the other three collapse to `auto` (just the summary bar).
-   These templates must include one row per section — adding one
-   without updating these rules drops back to the grid default
-   and the active editor stops filling the pane. */
-.pg-dsl-stack[data-active="pipeline"] {
-  grid-template-rows: minmax(0, 1fr) auto auto auto;
-}
-
-.pg-dsl-stack[data-active="view"] {
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
-}
-
-.pg-dsl-stack[data-active="stamp"] {
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
-}
-
-.pg-dsl-stack[data-active="preset"] {
-  grid-template-rows: auto auto auto minmax(0, 1fr);
-}
-
-.pg-dsl-section {
-  min-width: 0;
-  min-height: 0;
-  background: var(--ink-950);
-  border: 1px solid var(--line);
-  overflow: hidden;
-}
-
-.pg-dsl-section:not([open]) .pg-dsl-section__editor {
-  display: none;
-}
-
-.pg-dsl-section[open] {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  height: 100%;
-  min-height: 0;
-  max-height: 100%;
-}
-
-.pg-dsl-section__summary {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 6px;
-  cursor: pointer;
-  border-bottom: 1px solid transparent;
-}
-
-.pg-dsl-section[open] .pg-dsl-section__summary {
-  border-bottom-color: var(--line);
-}
-
-.pg-dsl-section__title,
-.pg-dsl-section__count {
-  font-family: var(--font-mono);
-  font-size: 8px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--bone-mute);
-}
-
-.pg-dsl-section__count {
-  color: var(--signal-trace);
-}
-
-.pg-dsl-section__editor {
-  display: flex;
-  height: 100%;
-  min-height: 0;
-  background: var(--ink-950);
-  overflow: hidden;
-}
-
-.pg-dsl-section__editor .cm-editor {
-  flex: 1 1 auto;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-}
-
-.pg-dsl-section__editor .cm-scroller {
-  flex: 1 1 auto;
-  height: 100%;
-  min-height: 0;
-  overflow: auto !important;
-}
-
-.pg-dsl-section__editor .cm-content {
-  min-height: 0;
-}
-
-.pg-dsl-section__editor .cm-gutters {
-  font-size: 9px;
-}
-
-.pg-dsl-section__editor .cm-content {
-  font-size: 10.5px;
 }
 
 .pg-graph-wrap {
