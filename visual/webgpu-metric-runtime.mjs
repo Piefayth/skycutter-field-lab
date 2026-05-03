@@ -140,8 +140,8 @@ export class MetricRuntime {
           perCellEntries.push({ binding, resource: { buffer: this.runtime.currentBuffer(name) } });
           binding++;
         }
-        for (const name of prim.prevReads) {
-          perCellEntries.push({ binding, resource: { buffer: this.runtime.historyBuffer(name) } });
+        for (const entry of prim.prevReads) {
+          perCellEntries.push({ binding, resource: { buffer: this.runtime.historyBuffer(entry.field, entry.depth) } });
           binding++;
         }
         perCellEntries.push({ binding, resource: { buffer: prim.scratchA } });

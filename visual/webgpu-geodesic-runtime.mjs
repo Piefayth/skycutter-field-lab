@@ -110,7 +110,7 @@ export class WebGpuGeodesicRuntime {
     if (this.fields.has(name)) return this.fields.get(name);
     // Non-history fields use 2-buffer ping-pong: index toggles each
     // swap, current = buffers[index], next = buffers[1-index]. History
-    // fields upgrade to a 3-buffer rotation in ensureHistory below.
+    // fields upgrade to a (depth + 2)-buffer rotation in ensureHistory.
     const bytes = this.fieldByteLength(name);
     const entry = {
       type: this.fieldType(name),
@@ -119,59 +119,73 @@ export class WebGpuGeodesicRuntime {
         this.device.createBuffer({ size: bytes, usage: fieldUsage() }),
         this.device.createBuffer({ size: bytes, usage: fieldUsage() }),
       ],
-      history: false,
+      history: 0,
       index: 0,
-      prevIdx: 0,
-      currentIdx: 0,
-      nextIdx: 0,
+      // bufferIdx[0]=next (write target), [1]=current, [2..depth+1]=prev1..prevDepth
+      bufferIdx: [],
     };
     this.fields.set(name, entry);
     return entry;
   }
 
-  // Upgrade a field to history mode: allocate a third buffer and
-  // switch from 2-buffer ping-pong to 3-buffer {prev, current, next}
-  // rotation. Called by the pipeline runtime at recipe load for every
-  // field declared with `history N >= 1`. Idempotent — calling twice
-  // is a no-op.
+  // Upgrade a field to history mode at the requested depth. With depth
+  // = 1 you get the v1 {prev, current, next} 3-buffer rotation; with
+  // depth = 2 you get {prev2, prev1, current, next}; etc. Called by
+  // the pipeline runtime at recipe load with the depth inferred from
+  // every `field@prev(N)` site. Calling with a higher depth than was
+  // previously requested grows the buffer ring.
   //
-  // Buffer roles:
-  //   prev    — value as of last tick (read by `prev(field)`)
-  //   current — value as of start of this tick (read by bare ident)
-  //   next    — written by the cell pass; promoted at end of tick
+  // Buffer roles (in `bufferIdx` ordering):
+  //   bufferIdx[0]               = next    (cell pass writes here)
+  //   bufferIdx[1]               = current (bare-ident reads)
+  //   bufferIdx[2..depth+1]      = prev_1..prev_depth (oldest at the back)
   //
   // History fields are NEVER swap()-ed within a tick; rotateHistory()
-  // is the only way their indices move. The validator enforces this
-  // by restricting history-field writes to a single cell-pass stage.
-  ensureHistory(name) {
+  // is the only way their indices move. The validator enforces this by
+  // restricting history-field writes to a single cell-pass stage.
+  ensureHistory(name, depth = 1) {
     const field = this.ensureField(name);
-    if (field.history) return field;
-    field.buffers.push(
-      this.device.createBuffer({ size: field.bytes, usage: fieldUsage() }),
-    );
-    field.history = true;
-    field.prevIdx = 0;
-    field.currentIdx = 1;
-    field.nextIdx = 2;
+    if (field.history >= depth) return field;
+    const target = depth + 2;
+    while (field.buffers.length < target) {
+      field.buffers.push(
+        this.device.createBuffer({ size: field.bytes, usage: fieldUsage() }),
+      );
+    }
+    if (field.history === 0) {
+      // Initialise the rotation: [next, current, prev1, prev2, ...].
+      field.bufferIdx = Array.from({ length: target }, (_, i) => i);
+    } else {
+      // Already had some history — extend bufferIdx with new buffer
+      // indices appended as the older prev slots.
+      const prior = field.bufferIdx.length;
+      for (let i = prior; i < target; i++) field.bufferIdx.push(i);
+    }
+    field.history = depth;
     return field;
   }
 
-  historyBuffer(name) {
+  // Returns the buffer holding the K-th-most-recent past value of
+  // FIELD. K = 1 is the value as of last tick (the v1 prev semantics).
+  historyBuffer(name, depth = 1) {
     const field = this.fields.get(name);
     if (!field?.history) {
       throw new Error(`field ${name} was not allocated with history`);
     }
-    return field.buffers[field.prevIdx];
+    if (depth < 1 || depth > field.history) {
+      throw new Error(`field ${name}: @prev(${depth}) requested but only ${field.history} ticks of history allocated`);
+    }
+    return field.buffers[field.bufferIdx[1 + depth]];
   }
 
   currentBuffer(name) {
     const field = this.ensureField(name);
-    return field.history ? field.buffers[field.currentIdx] : field.buffers[field.index];
+    return field.history ? field.buffers[field.bufferIdx[1]] : field.buffers[field.index];
   }
 
   nextBuffer(name) {
     const field = this.ensureField(name);
-    return field.history ? field.buffers[field.nextIdx] : field.buffers[1 - field.index];
+    return field.history ? field.buffers[field.bufferIdx[0]] : field.buffers[1 - field.index];
   }
 
   swap(name) {
@@ -196,20 +210,27 @@ export class WebGpuGeodesicRuntime {
   // viewpoint of the next tick); recycle the old prev as scratch for
   // the next tick's write.
   rotateHistory(names = []) {
+    // Right-rotate bufferIdx so the OLDEST prev slot becomes the new
+    // "next" (recycled scratch), the previous "next" becomes the new
+    // "current", and every previous prev_k becomes prev_{k+1}.
+    //
+    //   before: [next, current, prev1, prev2, ..., prev_depth]
+    //   after:  [prev_depth, next, current, prev1, ..., prev_{depth-1}]
+    //
+    // Note bufferIdx stores buffer indices — popping the back and
+    // unshifting the front is O(depth) but depth is tiny (typically 1,
+    // up to ~3 for higher-order time integrators).
     for (const name of names) {
       const field = this.fields.get(name);
       if (!field?.history) continue;
-      const oldPrev = field.prevIdx;
-      field.prevIdx = field.currentIdx;
-      field.currentIdx = field.nextIdx;
-      field.nextIdx = oldPrev;
+      field.bufferIdx.unshift(field.bufferIdx.pop());
     }
   }
 
   uploadField(name, values) {
     if (!values) return;
     const field = this.ensureField(name);
-    const target = field.history ? field.buffers[field.currentIdx] : field.buffers[field.index];
+    const target = field.history ? field.buffers[field.bufferIdx[1]] : field.buffers[field.index];
     this.device.queue.writeBuffer(target, 0, values.buffer, values.byteOffset, values.byteLength);
     // Note: we do NOT copy into prev for history fields here.
     // uploadField is hit on every tick (from stamp/paint markStateDirty
@@ -283,9 +304,11 @@ export class WebGpuGeodesicRuntime {
       binding++;
     }
     // Prev-bindings sit between regular reads and the output binding —
-    // matches the WGSL compiler's layout (see compileCellShader).
-    for (const name of prevReads) {
-      entries.push({ binding, resource: { buffer: this.historyBuffer(name) } });
+    // matches the WGSL compiler's layout (see compileCellShader). Each
+    // entry is `{ field, depth }` so multiple history depths of the
+    // same field get distinct bind slots.
+    for (const entry of prevReads) {
+      entries.push({ binding, resource: { buffer: this.historyBuffer(entry.field, entry.depth) } });
       binding++;
     }
     entries.push({ binding, resource: { buffer: this.nextBuffer(field) } });

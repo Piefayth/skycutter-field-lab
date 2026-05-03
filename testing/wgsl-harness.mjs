@@ -109,7 +109,7 @@ export async function makeHarness({ recipeDsl, dsl, frequency = 16 } = {}) {
   // with history". Mirrors what the production pipeline runtime does
   // at recipe load.
   for (const decl of fieldDecls) {
-    if ((decl.history ?? 0) > 0) runtime.ensureHistory(decl.name);
+    if ((decl.history ?? 0) > 0) runtime.ensureHistory(decl.name, decl.history);
   }
 
   // Each pass in `stagesPipeline.stages[i].passes` corresponds to one

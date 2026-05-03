@@ -763,7 +763,25 @@ function projectCoordRead(node) {
     throw new Error("v2 CST projection: expected coordinate name after @");
   }
   if (node.coord === "prev") {
-    return { type: "CoordRead", field: node.field, coord: { kind: "prev" } };
+    // `@prev` without args is depth=1 (the previous tick — original v1
+    // semantics). `@prev(N)` reads N ticks back; N must be a positive
+    // integer literal so the buffer-rotation depth is statically known
+    // at compile time.
+    let depth = 1;
+    if (node.args.length === 1) {
+      const arg = expressionCstToAst(node.args[0]);
+      if (arg?.type !== "Number") {
+        throw new Error(`v2 CST projection: ${node.field}@prev(N) — N must be a positive integer literal, got expression`);
+      }
+      const n = Number(arg.value);
+      if (!Number.isInteger(n) || n < 1) {
+        throw new Error(`v2 CST projection: ${node.field}@prev(${arg.value}) — N must be a positive integer (>=1)`);
+      }
+      depth = n;
+    } else if (node.args.length > 1) {
+      throw new Error(`v2 CST projection: ${node.field}@prev takes 0 or 1 args, got ${node.args.length}`);
+    }
+    return { type: "CoordRead", field: node.field, coord: { kind: "prev", depth } };
   }
   if (node.coord === "upstream") {
     if (node.args.length !== 3) {

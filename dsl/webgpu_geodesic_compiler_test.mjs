@@ -943,9 +943,10 @@ step {
 }
 `);
   const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
-  assert(Array.isArray(pass.prevReads) && pass.prevReads.includes("u"), "pass.prevReads must include u");
-  assert(pass.source.includes("var<storage, read> f_u_prev"), "WGSL must declare the prev binding");
-  assert(pass.source.includes("f_u_prev[cell]"), "WGSL must read prev from f_u_prev");
+  assert(Array.isArray(pass.prevReads) && pass.prevReads.some((e) => e.field === "u" && e.depth === 1),
+    "pass.prevReads must include { field: 'u', depth: 1 }");
+  assert(pass.source.includes("var<storage, read> f_u_prev_1"), "WGSL must declare the prev binding");
+  assert(pass.source.includes("f_u_prev_1[cell]"), "WGSL must read prev from f_u_prev_1");
 });
 
 // =============================================================================

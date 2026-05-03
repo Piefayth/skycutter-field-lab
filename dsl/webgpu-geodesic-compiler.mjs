@@ -63,7 +63,7 @@ function compileActionPass({ stage, field, reads, actions, layout, key }) {
   // intersected with `reads` because a stage that doesn't already read
   // a field shouldn't be allowed to peek at its prev value either —
   // that would silently bypass the `reads` declaration.
-  const prevReads = collectPrevReads(targetActions).filter((name) => passReads.includes(name));
+  const prevReads = collectPrevReads(targetActions).filter((entry) => passReads.includes(entry.field));
   return {
     kind: "cell",
     stageId: stage.id,
@@ -369,9 +369,11 @@ function compileCellShader({ stage, field, reads, prevReads = [], actions, layou
   );
   // Prev-read bindings sit between the regular reads and the output
   // binding so existing binding indices for params / positions /
-  // neighbors only need to shift by `prevReads.length`.
+  // neighbors only need to shift by `prevReads.length`. The buffer
+  // name encodes the depth so a single field with multiple history
+  // depths gets distinct bindings (e.g. `f_u_prev_1`, `f_u_prev_2`).
   const prevReadBindings = prevReads.map(
-    (name, index) => `@group(0) @binding(${reads.length + index}) var<storage, read> f_${name}_prev: array<${wgslElemType(typeOf(name))}>;`,
+    ({ field: name, depth }, index) => `@group(0) @binding(${reads.length + index}) var<storage, read> f_${name}_prev_${depth}: array<${wgslElemType(typeOf(name))}>;`,
   );
   const outputBinding = reads.length + prevReads.length;
   const paramsBinding = outputBinding + 1;
@@ -715,13 +717,20 @@ function filterActionList(actions, target, locals) {
   return out;
 }
 
-// Walk the action body for v2 `field@prev` reads — CoordRead nodes with
-// coord.kind === "prev". Returns the distinct field names (source-order).
-// Legacy v1 `prev(IDENT)` Call shape is also recognized so the same
-// helper works for any leftover v1-style AST.
+// Walk the action body for v2 `field@prev` and `field@prev(N)` reads
+// (and the legacy v1 `prev(IDENT)` Call shape). Returns ordered
+// `{ field, depth }` entries, one per distinct (field, depth) pair —
+// each pair gets its own bind slot so the cell pass can read multiple
+// history depths of the same field independently.
 function collectPrevReads(actions) {
   const out = [];
   const seen = new Set();
+  function add(field, depth) {
+    const key = `${field}@${depth}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ field, depth });
+  }
   function visitAction(action) {
     if (!action) return;
     if (action.expr) walkExpr(action.expr);
@@ -731,18 +740,12 @@ function collectPrevReads(actions) {
   function walkExpr(expr) {
     if (!expr) return;
     if (expr.type === "CoordRead" && expr.coord?.kind === "prev") {
-      if (!seen.has(expr.field)) {
-        seen.add(expr.field);
-        out.push(expr.field);
-      }
+      add(expr.field, expr.coord.depth ?? 1);
       return;
     }
     if (expr.type === "Call" && expr.callee?.type === "Identifier" && expr.callee.name === "prev") {
       const arg = expr.args?.[0];
-      if (arg?.type === "Identifier" && !seen.has(arg.name)) {
-        seen.add(arg.name);
-        out.push(arg.name);
-      }
+      if (arg?.type === "Identifier") add(arg.name, 1);
       return;
     }
     if (expr.type === "Member") walkExpr(expr.object);
@@ -1531,7 +1534,7 @@ function compileCoordRead(ast, ctx) {
   // current-tick reads do.
   switch (coord.kind) {
     case "prev":
-      return wgslReadAt(`${ast.field}_prev`, fieldType, "cell");
+      return wgslReadAt(`${ast.field}_prev_${coord.depth ?? 1}`, fieldType, "cell");
     case "neighbor": {
       const resolver = ctx.coordReadResolver;
       const local = resolver?.(ast.field, coord.binding);
@@ -1670,7 +1673,7 @@ function compileCall(ast, ctx) {
     }
     const fieldTypes = ctx.layout?.fieldTypes ?? {};
     const fieldType = fieldTypes[arg.name] ?? "f32";
-    return wgslReadAt(`${arg.name}_prev`, fieldType, "cell");
+    return wgslReadAt(`${arg.name}_prev_1`, fieldType, "cell");
   }
   // Tangent-frame differential operators. With a bare field identifier
   // the compiler emits a per-(field) helper function in the shader

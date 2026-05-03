@@ -42,13 +42,14 @@ export function compileV2(source) {
   const metrics = schema.metrics;
 
   // Infer history depth from @prev usage. v2 doesn't declare `field u
-  // history 1` — every `prev(u)` call (lowered from `u@prev`) implicitly
-  // requires u to keep one tick of history. Walk all cell bodies and
-  // metric expressions, collect the set of fields read with prev(), and
-  // promote their `history` count.
-  const historyFields = collectHistoryFields(stages, metrics);
+  // history 1` — every `field@prev` (depth 1) or `field@prev(N)` (depth
+  // N) implicitly requires N ticks of buffered history. Walk all cell
+  // bodies and metric expressions, collect the max depth per field, and
+  // promote each field's `history` count.
+  const historyDepths = collectHistoryFields(stages, metrics);
   for (const field of schema.fields) {
-    if (historyFields.has(field.name)) field.history = Math.max(field.history ?? 0, 1);
+    const depth = historyDepths.get(field.name);
+    if (depth) field.history = Math.max(field.history ?? 0, depth);
   }
 
   annotateStageParamRefs(stages, schema);
@@ -108,19 +109,23 @@ export function compileV2(source) {
 }
 
 // Walk every cell-action expression and metric expression for v2
-// CoordRead nodes with `coord.kind === "prev"`. The set of fields
-// referenced gates history-buffer allocation. Legacy `Call(prev, ...)`
-// shape is still recognized for any leftover non-CoordRead AST.
+// CoordRead nodes with `coord.kind === "prev"`. Returns a Map of
+// fieldName → max depth of @prev(N) reads against that field.
+// `coord.depth` defaults to 1 for the unary `field@prev` form. Legacy
+// `Call(prev, ...)` shape is recognized as depth=1 too.
 function collectHistoryFields(stages, metrics) {
-  const out = new Set();
+  const out = new Map();
+  function bump(name, depth) {
+    out.set(name, Math.max(out.get(name) ?? 0, depth));
+  }
   function walk(ast) {
     if (!ast || typeof ast !== "object") return;
     if (ast.type === "CoordRead" && ast.coord?.kind === "prev") {
-      out.add(ast.field);
+      bump(ast.field, ast.coord.depth ?? 1);
     }
     if (ast.type === "Call" && ast.callee?.type === "Identifier" && ast.callee.name === "prev") {
       const arg = ast.args?.[0];
-      if (arg?.type === "Identifier") out.add(arg.name);
+      if (arg?.type === "Identifier") bump(arg.name, 1);
     }
     for (const k of Object.keys(ast)) {
       const v = ast[k];

@@ -819,10 +819,14 @@ function parseCoordReadNode(parser, target) {
   let args = [];
   let closeFrom = null;
   let missing = !coordTok;
-  if (coord === "upstream" && peek(parser).value === "(") {
+  // Both `@upstream(velX, velY, dt)` and `@prev(N)` take parenthesized
+  // arguments. `@prev` without args means N=1 (the original semantics);
+  // `@prev(2)` reads two ticks back, etc. Other coord kinds (`@n` etc.)
+  // never take args.
+  if ((coord === "upstream" || coord === "prev") && peek(parser).value === "(") {
     const call = parseCallNode(parser, {
       type: "ExprIdentifier",
-      name: "upstream",
+      name: coord,
       from: coordTok.from,
       to: coordTok.to,
     });

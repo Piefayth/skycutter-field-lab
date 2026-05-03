@@ -316,7 +316,7 @@ step {
   assertEq(action.expr.type, "Binary");
   assertEq(action.expr.right.type, "CoordRead");
   assertEq(action.expr.right.field, "u");
-  assertEq(action.expr.right.coord, { kind: "prev" });
+  assertEq(action.expr.right.coord, { kind: "prev", depth: 1 });
 });
 
 // -----------------------------------------------------------------------------

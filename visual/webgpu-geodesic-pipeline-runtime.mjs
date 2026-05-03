@@ -45,11 +45,11 @@ export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGri
   // `next` slot; rotateHistory at end-of-tick promotes next→current
   // and demotes the old current→prev (visible to next tick's
   // prev(field) reads).
-  const historyFieldNames = (dsl.fields ?? [])
-    .filter((decl) => (decl?.history ?? 0) > 0)
-    .map((decl) => decl.name);
+  const historyFieldDecls = (dsl.fields ?? [])
+    .filter((decl) => (decl?.history ?? 0) > 0);
+  const historyFieldNames = historyFieldDecls.map((decl) => decl.name);
   const historyFieldSet = new Set(historyFieldNames);
-  for (const name of historyFieldNames) runtime.ensureHistory(name);
+  for (const decl of historyFieldDecls) runtime.ensureHistory(decl.name, decl.history);
 
   // Compile every v2 `metric x = ...` into a per-cell pass + reduce
   // pipelines. Allocates scratch / readback buffers and pre-builds the

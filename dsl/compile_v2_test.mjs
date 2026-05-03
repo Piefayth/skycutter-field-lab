@@ -77,10 +77,10 @@ test("v2 wave-equation lowers + compiles to WGSL", () => {
   assert(stage.passes.length >= 1, "stage has at least one pass");
   const cellPass = stage.passes.find((p) => p.kind === "cell");
   assert(cellPass, "expected a cell pass");
-  assert(Array.isArray(cellPass.prevReads) && cellPass.prevReads.includes("u"),
-    `cell pass should declare prevReads=[u], got ${JSON.stringify(cellPass.prevReads)}`);
-  assert(cellPass.source.includes("f_u_prev"),
-    "WGSL should bind f_u_prev for u@prev reads");
+  assert(Array.isArray(cellPass.prevReads) && cellPass.prevReads.some((e) => e.field === "u" && e.depth === 1),
+    `cell pass should declare prevReads with {field:"u",depth:1}, got ${JSON.stringify(cellPass.prevReads)}`);
+  assert(cellPass.source.includes("f_u_prev_1"),
+    "WGSL should bind f_u_prev_1 for u@prev reads");
   assert(cellPass.source.includes("var<storage, read> f_u"),
     "WGSL should bind f_u for current reads");
 });

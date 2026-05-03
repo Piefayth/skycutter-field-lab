@@ -120,9 +120,9 @@ step {
 metric drift = max cells { abs(u@prev - u) }
 `, "drift");
   const prim = compiled.primitives[0];
-  assertEq(prim.prevReads, ["u"], "metric @prev surfaces in prevReads");
-  assert(prim.perCellSource.includes("var<storage, read> f_u_prev"),
-    "WGSL binds f_u_prev for prev coord query");
+  assertEq(prim.prevReads, [{ field: "u", depth: 1 }], "metric @prev surfaces in prevReads");
+  assert(prim.perCellSource.includes("var<storage, read> f_u_prev_1"),
+    "WGSL binds f_u_prev_1 for prev coord query");
 });
 
 // -----------------------------------------------------------------------------

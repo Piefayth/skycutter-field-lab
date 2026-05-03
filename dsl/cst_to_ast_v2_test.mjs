@@ -62,7 +62,7 @@ test("CST expression projection handles ternary + prev", () => {
     consequent: {
       type: "CoordRead",
       field: "u",
-      coord: { kind: "prev" },
+      coord: { kind: "prev", depth: 1 },
     },
     alternate: {
       type: "Unary",
