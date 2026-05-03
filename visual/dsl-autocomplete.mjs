@@ -19,10 +19,10 @@
 // =============================================================================
 
 import {
-  autocompletion, completionKeymap, acceptCompletion,
+  autocompletion, completionKeymap, acceptCompletion, completionStatus, startCompletion,
 } from "@codemirror/autocomplete";
 import {
-  keymap, Decoration, WidgetType, EditorView,
+  keymap, Decoration, WidgetType, EditorView, ViewPlugin,
 } from "@codemirror/view";
 import { StateField, StateEffect, Prec } from "@codemirror/state";
 
@@ -174,6 +174,55 @@ function dslCompletionSource(context) {
 }
 
 // ---------------------------------------------------------------------------
+// Empty-prefix popup trigger.
+//
+// CodeMirror's typed autocomplete naturally starts after a prefix. For this DSL,
+// the useful state is often a blank structural position where the CST says the
+// only legal words are, say, `let` / `set` / `add` / `when`. When a user lands on
+// such a blank line, open the picker immediately if there are multiple options.
+// Single-option cases still stay quiet until a typed prefix can ghost.
+// ---------------------------------------------------------------------------
+
+const blankStructuralCompletionPlugin = ViewPlugin.fromClass(class {
+  constructor(view) {
+    this.view = view;
+    this.request = 0;
+  }
+  update(update) {
+    if (!update.docChanged && !update.selectionSet) return;
+    this.schedule();
+  }
+  schedule() {
+    if (this.request) cancelAnimationFrame(this.request);
+    this.request = requestAnimationFrame(() => {
+      this.request = 0;
+      if (shouldOpenBlankStructuralMenu(this.view)) startCompletion(this.view);
+    });
+  }
+  destroy() {
+    if (this.request) cancelAnimationFrame(this.request);
+  }
+});
+
+function shouldOpenBlankStructuralMenu(view) {
+  if (completionStatus(view.state) !== null) return false;
+  const sel = view.state.selection.main;
+  if (!sel.empty) return false;
+  const pos = sel.head;
+  if (cursorIsMidWord(view.state, pos)) return false;
+  if (wordBefore(view.state, pos)) return false;
+
+  const line = view.state.doc.lineAt(pos);
+  const before = line.text.slice(0, pos - line.from);
+  const after = line.text.slice(pos - line.from);
+  if (activeLineSegment(before).trim() !== "") return false;
+  if (after.trim() !== "") return false;
+
+  const options = completionOptionsForSource(view.state.doc.toString(), pos, "");
+  return options.length > 1;
+}
+
+// ---------------------------------------------------------------------------
 // Inline ghost-text for the single-suggestion case.
 //
 // The ghost is a pure derivation of the editor state — given the current
@@ -234,6 +283,13 @@ function cursorIsMidWord(state, pos) {
   if (pos >= state.doc.length) return false;
   const next = state.doc.sliceString(pos, pos + 1);
   return /[A-Za-z0-9_$]/.test(next);
+}
+
+function activeLineSegment(line) {
+  const brace = line.lastIndexOf("{");
+  const semi = line.lastIndexOf(";");
+  const cut = Math.max(brace, semi);
+  return cut >= 0 ? line.slice(cut + 1) : line;
 }
 
 // Pure function: given a state, return the ghost record (or null).
@@ -332,6 +388,7 @@ export function dslAutocomplete() {
     ghostSuppressField,
     ghostField,
     ghostDecorations,
+    blankStructuralCompletionPlugin,
     // Wrap in Prec.high so our Tab/Escape run before editor-core's
     // `indentWithTab` (which would otherwise eat Tab and indent instead
     // of accepting). `completionKeymap` only binds Enter for accept, so

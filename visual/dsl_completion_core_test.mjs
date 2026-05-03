@@ -66,6 +66,7 @@ step {
 `;
 
 test("cell body offers only cell action words for a bare prefix", () => {
+  assertEq(labels(SOURCE, "@@"), ["let", "set", "add", "when"]);
   assertEq(labels(SOURCE, "@@", "s"), ["set"]);
 });
 
