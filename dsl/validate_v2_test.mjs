@@ -18,6 +18,21 @@ function expectThrow(fn, snippet) {
 // Derived fields: must have ≥1 stage writer
 // -----------------------------------------------------------------------------
 
+test("duplicate field declaration is rejected", () => {
+  // Surfaced by negative-fuzz-v2.mjs: the v1-shape name-uniqueness
+  // check only fired on prior-kind != current-kind, so two `field`
+  // declarations of the same name passed silently and the recipe
+  // ended up with a duplicate `fields` entry the runtime couldn't
+  // resolve cleanly. claim() now rejects same-name same-kind too.
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field u: f32
+field u: f32
+step { stage s { reads u; writes u; cell { set u = u } } }
+`), `field "u" is declared more than once`);
+});
+
 test("derived field with no writer is rejected", () => {
   expectThrow(() => compileV2(`
 recipe "X"

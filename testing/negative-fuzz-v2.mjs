@@ -50,9 +50,25 @@ const MUTATIONS = [
     name: "drop-reads-line",
     description: "remove a `reads` clause from a stage — body refers to fields not in reads",
     apply: (dsl) => {
-      const m = /^( +)reads [^\n]+\n/m.exec(dsl);
+      // Find a `reads` line + the cell body that follows. We only
+      // want to mutate when removing the reads clause will actually
+      // break the recipe — i.e. when the body references at least
+      // one of the listed fields. Recipes whose body references no
+      // fields (only params/consts) survive the mutation, which
+      // would falsely register as a validator miss.
+      const re = /^( +)reads ([^\n]+)\n([\s\S]*?)cell\s*\{([\s\S]*?)\n\1\}/m;
+      const m = re.exec(dsl);
       if (!m) return null;
-      const mutated = dsl.replace(m[0], "");
+      const readFields = m[2].split(/\s*,\s*/).map(s => s.trim()).filter(Boolean);
+      const cellBody = m[4];
+      // We want references where the field is *read*, not the LHS
+      // of a set/add (`set f2 = ...` mentions f2 but doesn't read it).
+      // Negative-lookbehind blocks the write-target case.
+      const referenced = readFields.filter(name =>
+        new RegExp(`(?<!set |add )\\b${name}\\b`).test(cellBody)
+      );
+      if (referenced.length === 0) return null;     // mutation would be a no-op
+      const mutated = dsl.replace(m[0], m[0].replace(/^( +)reads [^\n]+\n/m, ""));
       return { mutated, expected: /(reads|unknown identifier|missing)/i };
     },
   },

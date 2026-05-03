@@ -141,7 +141,16 @@ export function validateNameUniqueness(schema, stages = []) {
   function claim(name, kind) {
     if (!name) return;
     const prior = declaredBy.get(name);
-    if (prior && prior !== kind) {
+    if (prior) {
+      // Same-kind duplicates were previously accepted because the
+      // mismatch check only fired on prior !== kind. The recipe
+      // ended up with two entries for the same name, which the
+      // runtime lookups can't resolve cleanly (every site that
+      // searches by name finds the first; the second is a quiet
+      // shadow). Reject explicitly.
+      if (prior === kind) {
+        throw new Error(`${kind} "${name}" is declared more than once`);
+      }
       throw new Error(`Name "${name}" is declared as both ${prior} and ${kind}; the DSL has one global namespace, rename one`);
     }
     declaredBy.set(name, kind);
