@@ -87,6 +87,12 @@
       "summary": "Stochastic ferromagnet on a sphere. Each cell stores a spin and explicit RNG state; rand01(rng) proposes Metropolis flips and rngNext(rng) advances the state. Low temperature coarsens into domains, high temperature boils."
     },
     {
+      "id": "smoothlife",
+      "name": "SmoothLife topological (example)",
+      "path": "recipes/smoothlife.mjs",
+      "summary": "SmoothLife-style continuous cellular automaton using topological disk/ring reductions. disk(2) estimates local mass; ring(3) estimates the outer annulus. A dogfood recipe for graph-distance neighborhoods, not a faithful metric-kernel SmoothLife."
+    },
+    {
       "id": "gierer-meinhardt",
       "name": "Gierer-Meinhardt (example)",
       "path": "recipes/gierer-meinhardt.mjs",
