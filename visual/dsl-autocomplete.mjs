@@ -1,21 +1,21 @@
 // =============================================================================
 // DSL autocomplete + auto-import.
 //
-// Behaviour the issue asks for:
+// Behaviour:
 //   - Typing an identifier prefix shows suggestions.
 //   - Tab accepts; Escape dismisses.
 //   - Exactly one match → render a ghost-inline preview after the
 //     cursor (no popup); Tab still accepts.
 //   - Two-or-more matches → standard autocomplete popup.
-//   - Auto-import: accepting a catalog symbol whose `use NAMESPACE name`
-//     line isn't yet in the recipe inserts that line for you, in the
-//     right place, without disturbing the cursor.
+//   - Auto-import: accepting a catalog symbol whose name isn't yet on
+//     an `import …` line inserts (or extends) the import for you,
+//     in the right place, without disturbing the cursor.
 //
 // Suggestions come from two sources in priority order:
 //   1. Recipe-declared identifiers (live-parsed from the doc) —
 //      fields, sources, params, consts, planet constants.
 //   2. The static DSL_SYMBOLS catalog, scoped to the cursor's context
-//      (top-level vs stage body vs preset body vs `use NAMESPACE` etc).
+//      (top-level vs stage body vs scenario body vs `import` line).
 // =============================================================================
 
 import {
@@ -230,11 +230,9 @@ function detectContext(state, pos) {
 // `when ... { CURSOR }` inside `cell { ... }` still classifies as cellBody.
 function classifyContext(ctx) {
   const line = ctx.lineUpToCursor;
-  // `import …` lines (v2). All names on the line are flat builtin
-  // imports — autocomplete from the unified catalog. v1's per-namespace
-  // `use sim cell` model is gone, but we still recognize `use` lines
-  // for any leftover saved-recipe text and route them through the same
-  // flat-name suggestion path.
+  // `import …` line: every identifier on it is a flat builtin name.
+  // The `use` form below is preserved as a graceful catch for any
+  // saved-recipe text typed before v2 landed — same suggestion path.
   if (/^\s*(import|use)(\s|$)/.test(line)) {
     return { mode: "v2Import" };
   }
@@ -276,8 +274,8 @@ function symbolsForMode(mode) {
       // Inside `step { ... }` only stage declarations belong here.
       return DSL_SYMBOLS.filter((s) => s.kind === "definitionKw" || s.name === "stage");
     case "v2Import":
-      // Flat list of every importable builtin. v1's namespace gating
-      // is gone; v2 imports each name by itself.
+      // Flat list of every importable builtin (filtered to symbols that
+      // actually need importing — built-in syntax keywords don't).
       return DSL_SYMBOLS.filter((s) => importNamespace(s));
     default:
       return DSL_SYMBOLS;
@@ -343,7 +341,6 @@ function buildOptions(state, ctx, mode, prefix) {
 function importedAlready(docText, sym) {
   const ns = importNamespace(sym);
   if (!ns) return true;
-  // V2 imports are flat (one `import name1, name2` line, no namespace).
   // A recipe is "ALREADY OK" if either:
   //   - it has no `import` line at all (default = all builtins in scope), OR
   //   - it has at least one `import` line and the symbol's name appears.
@@ -363,8 +360,6 @@ function importedAlready(docText, sym) {
 //   1. If an `import …` line already exists, append `, name` to it.
 //   2. Else, drop a fresh `import name` line — after the last existing
 //      schema directive, else at the top of file.
-// V2 imports are flat (no namespace), so the matching is simpler than
-// v1's `use NS name` shape.
 function ensureImportFor(view, sym) {
   const ns = importNamespace(sym);
   if (!ns) return;
@@ -393,9 +388,9 @@ function ensureImportFor(view, sym) {
   const needsLeadingNewline = insertAt === docText.length
     && docText.length > 0
     && !docText.endsWith("\n");
-  // V2 imports are flat — a single `import name` line, no namespace.
-  // The first auto-imported name creates the line; further names
-  // extend it (handled by the `extend` branch above).
+  // The first auto-imported name creates a fresh `import name` line;
+  // subsequent names extend that line (handled by the `extend` branch
+  // above).
   const insertText = (needsLeadingNewline ? "\n" : "")
     + `import ${sym.name}\n`;
   const cursor = view.state.selection.main.head;
@@ -412,8 +407,8 @@ function chooseImportInsertPoint(docText) {
   let lastSchema = -1;
   for (let i = 0; i < lines.length; i++) {
     const trimmed = lines[i].trim();
-    // Both v2 `import` and any leftover v1 `use` — either acts as an
-    // anchor for "drop the new directive after existing ones."
+    // `import` lines anchor the new directive; the legacy `use` form
+    // is matched too as a fallback for any older saved-recipe text.
     if (/^(import|use)\s+\w+/.test(trimmed)) lastImport = i;
     else if (/^(recipe|summary|recommendedPreset|substrate|grid|planet|const)\b/.test(trimmed)) {
       lastSchema = i;

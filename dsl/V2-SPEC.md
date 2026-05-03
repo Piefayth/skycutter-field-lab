@@ -90,11 +90,21 @@ field u: f32                # primary state, paintable, written by stages
 field abs_u: f32 derived    # computed per-cell by stages, not paintable
 ```
 
-### Types (reserved grammar; only `f32` implemented in v2 first cut)
+### Types
 
-- `f32` — scalar (only one fully supported)
-- `vec2`, `vec3` — reserved, errors at validate time
-- `u32` — reserved, errors at validate time
+- `f32` — scalar
+- `vec2` — 2D vector. Storage buffer is `array<vec2<f32>>`; member
+  access `.x` / `.y` is supported; arithmetic mixes scalars and
+  vec2s with WGSL-compatible broadcast semantics; `vec2(x, y)`,
+  `length(v)`, `gradient(scalarField)`, and `divergence(vec2Field)`
+  are first-class builtins.
+- `vec3`, `u32` — reserved grammar; not implemented yet.
+
+Type checking happens in `dsl/typecheck-v2.mjs`. Assignment-shape
+mismatches (`set u = wind` where `u: f32` and `wind: vec2`),
+`gradient`-on-vec2, `divergence`-on-scalar, vec2 in scalar reductions,
+and non-bool `when` conditions all error at recipe load with a clear
+message.
 
 ### `derived` annotation
 
@@ -236,15 +246,19 @@ steps for multi-rate simulations.
 ### Coordinate queries (the unifying construct)
 
 ```
-u           # this cell, current tick
-u@prev      # this cell, previous tick (triggers history allocation)
-u@n         # neighbor cell, current tick (only valid inside a reduction
-            # body where `n` is a bound neighbor coordinate)
+u                                  # this cell, current tick
+u@prev                             # this cell, previous tick (triggers history allocation)
+u@n                                # neighbor cell, current tick (only valid inside a reduction
+                                   # body where `n` is a bound neighbor coordinate)
+u@upstream(velX, velY, dt)         # continuous-position semi-Lagrangian sample —
+                                   # walks back along the (velX, velY) tangent
+                                   # vector for `dt` seconds, gathers self +
+                                   # neighbors with inverse-distance weighting.
+                                   # Replaces the v1 advect kernel.
 ```
 
 Reserved for future:
 - `u@prev(N)` for N-deep history
-- `u@(continuous_pos)` for sampling at a non-cell position (advection)
 - `u@anti` for antipodal cell on a sphere
 - `u@boundary` for boundary lookup
 
@@ -421,8 +435,12 @@ in v2 first cut.
 
 ## Validator rules summary
 
-Enforced today (split between `dsl/parse-v2.mjs` and `dsl/validate.mjs`
-[v1 layer, reused] and `dsl/validate-v2.mjs`):
+Enforced today (split across `dsl/parse-v2.mjs` (syntactic shape),
+`dsl/validate.mjs` (structural / wiring rules — single-writer-per-step,
+reads/writes consistency, name uniqueness), `dsl/validate-v2.mjs`
+(v2-specific semantics — derived fields, metric purity, flat imports,
+explicit-previous-reads), and `dsl/typecheck-v2.mjs` (assignment-shape
++ vec2 type rules)):
 
 - Recipe must have exactly one `recipe "..."` declaration. *(parser)*
 - Recipe must have exactly one `substrate ...` declaration. *(parser)*
@@ -443,59 +461,48 @@ Enforced today (split between `dsl/parse-v2.mjs` and `dsl/validate.mjs`
 - Metric reduction op must be one of {sum, max, min, mean, count}. *(v2)*
 - Metric expressions are pure (no `set`/`add`/`emit`). *(v2)*
 - `MetricReduce` only at top of `metric` declarations; never nested. *(v2)*
-- Vector types (`vec2`, `vec3`, `u32`) reserved; parser rejects all uses
-  in v2 first cut. *(parser)*
+- `vec2` field types implemented (klausmeier `slope`, future wind
+  recipes); `vec3` / `u32` reserved but not parsed. *(parser)*
+- Assignment-shape type checking — `set f32_field = vec2_expr` and
+  symmetric mismatches rejected with a clear DSL-level error.
+  *(typecheck-v2)*
+- Metric body must produce `f32` (vec2 in a scalar reduction errors
+  out), bool top-level rejected with a redirect to `count cells
+  where ...`. *(validate-v2 + typecheck-v2)*
 
 Still TODO — partially-enforced or not yet:
 
 - Each `cell { }` has at most one `set` per field at the same nesting
-  level. *(currently lenient: last-write-wins matches v1 semantics; the
-  recipe author can still do `when A { set u = X } when B { set u = Y }`
-  for mutually-exclusive branches, which we want.)*
-- Metric expressions produce `f32` scalar. *(top-level boolean
-  expressions are now rejected — `mean cells { u > 0 }` errors with a
-  redirect to `count cells where ...` or
-  `mean cells { u > 0 ? 1 : 0 }`. Deep type checking inside arithmetic
-  will need a real typer.)*
+  level. *(currently lenient: last-write-wins; the recipe author can
+  still do `when A { set u = X } when B { set u = Y }` for mutually-
+  exclusive branches, which we want.)*
 - Substrate-specific helpers gated by substrate type. *(only `geodesic`
   exists; non-issue until a second substrate lands.)*
 
 ## Compiler architecture
 
-The v2 surface produces v2 AST nodes that flow through to the WGSL
-compiler unchanged. Some AST shapes (NeighborReduce, stage cell
-actions) are reused from the original implementation — they predate
-v2 but model the same concepts. The compile path:
+The compile path:
 
-- `parse-v2.mjs` produces a v2 AST: CoordRead nodes for `field@coord`,
-  NeighborReduce nodes carrying a `coord` binding name, plus the
-  shared cell-action types (`set`, `add`, `let`, `when`).
-- `validate-v2.mjs` owns ALL v2-specific semantics: flat-import
-  constraint (replacing v1's namespaced `use sim cell` gating),
-  derived-field rules, metric expression validation,
-  explicit-previous-reads consistency.
-- `validate.mjs` (originally v1) provides shape validators reused as
-  utility code: `validateNameUniqueness`, `validatePresets`,
-  `validateStamps`, `validateStages` check structural rules
-  (reads/writes wiring, history-field single-writer-per-step) that
-  apply equally in v2. The v1 namespaced import gating is bypassed
-  via a `permitAll` sentinel on `schema.imports` — v2 doesn't need
-  the `use NS name` machinery.
+- `parse-v2.mjs` produces the v2 AST: CoordRead nodes for `field@coord`
+  (kinds: `prev`, `neighbor`, `upstream`), NeighborReduce nodes carrying
+  a `coord` binding name, plus cell-action types (`set`, `add`, `let`,
+  `when`). The v1 stage primitives (`wind`, `advect`, `diffuse`,
+  `clamp`, `normalize`) are rejected at parse time with redirect
+  messages pointing at the cell-stage equivalents.
+- `validate.mjs` runs shape / structural checks reusable across surface
+  syntaxes: name uniqueness, reads/writes wiring, scenario / stamp /
+  stage shape, history-field single-writer-per-step.
+- `validate-v2.mjs` runs v2-specific semantics: flat import constraint,
+  derived-field rules, metric expression purity / shape, explicit-
+  previous-reads consistency.
+- `typecheck-v2.mjs` runs assignment-shape and vec2-aware type checking
+  over every cell body, scenario / stamp body, and metric body.
 - `webgpu-geodesic-compiler.mjs`'s `compileExpr` dispatches on
   `CoordRead.coord.kind` directly. New coord kinds extend by adding
-  cases here.
-- The metric kernel pipeline (per-cell pass + workgroup tree-reduce)
-  lives in `webgpu-geodesic-compiler.mjs` (`compileWebGpuMetric`,
-  `metricReduceShader`) and `visual/webgpu-metric-runtime.mjs`.
-
-What's NOT in v2's path anymore:
-- v1 namespaced imports (`use sim cell`, `use core sin`). The user
-  writes flat `import sin, cos, neighbor`; the v2 validator enforces
-  it; the v1 validator's namespace gating is short-circuited.
-- v1 INIT_VERBS / PIPELINE_PRIMITIVES catalog routing through to v1
-  imports. Compile-v2 no longer translates v2 imports into the v1
-  namespaced shape — there's no `buildV1ImportsFromV2` /
-  `NAMESPACE_BY_NAME` / `V2_AUTO_INIT` / `V2_MAXIMAL_IMPORTS`.
+  cases here. The metric kernel pipeline (per-cell pass + workgroup
+  tree-reduce) lives in the same file (`compileWebGpuMetric`,
+  `metricReduceShader`) and is driven at runtime by
+  `visual/webgpu-metric-runtime.mjs`.
 
 Concrete shapes:
 - v2 `u@prev` → `CoordRead { field: "u", coord: { kind: "prev" } }`.
@@ -519,16 +526,15 @@ Concrete shapes:
 
 ## Migration from v1
 
-All 10 v1 recipes will be rewritten to v2 syntax as part of v2 landing. v1
-parser/validator stay alive in `dsl/` during development; once recipes are
-fully ported, v1 files are removed.
+All recipes are v2; v1 parser / compiler / validator code is gone.
+The only v1-flavored module remaining is `validate.mjs`, kept for its
+shape validators (now surface-syntax-agnostic).
 
 ## Deferred features
 
-Reserved in grammar, not implemented in v2 first cut:
-- `vec2`, `vec3`, `u32` field types
+Reserved in grammar, not implemented:
+- `vec3`, `u32` field types (vec2 is implemented)
 - `@prev(N)` for N>1
-- `@(continuous_position)` sampling
 - `@anti`, `@boundary` queries
 - `step at Nhz` multi-rate
 - Multiple substrates (square, torus, voxel)
@@ -538,56 +544,13 @@ Reserved in grammar, not implemented in v2 first cut:
 
 ## Open questions
 
-- Multi-binding `NeighborReduce` in WGSL emitter — **DONE**.
-  Cell-centered multi-field reductions like `sum n in neighbors { u@n +
-  v@n - u - v }` lower correctly.
-- Reduction kernel infrastructure — **DONE**. v2 metrics now compile to
-  per-cell pass + workgroup-tree reduce + async readback. Per-tick the
-  GPU reduces every declared metric and `state.dslMetrics[id]` is
-  populated; the JS metrics panel resolves `dsl:<id>` sources against
-  it. `mean` decomposes into [sum, count] primitives and the readback
-  layer divides. Wave equation now uses the path
-  (`metric peak = max cells { abs(u) }` etc).
-- Imports — **REAL**. `import sin, cos, neighbor` constrains the recipe
-  to those names; using `cos(x)` without importing `cos` errors at
-  compile time. v2 imports are flat (no `from <namespace>` distinction);
-  the compiler looks each name up in `dsl-spec.mjs` to route to v1's
-  namespaced validator. No imports declared = all builtins in scope
-  (current converted recipes work unchanged).
 - Derived field UI: paint panel needs to auto-hide derived fields; views
   panel should show them. Editor concern, not DSL — wires through the
   recipe's `views[]` / paint stamp list. **Pending evidence** — only
   Kuramoto's `cosTheta` is currently derived, so the UI gap isn't yet
   user-visible.
-- `advect` retired as a stage primitive — **DONE**. Recipes use the
-  `field@upstream(velX, velY, dt)` continuous-position coordinate
-  query, which lowers to a per-(field) WGSL helper that does the
-  same inverse-distance-weighted gather over self + neighbors that
-  the v1 ADVECT_WGSL kernel did. Klausmeier ported to the cell-stage
-  form. PIPELINE_PRIMITIVES is now empty — every kernel operation is
-  expressible as a cell stage. Parser rejects `advect` with a redirect.
-- `wind` retired as a stage primitive — **DONE**. Recipes now express
-  pressure-driven wind as a regular cell stage using two new tangent-frame
-  builtins: `gradient(scalarField)` returns a vec2 of the field's
-  east/north partial derivatives at the cell, and `divergence(vec2Field)`
-  returns the scalar divergence. Per-(field, op) helper functions are
-  emitted in the WGSL prelude when used. Parser rejects `wind` with a
-  clear redirect to the cell-stage pattern.
-- Editor / autocomplete v2-aware — **DONE**. Highlighter recognizes
-  v2 keywords (substrate / scenario / step / for / metric / import /
-  derived / previous / cells / where / at), drops v1-only ones (use /
-  preset / source / setting / fill / each / event), and renders `@`
-  in coordinate queries as an operator. Autocomplete classifies block
-  context as v2 (cell / step / scenario / stamp), and auto-import
-  inserts/extends flat `import name1, name2` lines instead of v1's
-  per-namespace `use NS name` form. Docs categories updated to
-  describe v2 constructs (no more "after `use core ...`" phrasing).
-- Coordinate-query architecture — **DONE**. `u@prev` and `u@n` are
-  first-class `CoordRead { field, coord }` AST nodes (NOT lowered to
-  `Call(prev, [u])` or a synthetic Identifier). The WGSL compiler
-  dispatches on `coord.kind` in `compileCoordRead` — `prev` emits
-  `f_<field>_prev[cell]`, `neighbor` resolves to a per-binding local
-  set up by `emitReduction`. History inference and metric-body
-  validators walk for CoordRead nodes directly. Future coord kinds
-  (`u@anti`, `u@prev(N)`, `u@(continuous_pos)` for advection sampling,
-  `u@boundary`) extend by adding cases here — the AST stays uniform.
+- The historyFields side-channel still travels via `schema.imports`
+  (a leftover from the v1 namespace-import object). It should be
+  promoted to a proper top-level field on the parsed schema, after
+  which the `imports` parameter can be removed from the shape
+  validators entirely.

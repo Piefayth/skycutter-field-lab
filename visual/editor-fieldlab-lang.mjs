@@ -101,7 +101,8 @@ const NULLS = new Set(["null", "undefined"]);
 const definitionNameTag = Tag.define(t.variableName);
 export { definitionNameTag };
 
-// Namespace identifier after `use` (`use sim wind, …`).
+// Identifiers in `import name1, name2, ...` lines. Tag retains its
+// historical "namespace" name so existing style entries still resolve.
 const namespaceTag = Tag.define(t.variableName);
 export { namespaceTag };
 
@@ -126,8 +127,10 @@ export { sourceRefTag };
 //   declaration site (e.g. `field pressure, moisture, cloud`).
 // - "single-def": only the first identifier is the definition site;
 //   anything after (modifiers, values, label string) is regular.
-// - "namespace": the first identifier is the namespace; the rest are
-//   keyword-matched (since they're imported keyword names).
+// - "namespace" (legacy name; v2 import lines): the leading
+//   `import` keyword is consumed first; every following identifier on
+//   the line is a flat-imported builtin name with the "namespace"
+//   highlighter (italic info-color).
 const LINE_MODES = {
   // V2 fields are one-per-line with a type annotation (`field u: f32`).
   // The "single-def" mode highlights the first identifier as a definition
@@ -310,11 +313,11 @@ function makeFieldLabLanguage({ fieldTags, tokenNames, sourceTokenNames, immutab
       if (wasAfterDot) return isCall ? "function" : "propertyName";
       if (isCall) return "function";
 
-      // Past the namespace on a `use sim …` line, the remaining
-      // identifiers are imported symbol names. Render them as plain
-      // identifiers — keyword styling here would inconsistently
+      // Past the leading keyword on an `import a, b, c` line, the
+      // remaining identifiers are imported builtin names. Render as
+      // plain identifiers — keyword styling here would inconsistently
       // colour `clamp` / `cell` / `event` while leaving `smoothstep`
-      // / `max` / `noise2` plain, which is what tipped this off.
+      // / `max` / `cellNoise` plain, which is what tipped this off.
       if (state.lineMode === "namespace" && state.defConsumed) {
         return "variableName";
       }
