@@ -16,15 +16,11 @@ const WORKGROUP_SIZE = 128;
 const PARAMS_BUFFER_SIZE = 4096;
 
 // Bytes per cell for each field type. f32 = 1 component × 4 bytes;
-// vec2 = 2 components × 4 bytes. vec3 is stored as `array<vec4<f32>>`
-// with the .w slot as 4 bytes of padding — WGSL's storage-class
-// alignment rule pads array-of-vec3 stride to 16 anyway, so we use
-// vec4 backing explicitly to keep JS upload/readback straightforward
-// (4 floats per cell, last is pad).
+// vec2 = 2 components × 4 bytes. Future vec3 will be 16 (WGSL pads
+// vec3 to vec4 alignment in storage buffers).
 const FIELD_TYPE_BYTES = {
   f32: 4,
   vec2: 8,
-  vec3: 16,
   u32: 4,    // integer-storage fields use one u32 per cell
   bool: 4,   // bool sugars onto u32 storage (0 / 1)
 };
@@ -83,12 +79,11 @@ export class WebGpuGeodesicRuntime {
       size: PARAMS_BUFFER_SIZE,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
-    // Sized to the largest possible field type (vec3 storage = 16
-    // bytes/cell with vec4 padding). Shared across all field
-    // readbacks; readField copies only as many bytes as the field
-    // actually uses.
+    // Sized to the largest possible field type (vec2 = 8 bytes/cell).
+    // Shared across all field readbacks; the readField call writes
+    // only as many bytes as the field actually uses.
     this.readbackBuffer = device.createBuffer({
-      size: alignTo(this.cellCount * fieldTypeBytes("vec3"), 4),
+      size: alignTo(this.cellCount * fieldTypeBytes("vec2"), 4),
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     });
 

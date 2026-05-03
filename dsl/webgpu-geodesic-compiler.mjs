@@ -331,39 +331,23 @@ export function buildWebGpuGeodesicUniforms(layout, { dt = 0, frame = 0, cellCou
 // (everything in expressions is f32-or-vec2) while letting recipes
 // declare integer-storage fields for cellular automata, count
 // histories, state machines, etc.
-// The expression-level WGSL type seen by the cell body. vec3 values
-// look like `vec3<f32>` to user code even though the storage backing
-// is vec4 (.w as pad).
 function wgslElemType(fieldType) {
   if (fieldType === "vec2") return "vec2<f32>";
-  if (fieldType === "vec3") return "vec3<f32>";
   if (fieldType === "u32" || fieldType === "bool") return "u32";
   return "f32";
 }
 
-// The storage-buffer element type — what `array<…>` actually holds on
-// the GPU. Identical to the expression type for everything except vec3,
-// which needs a vec4 stride (16 bytes) per WGSL's storage alignment
-// rules. The .w slot is unused.
-function wgslStorageElemType(fieldType) {
-  if (fieldType === "vec3") return "vec4<f32>";
-  return wgslElemType(fieldType);
-}
-
 // Per-cell read of a field. Integer-storage fields cast to f32 so the
-// downstream expression compiles in pure f32 / vec2 / vec3 land. vec3
-// fields strip the storage-padding .w with a swizzle.
+// downstream expression compiles in pure f32 / vec2 land.
 function wgslReadCell(fieldName, fieldType) {
   if (fieldType === "u32" || fieldType === "bool") return `f32(f_${fieldName}[cell])`;
-  if (fieldType === "vec3") return `f_${fieldName}[cell].xyz`;
   return `f_${fieldName}[cell]`;
 }
 
 // Per-cell read of a field at a neighbor / arbitrary index. Same
-// integer-cast / swizzle conventions as wgslReadCell.
+// integer-cast as wgslReadCell, just at a different index.
 function wgslReadAt(fieldName, fieldType, indexExpr) {
   if (fieldType === "u32" || fieldType === "bool") return `f32(f_${fieldName}[${indexExpr}])`;
-  if (fieldType === "vec3") return `f_${fieldName}[${indexExpr}].xyz`;
   return `f_${fieldName}[${indexExpr}]`;
 }
 
@@ -371,11 +355,9 @@ function wgslReadAt(fieldName, fieldType, indexExpr) {
 // integer-storage fields we round-and-cast so 0.49 doesn't write 0
 // when the user clearly meant "almost-1 means 1" — the round is the
 // same convention WGSL spec uses for f32→u32 on `select` results.
-// outValue is f32 / vec2<f32> / vec3<f32> at this point. vec3 outputs
-// extend to vec4 with .w = 0 to write the padded storage form.
+// outValue is always f32 (or vec2<f32>) at the point we call this.
 function wgslWriteOutput(fieldType, valueExpr) {
   if (fieldType === "u32" || fieldType === "bool") return `outputField[cell] = u32(round(${valueExpr}));`;
-  if (fieldType === "vec3") return `outputField[cell] = vec4<f32>(${valueExpr}, 0.0);`;
   return `outputField[cell] = ${valueExpr};`;
 }
 
@@ -383,7 +365,7 @@ function compileCellShader({ stage, field, reads, prevReads = [], actions, layou
   const fieldTypes = layout.fieldTypes ?? {};
   const typeOf = (name) => fieldTypes[name] ?? "f32";
   const readBindings = reads.map((name, index) =>
-    `@group(0) @binding(${index}) var<storage, read> f_${name}: array<${wgslStorageElemType(typeOf(name))}>;`,
+    `@group(0) @binding(${index}) var<storage, read> f_${name}: array<${wgslElemType(typeOf(name))}>;`,
   );
   // Prev-read bindings sit between the regular reads and the output
   // binding so existing binding indices for params / positions /
@@ -391,7 +373,7 @@ function compileCellShader({ stage, field, reads, prevReads = [], actions, layou
   // name encodes the depth so a single field with multiple history
   // depths gets distinct bindings (e.g. `f_u_prev_1`, `f_u_prev_2`).
   const prevReadBindings = prevReads.map(
-    ({ field: name, depth }, index) => `@group(0) @binding(${reads.length + index}) var<storage, read> f_${name}_prev_${depth}: array<${wgslStorageElemType(typeOf(name))}>;`,
+    ({ field: name, depth }, index) => `@group(0) @binding(${reads.length + index}) var<storage, read> f_${name}_prev_${depth}: array<${wgslElemType(typeOf(name))}>;`,
   );
   const outputBinding = reads.length + prevReads.length;
   const paramsBinding = outputBinding + 1;
@@ -422,13 +404,13 @@ function compileCellShader({ stage, field, reads, prevReads = [], actions, layou
       `@group(0) @binding(${base + 1}) var<storage, read> k_${spec.id}_entries: array<MetricKernelEntry>;`,
     ].join("\n");
   }).join("\n");
-  // Initial value for the per-cell `outValue` accumulator. vec2 fields
-  // default to vec2<f32>(0,0); vec3 to vec3<f32>(0,0,0); scalars
-  // (including integer-storage) to 0.0 in the f32 expression domain.
+  // Initial value for the per-cell `outValue` accumulator. For vec2
+  // fields not in reads, default to vec2<f32>(0.0, 0.0); for f32 / u32
+  // / bool, 0.0. (Integer-storage fields use f32 outValue throughout
+  // the cell body — the cast happens on the final write to
+  // outputField, not in outValue itself.)
   const fieldType = typeOf(field);
-  const zeroLiteral = fieldType === "vec2" ? "vec2<f32>(0.0, 0.0)"
-                    : fieldType === "vec3" ? "vec3<f32>(0.0, 0.0, 0.0)"
-                    : "0.0";
+  const zeroLiteral = fieldType === "vec2" ? "vec2<f32>(0.0, 0.0)" : "0.0";
   const initial = reads.includes(field) ? readVar(field) : zeroLiteral;
   // Compile the cell body. compileActions records gradient/divergence
   // calls in ctx so we can emit the per-field helper functions
@@ -467,7 +449,7 @@ ${layout.planet.map((name) => `  planet_${name}: f32,`).join("\n")}
 
 ${readBindings.join("\n")}
 ${prevReadBindings.join("\n")}
-@group(0) @binding(${outputBinding}) var<storage, read_write> outputField: array<${wgslStorageElemType(fieldType)}>;
+@group(0) @binding(${outputBinding}) var<storage, read_write> outputField: array<${wgslElemType(fieldType)}>;
 @group(0) @binding(${paramsBinding}) var<uniform> params: Params;
 @group(0) @binding(${positionsBinding}) var<storage, read> positions: array<f32>;
 ${neighborBindings}

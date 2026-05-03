@@ -2,18 +2,15 @@ import { TAU, clamp, hashNoise, smoothstep, spatialNoise } from "../kernel/kerne
 import { evalExpression } from "../dsl/expression-runtime.mjs";
 import { MATH_FUNCTIONS } from "../dsl/dsl-spec.mjs";
 
-// Number of storage components per cell for FIELD in STATE. f32 fields
-// hold 1; vec2 holds 2; vec3 is stored padded as 4 (last slot unused
-// to match WGSL's vec4-aligned storage layout). Derived from the
-// typed-array length so we don't need a separate type registry.
+// Number of components per cell for FIELD in STATE. f32 fields hold one
+// scalar per cell; vec2 fields hold two. Derived from the typed-array
+// length / grid cell count — avoids needing a separate type registry.
 function fieldComponents(state, fieldName) {
   const arr = state.fields?.[fieldName];
   const cells = state.grid?.cells ?? 0;
   if (!arr || cells === 0) return 1;
   const components = arr.length / cells;
-  if (components === 4) return 4;
-  if (components === 2) return 2;
-  return 1;
+  return components === 2 ? 2 : 1;
 }
 
 // Tagged vec2 value used inside the JS-side init evaluator. evalInitCall
@@ -25,17 +22,6 @@ function makeVec2(x, y) {
 }
 function isVec2(v) {
   return v && typeof v === "object" && v.__vec2 === true;
-}
-
-// vec3 sibling. Stored as 4 floats per cell with the 4th as pad
-// (matching the GPU's vec4-aligned vec3 storage); JS amount values
-// are tagged so the field writer knows to expand x/y/z and zero the
-// pad slot.
-function makeVec3(x, y, z) {
-  return { __vec3: true, x: Number(x), y: Number(y), z: Number(z) };
-}
-function isVec3(v) {
-  return v && typeof v === "object" && v.__vec3 === true;
 }
 
 export function buildDslPresetDecls(presets, dsl, getParam, setParam = null) {
@@ -212,48 +198,27 @@ function runPresetCellActions(state, actions, cell) {
 //   components === 2 (vec2):
 //     value must be a vec2 (from `vec2(x, y)`); arr[cellIdx*2 ... +1]
 //     are set/added per-component.
-//   components === 4 (vec3 with vec4-aligned storage):
-//     value must be a vec3 (from `vec3(x, y, z)`); arr[cellIdx*4 ... +2]
-//     hold x/y/z, +3 is the unused pad (kept at 0).
 // `mode` is "set" or "add".
 function writeCellComponents(arr, cellIdx, value, fieldName, label, components, mode) {
   if (components === 1) {
-    if (isVec2(value) || isVec3(value)) {
-      throw new Error(`${label} ${fieldName}: scalar field can't be assigned a ${isVec3(value) ? "vec3" : "vec2"}`);
+    if (isVec2(value)) {
+      throw new Error(`${label} ${fieldName}: scalar field can't be assigned a vec2`);
     }
     if (mode === "add") arr[cellIdx] += Number(value);
     else arr[cellIdx] = Number(value);
     return;
   }
-  if (components === 2) {
-    if (!isVec2(value)) {
-      throw new Error(`${label} ${fieldName}: vec2 field requires a vec2 value (use \`vec2(x, y)\`)`);
-    }
-    const base = cellIdx * 2;
-    if (mode === "add") {
-      arr[base + 0] += value.x;
-      arr[base + 1] += value.y;
-    } else {
-      arr[base + 0] = value.x;
-      arr[base + 1] = value.y;
-    }
-    return;
+  // vec2
+  if (!isVec2(value)) {
+    throw new Error(`${label} ${fieldName}: vec2 field requires a vec2 value (use \`vec2(x, y)\`)`);
   }
-  // vec3 (components === 4 due to vec4 padding)
-  if (!isVec3(value)) {
-    throw new Error(`${label} ${fieldName}: vec3 field requires a vec3 value (use \`vec3(x, y, z)\`)`);
-  }
-  const base = cellIdx * 4;
+  const base = cellIdx * 2;
   if (mode === "add") {
     arr[base + 0] += value.x;
     arr[base + 1] += value.y;
-    arr[base + 2] += value.z;
-    // pad slot left untouched
   } else {
     arr[base + 0] = value.x;
     arr[base + 1] = value.y;
-    arr[base + 2] = value.z;
-    arr[base + 3] = 0;
   }
 }
 
@@ -262,41 +227,24 @@ function readCellComponents(arr, cellIdx, components) {
   return makeVec2(arr[cellIdx * 2], arr[cellIdx * 2 + 1]);
 }
 
-// Fill every cell of FIELD with VALUE. Scalar / vec2 / vec3 dispatch on
-// the field's actual storage width (1 / 2 / 4 components).
+// Fill every cell of FIELD with VALUE. Scalar / vec2 dispatch on the
+// field's actual width.
 function fillField(state, fieldName, value) {
   const arr = fieldArray(state, fieldName, "fill");
   const components = fieldComponents(state, fieldName);
   if (components === 1) {
-    if (isVec2(value) || isVec3(value)) {
-      throw new Error(`fill ${fieldName}: scalar field can't be filled with a ${isVec3(value) ? "vec3" : "vec2"}`);
-    }
+    if (isVec2(value)) throw new Error(`fill ${fieldName}: scalar field can't be filled with a vec2`);
     arr.fill(Number(value));
     return;
   }
-  if (components === 2) {
-    if (!isVec2(value)) {
-      throw new Error(`fill ${fieldName}: vec2 field requires \`vec2(x, y)\` (got ${isVec3(value) ? "vec3" : "scalar"})`);
-    }
-    const x = value.x;
-    const y = value.y;
-    for (let i = 0; i < arr.length; i += 2) {
-      arr[i + 0] = x;
-      arr[i + 1] = y;
-    }
-    return;
+  if (!isVec2(value)) {
+    throw new Error(`fill ${fieldName}: vec2 field requires \`vec2(x, y)\` (got scalar)`);
   }
-  // vec3 — components === 4 (vec4 padded). Walk in 4-stride and zero
-  // the pad slot.
-  if (!isVec3(value)) {
-    throw new Error(`fill ${fieldName}: vec3 field requires \`vec3(x, y, z)\` (got ${isVec2(value) ? "vec2" : "scalar"})`);
-  }
-  const { x, y, z } = value;
-  for (let i = 0; i < arr.length; i += 4) {
+  const x = value.x;
+  const y = value.y;
+  for (let i = 0; i < arr.length; i += 2) {
     arr[i + 0] = x;
     arr[i + 1] = y;
-    arr[i + 2] = z;
-    arr[i + 3] = 0;
   }
 }
 
@@ -347,7 +295,7 @@ function evalInitIdentifier(name, state, cell) {
 // callback doesn't need to import them — adding a new fn touches one
 // dsl-spec.mjs entry, no edit here.
 const INIT_HELPERS = {
-  clamp, smoothstep, spatialNoise, hashNoise, makeVec2, isVec2, makeVec3, isVec3,
+  clamp, smoothstep, spatialNoise, hashNoise, makeVec2, isVec2,
 };
 const MATH_BY_NAME = new Map(MATH_FUNCTIONS.map((fn) => [fn.name, fn]));
 
@@ -400,18 +348,14 @@ function addGeodesicSpot(state, fieldName, lon, lat, radius, amount) {
 function addGeodesicBlobAtVector(state, fieldName, center, radius, amount) {
   const field = fieldArray(state, fieldName, "spot");
   const components = fieldComponents(state, fieldName);
-  if (components === 1 && (isVec2(amount) || isVec3(amount))) {
-    throw new Error(`spot ${fieldName}: scalar field can't take a ${isVec3(amount) ? "vec3" : "vec2"} amount`);
+  if (components === 1 && isVec2(amount)) {
+    throw new Error(`spot ${fieldName}: scalar field can't take a vec2 amount`);
   }
   if (components === 2 && !isVec2(amount)) {
     throw new Error(`spot ${fieldName}: vec2 field requires a vec2 amount (use \`vec2(x, y)\`)`);
   }
-  if (components === 4 && !isVec3(amount)) {
-    throw new Error(`spot ${fieldName}: vec3 field requires a vec3 amount (use \`vec3(x, y, z)\`)`);
-  }
-  const ax = components === 1 ? Number(amount) : amount.x;
-  const ay = components >= 2 ? amount.y : 0;
-  const az = components === 4 ? amount.z : 0;
+  const ax = components === 2 ? amount.x : Number(amount);
+  const ay = components === 2 ? amount.y : 0;
   const grid = geodesicGrid(state, "spot");
   const centerCell = nearestGeodesicCell(grid, center);
   const ringRadius = Math.max(1, Math.round(Math.abs(radius) / averageNeighborAngle(grid, centerCell)));
@@ -424,16 +368,10 @@ function addGeodesicBlobAtVector(state, fieldName, center, radius, amount) {
     const falloff = Math.max(0, 1 - t * t);
     if (components === 1) {
       field[cell] += ax * falloff;
-    } else if (components === 2) {
+    } else {
       const base = cell * 2;
       field[base + 0] += ax * falloff;
       field[base + 1] += ay * falloff;
-    } else {
-      // vec3 — components === 4 with pad at +3 (left untouched)
-      const base = cell * 4;
-      field[base + 0] += ax * falloff;
-      field[base + 1] += ay * falloff;
-      field[base + 2] += az * falloff;
     }
     if (depth >= ringRadius) continue;
     const count = grid.neighborCounts[cell] ?? 0;

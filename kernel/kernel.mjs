@@ -59,11 +59,6 @@ export function createState({ fields } = {}) {
 // length.
 function fieldComponents(type) {
   if (type === "vec2") return 2;
-  // vec3 fields use 4-component storage with the 4th slot as padding
-  // (matches the WGSL storage-class vec4-stride padding). User code
-  // accessing state.fields.foo[i*4 + 0..2] reads the live components;
-  // the [i*4 + 3] slot is the pad and should be left at 0.
-  if (type === "vec3") return 4;
   return 1; // scalar default (f32 / u32 / bool)
 }
 
