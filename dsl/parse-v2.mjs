@@ -845,6 +845,13 @@ function parseExpressionUntilBraceOrLine(ctx) {
 // Read expression text up to the first occurrence of any stop char at brace
 // depth 0 (so `{ ... }` blocks inside expressions are kept intact). Doesn't
 // consume the stop char.
+//
+// Line comments (`// ...`) are eaten in place: when we hit `//` at depth 0
+// we skip ahead to the next newline. Without this the trailing comment on
+// a single-line metric like
+//     metric m = count cells where x > 0   // some note
+// would get pulled into the where-expression text and tokenize as `/ /`,
+// blowing up parseExpressionFromString.
 function readExpressionTextUntil(ctx, stops) {
   let depth = 0;
   let parens = 0;
@@ -852,6 +859,13 @@ function readExpressionTextUntil(ctx, stops) {
   while (!atEnd(ctx)) {
     const ch = ctx.source[ctx.i];
     if (depth === 0 && parens === 0 && stops.includes(ch)) break;
+    // Strip `//` line comments — advance to (but don't consume) the
+    // next newline. The newline itself is left for the caller's
+    // stop-char handling.
+    if (ch === "/" && ctx.source[ctx.i + 1] === "/") {
+      while (!atEnd(ctx) && ctx.source[ctx.i] !== "\n") ctx.i++;
+      continue;
+    }
     if (ch === "{") depth++;
     if (ch === "}") {
       if (depth === 0) break;

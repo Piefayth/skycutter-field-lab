@@ -55,6 +55,12 @@
       "name": "Wave equation (example)",
       "path": "recipes/wave-equation.mjs",
       "summary": "Hyperbolic wave on a sphere — leapfrog second-order time integration via history fields. Drop a stone, watch the ripple bounce around the sphere forever (γ=0) or decay smoothly (γ>0)."
+    },
+    {
+      "id": "shallow-water",
+      "name": "Shallow water (example)",
+      "path": "recipes/shallow-water.mjs",
+      "summary": "Depth-averaged fluid on a sphere. gradient(h) drives momentum, divergence(m) drives continuity, dye rides @upstream of the velocity. Drop a height bulge and watch the wave race around the planet, hit the antipode, refocus. Paint dye to see the otherwise-invisible currents."
     }
   ]
 }
