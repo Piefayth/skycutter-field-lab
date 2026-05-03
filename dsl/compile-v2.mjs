@@ -20,6 +20,7 @@ import {
   validateStages,
   validateStamps,
 } from "./validate.mjs";
+import { validateV2 } from "./validate-v2.mjs";
 import {
   CLOCK_BUILTINS,
   CLOCK_HELPERS,
@@ -65,6 +66,7 @@ export function compileV2(source) {
   validatePresets(presets, schema);
   validateStamps(stamps, schema);
   validateStages(stages, schema);
+  validateV2(schema);
 
   const declared = buildDeclaredPipelineSummary(stages);
   const nodes = {};

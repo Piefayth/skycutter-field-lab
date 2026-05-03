@@ -400,28 +400,43 @@ reset at the start of each step.
 
 ## Validator rules summary
 
-- Recipe must have exactly one `recipe "..."` declaration.
-- Recipe must have exactly one `substrate ...` declaration.
+Enforced today (split between `dsl/parse-v2.mjs` and `dsl/validate.mjs`
+[v1 layer, reused] and `dsl/validate-v2.mjs`):
+
+- Recipe must have exactly one `recipe "..."` declaration. *(parser)*
+- Recipe must have exactly one `substrate ...` declaration. *(parser)*
 - All names (fields, params, scenarios, stamps, stages, metrics) must be
-  globally unique.
+  globally unique. *(v1 + v2 metric collision check)*
 - Names cannot shadow builtins (math fns, globals, substrate helpers).
-- Each stage has exactly one `cell { }` block.
-- Each `cell { }` has at most one `set` per field.
-- `add f = expr` requires `f` in `reads`.
-- `set f = expr` requires `f` in `writes`.
-- Every `reads` and `writes` field must be declared.
+  *(v1 RESERVED_NAMES)*
+- Each stage has exactly one `cell { }` block. *(parser)*
+- `add f = expr` requires `f` in `reads`. *(v1)*
+- `set f = expr` requires `f` in `writes`. *(v1)*
+- Every `reads` and `writes` field must be declared. *(v1)*
 - Every `derived` field must be in `writes` of at least one stage.
-- Derived fields cannot be written by scenarios or stamps.
-- A field used with `@prev` anywhere must have exactly one writer stage per
-  step.
-- Reductions are numeric-only; `mean cells { bool }` is rejected.
-- Metric expressions are pure (no `set`/`add`/`emit`).
-- Metric expressions produce `f32` scalar (or `u32` for count).
-- `MetricReduce` only at top of `metric` declarations; never nested.
-- Substrate-specific helpers gated by substrate type (e.g. `lon` only valid
-  on `geodesic`).
-- Vector types (`vec2`, `vec3`, `u32`) reserved; validator rejects all uses
-  in v2 first cut.
+  *(v2)*
+- Derived fields cannot be written by scenarios. *(v2)*
+- Derived fields cannot be written by stamps. *(v2)*
+- A field used with `@prev` anywhere must have exactly one writer stage
+  per step. *(v1, from history-fields branch)*
+- Metric reduction op must be one of {sum, max, min, mean, count}. *(v2)*
+- Metric expressions are pure (no `set`/`add`/`emit`). *(v2)*
+- `MetricReduce` only at top of `metric` declarations; never nested. *(v2)*
+- Vector types (`vec2`, `vec3`, `u32`) reserved; parser rejects all uses
+  in v2 first cut. *(parser)*
+
+Still TODO — partially-enforced or not yet:
+
+- Each `cell { }` has at most one `set` per field at the same nesting
+  level. *(currently lenient: last-write-wins matches v1 semantics; the
+  recipe author can still do `when A { set u = X } when B { set u = Y }`
+  for mutually-exclusive branches, which we want.)*
+- Reductions numeric-only; `mean cells { bool }` rejected. *(no implicit
+  bool→f32 cast; type checking is informal until a typer lands.)*
+- Metric expressions produce `f32` scalar (or `u32` for count). *(no
+  type system yet; arity checks only.)*
+- Substrate-specific helpers gated by substrate type. *(only `geodesic`
+  exists; non-issue until a second substrate lands.)*
 
 ## Compiler architecture
 
