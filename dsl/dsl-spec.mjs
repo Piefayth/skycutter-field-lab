@@ -22,7 +22,7 @@
 // V2 EXPRESSION SURFACE:
 //   - bare identifiers resolve to fields, params, consts, locals, builtins
 //   - `field@prev` reads the previous-tick value (CoordRead)
-//   - `field@n` (inside `<op> n in neighbors { ... }`) reads at neighbor n
+//   - `field@n` (inside `<op> n in neighbors/ring/disk { ... }`) reads at neighbor n
 //   - `field@upstream(velX, velY, dt)` continuous-position semi-Lagrangian
 //   - math fns, neighbor reductions, position helpers (lon/lat/x/y/...)
 //   - `vec2`, `length`, `gradient`, `divergence` for vec2 fields
@@ -393,9 +393,19 @@ export const STENCIL_HELPERS = [
     // is a neighbor coordinate; the body reads any field at that
     // neighbor via `field@coord`. Replaces v1's field-centered
     // `neighbor MOD BIND in FIELD { EXPR }` form.
-    signature: "<op> n in neighbors { EXPR with field@n }",
-    doc: "Per-neighbor reduction over immediate topological neighbors. For each neighbor cell of the current cell, evaluate EXPR (which reads any field at that neighbor via `field@n`), then combine via op ∈ {sum, max, min, mean}. Reductions are neighbors-only — the center cell is not included. Canonical scalar diffusion uses the graph-Laplacian spelling `mean n in neighbors { u@n - u }`; `divergence(gradient(u))` is a separate tangent-frame approximation, not a synonym. Examples: Kuramoto coupling `sum n in neighbors { sin(theta@n - theta - alpha) }`; multi-field gradient `sum n in neighbors { u@n + v@n - u - v }`.",
-    example: "let lap      = mean n in neighbors { u@n - u }\nlet coupling = sum n in neighbors { sin(theta@n - theta - alpha) }\nlet onFire   = max n in neighbors { burning@n } > 0.5",
+    signature: "<op> n in neighbors|ring(k)|disk(k) { EXPR with field@n }",
+    doc: "Per-cell topological reduction. `neighbors` means immediate adjacency, `ring(k)` means cells at exact graph distance k, and `disk(k)` means graph distances 1..k; ring/disk currently require literal k in 1..3. For each selected cell, evaluate EXPR (which reads any field at that cell via `field@n`), then combine via op ∈ {sum, max, min, mean}. The center cell is not included. Canonical scalar diffusion uses `mean n in neighbors { u@n - u }`; broader kernels use ring/disk when the recipe intentionally wants topological distance rather than metric radius.",
+    example: "let lap      = mean n in neighbors { u@n - u }\nlet smooth2  = mean n in disk(2) { u@n }\nlet shell    = sum n in ring(3) { activator@n }",
+  },
+  {
+    name: "ring",
+    signature: "<op> n in ring(k) { EXPR }",
+    doc: "Exact topological shell for neighbor reductions. `ring(2)` selects cells two graph edges away from the current cell; the center and nearer shells are excluded. k must currently be a literal integer 1..3.",
+  },
+  {
+    name: "disk",
+    signature: "<op> n in disk(k) { EXPR }",
+    doc: "Topological disk for neighbor reductions. `disk(2)` selects shells 1 and 2 around the current cell; the center cell is excluded. k must currently be a literal integer 1..3. This is not a metric radial kernel.",
   },
 ];
 

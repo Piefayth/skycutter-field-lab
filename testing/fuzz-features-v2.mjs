@@ -17,6 +17,8 @@ export const FEATURE_NAMES = [
   "prevRead",
   "upstreamRead",
   "neighborRed",
+  "ringReduce",
+  "diskReduce",
   "ternary",
   "when",
   "countWhere",
@@ -174,6 +176,8 @@ function visitExpr(node, vec) {
 
   if (node.type === "NeighborReduce") {
     vec.neighborRed++;
+    if (node.source?.kind === "ring") vec.ringReduce++;
+    if (node.source?.kind === "disk") vec.diskReduce++;
   }
 
   for (const value of Object.values(node)) {

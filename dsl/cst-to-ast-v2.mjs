@@ -243,6 +243,7 @@ export function expressionCstToAst(node) {
         type: "NeighborReduce",
         op: node.op,
         coord: node.binder,
+        source: projectReductionSource(node.source),
         body: expressionCstToAst(node.body),
       };
     case "ExprMissing":
@@ -252,6 +253,14 @@ export function expressionCstToAst(node) {
     default:
       throw new Error(`v2 CST projection: unsupported expression node ${node.type}`);
   }
+}
+
+function projectReductionSource(source) {
+  if (!source || source.kind === "neighbors") return { kind: "neighbors" };
+  if (source.kind === "ring" || source.kind === "disk") {
+    return { kind: source.kind, radius: source.radius };
+  }
+  return { kind: source.kind ?? "unknown" };
 }
 
 export function cellActionsCstToAst(cst, cellBlock) {

@@ -77,6 +77,37 @@ test("CST expression projection handles neighbor reductions", () => {
     type: "NeighborReduce",
     op: "sum",
     coord: "n",
+    source: { kind: "neighbors" },
+    body: {
+      type: "Binary",
+      op: "-",
+      left: {
+        type: "CoordRead",
+        field: "u",
+        coord: { kind: "neighbor", binding: "n" },
+      },
+      right: { type: "Identifier", name: "u" },
+    },
+  });
+});
+
+test("CST expression projection handles ring and disk reductions", () => {
+  assertExpressionProjection("mean n in ring(2) { u@n }", {
+    type: "NeighborReduce",
+    op: "mean",
+    coord: "n",
+    source: { kind: "ring", radius: 2 },
+    body: {
+      type: "CoordRead",
+      field: "u",
+      coord: { kind: "neighbor", binding: "n" },
+    },
+  });
+  assertExpressionProjection("sum n in disk(3) { u@n - u }", {
+    type: "NeighborReduce",
+    op: "sum",
+    coord: "n",
+    source: { kind: "disk", radius: 3 },
     body: {
       type: "Binary",
       op: "-",

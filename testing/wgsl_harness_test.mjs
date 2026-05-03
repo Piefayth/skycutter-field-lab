@@ -248,4 +248,73 @@ scenarios {
       h.dispose();
     }
   });
+
+  // -- Test 6: bounded topological neighborhoods ----------------------------
+  await t.test("ring/disk reductions match JS graph-distance counts", async () => {
+    const recipe = `
+recipe "Rings"
+substrate geodesic frequency 8
+field u: f32
+field disk2: f32
+field ring2: f32
+step {
+  stage count {
+    reads u
+    writes disk2, ring2
+    cell {
+      set disk2 = sum n in disk(2) { u@n }
+      set ring2 = sum n in ring(2) { u@n }
+    }
+  }
+}
+metric m = mean cells { disk2 }
+views {
+  palette MONO {
+    stop 0 color [0, 0, 0]
+    stop 1 color [255, 255, 255]
+  }
+  view disk2 "Disk 2" {
+    color ramp disk2 range [0, 20] palette MONO
+  }
+}
+scenarios { scenario blank "Blank" { set u = 1 } }
+`;
+    const h = await makeHarness({ recipeDsl: recipe, frequency: FREQUENCY });
+    try {
+      h.uploadField("u", new Float32Array(h.cellCount).fill(1));
+      await h.tick();
+      const disk2 = await h.readField("disk2");
+      const ring2 = await h.readField("ring2");
+      for (let i = 0; i < h.cellCount; i++) {
+        assert.ok(closeTo(disk2[i], topoNeighborhoodCount(h.grid, i, "disk", 2)),
+          `cell ${i}: disk2 got ${disk2[i]}`);
+        assert.ok(closeTo(ring2[i], topoNeighborhoodCount(h.grid, i, "ring", 2)),
+          `cell ${i}: ring2 got ${ring2[i]}`);
+      }
+    } finally {
+      h.dispose();
+    }
+  });
 });
+
+function topoNeighborhoodCount(grid, cell, kind, radius) {
+  const seen = new Set([cell]);
+  const queue = [{ cell, dist: 0 }];
+  let count = 0;
+  for (let cursor = 0; cursor < queue.length; cursor++) {
+    const item = queue[cursor];
+    if (item.dist >= radius) continue;
+    const nCount = grid.neighborCounts[item.cell];
+    for (let slot = 0; slot < nCount; slot++) {
+      const next = grid.neighbors[item.cell * grid.maxNeighbors + slot];
+      if (seen.has(next)) continue;
+      seen.add(next);
+      const dist = item.dist + 1;
+      queue.push({ cell: next, dist });
+      if ((kind === "ring" && dist === radius) || (kind === "disk" && dist >= 1 && dist <= radius)) {
+        count++;
+      }
+    }
+  }
+  return count;
+}

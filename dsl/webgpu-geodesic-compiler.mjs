@@ -1144,6 +1144,7 @@ function emitReduction(node, ctx, statements) {
   const count = `${accName}_count`;
   const neighborIdx = `${accName}_n`;
   const sumName = `${accName}_sum`;
+  const source = normalizeNeighborSource(node.source);
   // The reduction's bindings come from one of two sources:
   //   - v2 CoordRead-shaped body: walk the body for every
   //     `CoordRead { coord: { kind: "neighbor", binding: node.coord } }`,
@@ -1194,6 +1195,26 @@ function emitReduction(node, ctx, statements) {
   const isVec2 = bodyType === "vec2";
   const wgslType = isVec2 ? "vec2<f32>" : "f32";
   const zeroLit = isVec2 ? "vec2<f32>(0.0, 0.0)" : "0.0";
+  const fieldTypes = ctx.layout?.fieldTypes ?? {};
+
+  const emitCandidate = (indexExpr, indent = "    ") => {
+    statements.push(`${indent}let ${neighborIdx}: u32 = ${indexExpr};`);
+    for (const b of bindings) {
+      const fieldType = fieldTypes[b.field] ?? "f32";
+      // Per-neighbor binding's local type — vec2 stays vec2<f32>, u32/
+      // bool cast to f32 (so the body's expression stays in f32 land
+      // even when the field is integer-stored).
+      const localType = (fieldType === "u32" || fieldType === "bool") ? "f32" : wgslElemType(fieldType);
+      statements.push(`${indent}let ${b.name}: ${localType} = ${wgslReadAt(b.field, fieldType, neighborIdx)};`);
+    }
+    if (node.op === "sum") {
+      statements.push(`${indent}${accName} = ${accName} + (${bodyWgsl});`);
+    } else if (node.op === "max" || node.op === "min") {
+      statements.push(`${indent}${accName} = ${node.op}(${accName}, (${bodyWgsl}));`);
+    } else if (node.op === "mean") {
+      statements.push(`${indent}${sumName} = ${sumName} + (${bodyWgsl});`);
+    }
+  };
 
   if (node.op === "sum") {
     statements.push(`var ${accName}: ${wgslType} = ${zeroLit};`);
@@ -1208,38 +1229,61 @@ function emitReduction(node, ctx, statements) {
     throw new Error(`Unsupported neighbor reduction op: ${node.op}`);
   }
   statements.push(`{`);
-  statements.push(`  let ${count}: u32 = neighborCounts[cell];`);
-  statements.push(`  for (var ${slot}: u32 = 0u; ${slot} < ${count}; ${slot} = ${slot} + 1u) {`);
-  // Resolve neighbor cell index once per slot, then bind each requested
-  // field's value at that neighbor. Multi-binding lets v2's
-  // cell-centered reductions read multiple fields per neighbor in one
-  // pass — `sum n in neighbors { u@n + v@n - u - v }` becomes
-  // bindings = [{name: _n_u, field: u}, {name: _n_v, field: v}].
-  //
-  // Each binding's WGSL type matches the field's declared type, so
-  // a vec2 field surfaces as `vec2<f32>` per-neighbor and downstream
-  // member access (`heading@n.x` → `_n_heading.x`) compiles. Without
-  // the per-field type lookup the bound local was always emitted as
-  // `f32` and any vec2 field with a `.x`/`.y` access in the body
-  // produced "expected f32, got vec2" at WGSL parse time.
-  const fieldTypes = ctx.layout?.fieldTypes ?? {};
-  statements.push(`    let ${neighborIdx}: u32 = u32(neighbors[cell * 6u + ${slot}]);`);
-  for (const b of bindings) {
-    const fieldType = fieldTypes[b.field] ?? "f32";
-    // Per-neighbor binding's local type — vec2 stays vec2<f32>, u32/
-    // bool cast to f32 (so the body's expression stays in f32 land
-    // even when the field is integer-stored).
-    const localType = (fieldType === "u32" || fieldType === "bool") ? "f32" : wgslElemType(fieldType);
-    statements.push(`    let ${b.name}: ${localType} = ${wgslReadAt(b.field, fieldType, neighborIdx)};`);
+  if (source.kind === "neighbors") {
+    statements.push(`  let ${count}: u32 = neighborCounts[cell];`);
+    statements.push(`  for (var ${slot}: u32 = 0u; ${slot} < ${count}; ${slot} = ${slot} + 1u) {`);
+    // Resolve neighbor cell index once per slot, then bind each requested
+    // field's value at that neighbor. Multi-binding lets v2's
+    // cell-centered reductions read multiple fields per neighbor in one
+    // pass — `sum n in neighbors { u@n + v@n - u - v }` becomes
+    // bindings = [{name: _n_u, field: u}, {name: _n_v, field: v}].
+    //
+    // Each binding's WGSL type matches the field's declared type, so
+    // a vec2 field surfaces as `vec2<f32>` per-neighbor and downstream
+    // member access (`heading@n.x` → `_n_heading.x`) compiles. Without
+    // the per-field type lookup the bound local was always emitted as
+    // `f32` and any vec2 field with a `.x`/`.y` access in the body
+    // produced "expected f32, got vec2" at WGSL parse time.
+    emitCandidate(`u32(neighbors[cell * 6u + ${slot}])`);
+    statements.push(`  }`);
+  } else {
+    const radius = source.radius;
+    const targetCheck = source.kind === "ring"
+      ? `${accName}_candidate_dist == ${radius}u`
+      : `${accName}_candidate_dist >= 1u && ${accName}_candidate_dist <= ${radius}u`;
+    statements.push(`  var ${count}: u32 = 0u;`);
+    statements.push(`  var ${accName}_nodes: array<u32, 64>;`);
+    statements.push(`  var ${accName}_dist: array<u32, 64>;`);
+    statements.push(`  var ${accName}_total: u32 = 1u;`);
+    statements.push(`  var ${accName}_cursor: u32 = 0u;`);
+    statements.push(`  ${accName}_nodes[0] = cell;`);
+    statements.push(`  ${accName}_dist[0] = 0u;`);
+    statements.push(`  loop {`);
+    statements.push(`    if (${accName}_cursor >= ${accName}_total) { break; }`);
+    statements.push(`    let ${accName}_base: u32 = ${accName}_nodes[${accName}_cursor];`);
+    statements.push(`    let ${accName}_base_dist: u32 = ${accName}_dist[${accName}_cursor];`);
+    statements.push(`    ${accName}_cursor = ${accName}_cursor + 1u;`);
+    statements.push(`    if (${accName}_base_dist >= ${radius}u) { continue; }`);
+    statements.push(`    let ${accName}_base_count: u32 = neighborCounts[${accName}_base];`);
+    statements.push(`    for (var ${slot}: u32 = 0u; ${slot} < ${accName}_base_count; ${slot} = ${slot} + 1u) {`);
+    statements.push(`      let ${accName}_candidate: u32 = u32(neighbors[${accName}_base * 6u + ${slot}]);`);
+    statements.push(`      var ${accName}_seen: bool = false;`);
+    statements.push(`      for (var ${accName}_seen_i: u32 = 0u; ${accName}_seen_i < ${accName}_total; ${accName}_seen_i = ${accName}_seen_i + 1u) {`);
+    statements.push(`        if (${accName}_nodes[${accName}_seen_i] == ${accName}_candidate) { ${accName}_seen = true; }`);
+    statements.push(`      }`);
+    statements.push(`      if (!${accName}_seen && ${accName}_total < 64u) {`);
+    statements.push(`        let ${accName}_candidate_dist: u32 = ${accName}_base_dist + 1u;`);
+    statements.push(`        ${accName}_nodes[${accName}_total] = ${accName}_candidate;`);
+    statements.push(`        ${accName}_dist[${accName}_total] = ${accName}_candidate_dist;`);
+    statements.push(`        ${accName}_total = ${accName}_total + 1u;`);
+    statements.push(`        if (${targetCheck}) {`);
+    statements.push(`          ${count} = ${count} + 1u;`);
+    emitCandidate(`${accName}_candidate`, "          ");
+    statements.push(`        }`);
+    statements.push(`      }`);
+    statements.push(`    }`);
+    statements.push(`  }`);
   }
-  if (node.op === "sum") {
-    statements.push(`    ${accName} = ${accName} + (${bodyWgsl});`);
-  } else if (node.op === "max" || node.op === "min") {
-    statements.push(`    ${accName} = ${node.op}(${accName}, (${bodyWgsl}));`);
-  } else if (node.op === "mean") {
-    statements.push(`    ${sumName} = ${sumName} + (${bodyWgsl});`);
-  }
-  statements.push(`  }`);
   if (node.op === "mean") {
     // Divide by count, with the empty-neighbor guard. WGSL's `select`
     // takes the same type for both branches, so the zero literal
@@ -1250,6 +1294,14 @@ function emitReduction(node, ctx, statements) {
   statements.push(`}`);
 
   return { type: "Identifier", name: accName };
+}
+
+function normalizeNeighborSource(source) {
+  if (!source || source.kind === "neighbors") return { kind: "neighbors", radius: 1 };
+  if (source.kind === "ring" || source.kind === "disk") {
+    return { kind: source.kind, radius: source.radius };
+  }
+  throw new Error(`Unsupported neighbor reduction source: ${source.kind}`);
 }
 
 // Reduction body type is dictated by the data flowing through it.
@@ -1361,7 +1413,7 @@ function compileCoordRead(ast, ctx) {
       const local = resolver?.(ast.field, coord.binding);
       if (!local) {
         throw new Error(
-          `compileCoordRead: \`${ast.field}@${coord.binding}\` is not in scope of any \`<op> ${coord.binding} in neighbors { ... }\` reduction`,
+          `compileCoordRead: \`${ast.field}@${coord.binding}\` is not in scope of any \`<op> ${coord.binding} in neighbors|ring(k)|disk(k) { ... }\` reduction`,
         );
       }
       return local;

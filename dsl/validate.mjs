@@ -620,6 +620,7 @@ function validateNeighborReduce(ast, visibleFields, locals, label, declaredParam
     throw new Error(`${label}: neighbor reduction has unknown op '${ast.op}'`);
   }
   requireImport(imports, "core", "neighbor", label);
+  validateNeighborReductionSource(ast.source, label);
 
   // Two AST shapes:
   //   v2 CoordRead: ast carries `coord` (the binding name); the body
@@ -633,7 +634,7 @@ function validateNeighborReduce(ast, visibleFields, locals, label, declaredParam
     throw new Error(`${label}: neighbor ${ast.op} requires at least one binding`);
   }
   if (containsNeighborReduce(ast.body)) {
-    throw new Error(`${label}: nested neighbor reductions aren't supported (no neighbor-of-neighbor access on the geodesic substrate)`);
+    throw new Error(`${label}: nested neighbor reductions aren't supported; use ring(k) or disk(k) for bounded topological neighborhoods`);
   }
   const bodyLocals = new Set(locals);
   if (isV2) {
@@ -662,6 +663,19 @@ function validateLocalName(name, label, visibleFields, locals) {
   if (visibleFields.has(name)) throw new Error(`${label}: local '${name}' shadows a field`);
   if (CLOCK_IDENTIFIERS.has(name) || GEO_IDENTIFIERS.has(name) || RESERVED_NAMES.has(name)) {
     throw new Error(`${label}: local '${name}' shadows a builtin/reserved identifier`);
+  }
+}
+
+function validateNeighborReductionSource(source, label) {
+  if (!source || source.kind === "neighbors") return;
+  if (source.kind !== "ring" && source.kind !== "disk") {
+    throw new Error(`${label}: neighbor reduction source must be neighbors, ring(k), or disk(k)`);
+  }
+  if (!Number.isInteger(source.radius)) {
+    throw new Error(`${label}: ${source.kind}(k) requires a literal integer radius`);
+  }
+  if (source.radius < 1 || source.radius > 3) {
+    throw new Error(`${label}: ${source.kind}(${source.radius}) is outside the supported radius range 1..3`);
   }
 }
 

@@ -864,19 +864,20 @@ function tryParseReductionNode(parser) {
   const op = peek(parser);
   const binder = parser.tokens[start + 1];
   const inTok = parser.tokens[start + 2];
-  const neighbors = parser.tokens[start + 3];
-  const open = parser.tokens[start + 4];
   if (binder?.kind !== "identifier") return null;
   if (inTok?.kind !== "identifier" || inTok.value !== "in") return null;
-  if (neighbors?.kind !== "identifier" || neighbors.value !== "neighbors") return null;
+  const source = tryParseReductionSource(parser.tokens, start + 3);
+  if (!source) return null;
+  const open = parser.tokens[source.nextIndex];
   if (open?.value !== "{") return null;
-  parser.index = start + 5;
+  parser.index = source.nextIndex + 1;
   const body = parseConditionalNode(parser);
   const close = peek(parser).value === "}" ? next(parser) : null;
   return {
     type: "ExprNeighborReduce",
     op: op.value,
     binder: binder.value,
+    source: source.value,
     body,
     from: op.from,
     to: close?.to ?? body.to,
@@ -884,6 +885,32 @@ function tryParseReductionNode(parser) {
     bodyFrom: open.to,
     bodyTo: close?.from ?? body.to,
     missing: !close,
+  };
+}
+
+function tryParseReductionSource(tokens, index) {
+  const source = tokens[index];
+  if (source?.kind !== "identifier") return null;
+  if (source.value === "neighbors") {
+    return {
+      value: { kind: "neighbors", from: source.from, to: source.to },
+      nextIndex: index + 1,
+    };
+  }
+  if (source.value !== "ring" && source.value !== "disk") return null;
+  const open = tokens[index + 1];
+  const radius = tokens[index + 2];
+  const close = tokens[index + 3];
+  if (open?.value !== "(" || radius?.kind !== "number" || close?.value !== ")") return null;
+  return {
+    value: {
+      kind: source.value,
+      radius: Number(radius.value),
+      radiusText: radius.value,
+      from: source.from,
+      to: close.to,
+    },
+    nextIndex: index + 4,
   };
 }
 
@@ -925,15 +952,17 @@ function coordReadsInExpression(text, base) {
 
 function reductionsInExpression(text, base) {
   const out = [];
-  const re = /\b(sum|mean|max|min)\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+neighbors\s*\{/g;
+  const re = /\b(sum|mean|max|min)\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+(neighbors|(?:ring|disk)\s*\(\s*[+-]?(?:\d+\.\d*|\.\d+|\d+)(?:e[+-]?\d+)?\s*\))\s*\{/g;
   for (const match of text.matchAll(re)) {
     const bodyOpenRel = match.index + match[0].length - 1;
     const bodyCloseRel = findMatchingBraceInText(text, bodyOpenRel);
     const binderOffset = match[0].indexOf(match[2]);
+    const source = reductionSourceFromText(match[3]);
     out.push({
       type: "ReductionSpan",
       op: match[1],
       binder: match[2],
+      source,
       from: base + match.index,
       to: base + (bodyCloseRel >= 0 ? bodyCloseRel + 1 : text.length),
       binderFrom: base + match.index + binderOffset,
@@ -943,6 +972,14 @@ function reductionsInExpression(text, base) {
     });
   }
   return out;
+}
+
+function reductionSourceFromText(text) {
+  const compact = text.replace(/\s+/g, "");
+  if (compact === "neighbors") return { kind: "neighbors" };
+  const match = /^(ring|disk)\(([+-]?(?:\d+\.\d*|\.\d+|\d+)(?:e[+-]?\d+)?)\)$/.exec(compact);
+  if (!match) return { kind: "unknown", raw: text };
+  return { kind: match[1], radius: Number(match[2]), radiusText: match[2] };
 }
 
 function coordExpectedZonesInExpression(text, base, coordReads) {

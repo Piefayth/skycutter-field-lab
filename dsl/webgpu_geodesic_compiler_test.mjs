@@ -198,6 +198,74 @@ step {
   assert(pass.source.includes("nr_0 = select(0.0, nr_0_sum / f32(nr_0_count)"), "mean divides by count");
 });
 
+test("topological disk reduction emits bounded graph walk", () => {
+  const recipe = compileV2(`
+recipe "Disk"
+substrate geodesic frequency 16
+field A: f32
+
+step {
+  stage avg "Avg" {
+    reads A
+    writes A
+    cell {
+      let wide = mean n in disk(2) { A@n }
+      set A = wide
+    }
+  }
+}
+`);
+  const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
+  assert(pass.needsNeighbors === true, "stage should bind neighbor arrays");
+  assert(pass.source.includes("var nr_0_nodes: array<u32, 64>;"), "disk reduction should allocate a bounded visited set");
+  assert(pass.source.includes("if (nr_0_base_dist >= 2u) { continue; }"), "disk reduction should stop at radius 2");
+  assert(pass.source.includes("nr_0_candidate_dist >= 1u && nr_0_candidate_dist <= 2u"), "disk reduction should reduce shells 1..k");
+  assert(pass.source.includes("nr_0 = select(0.0, nr_0_sum / f32(nr_0_count)"), "disk mean should divide by reduced-cell count");
+});
+
+test("topological ring reduction reduces only the requested shell", () => {
+  const recipe = compileV2(`
+recipe "Ring"
+substrate geodesic frequency 16
+field A: f32
+
+step {
+  stage shell "Shell" {
+    reads A
+    writes A
+    cell {
+      set A = sum n in ring(3) { A@n }
+    }
+  }
+}
+`);
+  const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
+  assert(pass.source.includes("if (nr_0_base_dist >= 3u) { continue; }"), "ring reduction should walk to radius 3");
+  assert(pass.source.includes("nr_0_candidate_dist == 3u"), "ring reduction should reduce only the exact shell");
+});
+
+test("validator rejects unsupported ring/disk radii", () => {
+  let threw = null;
+  try {
+    compileV2(`
+recipe "Too wide"
+substrate geodesic frequency 16
+field A: f32
+
+step {
+  stage bad "Bad" {
+    reads A
+    writes A
+    cell {
+      set A = sum n in disk(4) { A@n }
+    }
+  }
+}
+`);
+  } catch (error) { threw = error.message; }
+  assert(threw && threw.includes("disk(4)") && threw.includes("1..3"), `expected radius rejection, got: ${threw}`);
+});
+
 test("neighbor max uses -infinity sentinel", () => {
   const recipe = compileV2(`
 recipe "Max"

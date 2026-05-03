@@ -302,6 +302,7 @@ function genVec2Expr(ctx, scope, depth = 0) {
 function genNeighborReduce(ctx, parentScope, depth) {
   const r = ctx.rng;
   const op = pick(r, REDUCE_OPS);
+  const source = pick(r, ["neighbors", "neighbors", "ring(2)", "disk(2)", "disk(3)"]);
   const innerScope = { ...parentScope, neighborBound: "n" };
   // Body must produce a scalar; common idiom is `f@n - f` (Laplacian).
   const f = pick(r, parentScope.scalarReads);
@@ -314,7 +315,7 @@ function genNeighborReduce(ctx, parentScope, depth) {
   } else {
     body = `(${f}@n - ${f}) * ${round(0.5 + r(), 2)}`;
   }
-  return `(${op} n in neighbors { ${body} })`;
+  return `(${op} n in ${source} { ${body} })`;
 }
 
 // -- Stage generation ----------------------------------------------------------

@@ -44,6 +44,11 @@ const TARGET_FAMILIES = [
     generate: recipeStatefulRng,
   },
   {
+    name: "topological-neighborhoods",
+    doc: "ring(k)/disk(k) reductions in stages and metrics",
+    generate: recipeTopologicalNeighborhoods,
+  },
+  {
     name: "multi-stage-ordering",
     doc: "multi-stage last-write/read-after-write patterns without history fields",
     generate: recipeMultiStageOrdering,
@@ -569,6 +574,61 @@ scenarios {
     for each cell {
       set a = sin(lon * ${2 + Math.floor(rng() * 5)}) * cos(lat)
       set b = cos(lon)
+    }
+  }
+}`;
+}
+
+function recipeTopologicalNeighborhoods(seed) {
+  const rng = makeRng(seed);
+  return `recipe "Target topological neighborhoods ${seed}"
+summary "Targeted fuzz: bounded graph-distance ring/disk reductions."
+
+substrate geodesic frequency 16
+
+field u: f32
+field smooth: f32 derived
+field shell: f32 derived
+
+param gain slider 0..2 step 0.01 default ${fixed(0.5 + rng())} label "GAIN"
+
+step {
+  stage wide {
+    reads u
+    writes u, smooth, shell
+    cell {
+      let wideSmooth = mean n in disk(2) { u@n }
+      let ringPush = sum n in ring(2) { u@n - u }
+      set smooth = wideSmooth
+      set shell = ringPush
+      add u = (wideSmooth - u + ringPush * 0.05) * gain * dt
+    }
+  }
+}
+
+metric shellEnergy = sum cells { abs(sum n in ring(3) { u@n - u }) }
+metric smoothPeak = max cells { mean n in disk(2) { smooth@n } }
+
+views {
+  palette TOPO {
+    stop 0 color [20, 30, 80]
+    stop 0.5 color [230, 230, 220]
+    stop 1 color [220, 80, 55]
+  }
+  view u "U" { color ramp u range [-1, 1] palette TOPO }
+  view shell "Shell" { color ramp shell range [-4, 4] palette TOPO }
+}
+
+stamps {
+  stamp bump "Bump" {
+    spot u at brush.pos, radius=brush.r, amount=1
+  }
+}
+
+scenarios {
+  scenario init "Init" {
+    for each cell {
+      set u = sin(lon * ${2 + Math.floor(rng() * 6)}) * cos(lat * ${1 + Math.floor(rng() * 4)})
     }
   }
 }`;

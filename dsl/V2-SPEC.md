@@ -570,6 +570,8 @@ Reserved for future:
 ```
 sum  n in neighbors { u@n - u }
 mean n in neighbors { u@n }
+mean n in disk(2) { u@n }
+sum  n in ring(3) { activator@n }
 max  n in neighbors { temperature@n }
 min  n in neighbors { distance(self, n) }
 ```
@@ -579,12 +581,21 @@ min  n in neighbors { distance(self, n) }
 conditionals are allowed, but `let` locals are not.
 
 A reduction body MAY contain another expression but MAY NOT contain another
-reduction (no nested reductions on the geodesic substrate — no
-neighbor-of-neighbor).
+reduction. Use the bounded source forms below instead of hand-nesting
+neighbor-of-neighbor reductions.
 
-`neighbors` means immediate topological adjacency in the geodesic mesh. Most
-cells have six neighbors; pentagonal cells have five. This is not a metric
-disk and not a same-radius stencil everywhere.
+Reduction sources:
+
+- `neighbors` means immediate topological adjacency in the geodesic mesh.
+- `ring(k)` means exact topological graph distance `k`.
+- `disk(k)` means topological graph distances `1..k`.
+
+`ring(k)` / `disk(k)` currently require a literal integer `k` in `1..3`.
+The center cell is excluded from all three source forms. These are
+topological neighborhoods: most cells have six immediate neighbors, the
+twelve pentagonal cells have five, and wider rings inherit that geodesic
+mesh irregularity. They are not metric radial kernels and not same-radius
+stencils everywhere.
 
 Canonical scalar diffusion / Laplacian spelling for authored recipes:
 
@@ -597,9 +608,8 @@ separate tangent-frame operator `divergence(gradient(u))`. The two are not
 numerically identical on a geodesic mesh, especially near pentagons. Do not
 add a `laplacian(u)` helper until the numerical contract it names is settled.
 
-Future `ring` / `disk` reductions must distinguish topological BFS rings from
-metric radial kernels. They are different operations and should not share one
-name.
+Metric radial kernels remain a separate future feature; do not overload
+`ring` / `disk` to mean metric radius or distance-weighted sampling.
 
 ### Math functions and globals (always available, no `use` clauses)
 
@@ -907,11 +917,16 @@ Concrete shapes:
 - v2 `u@prev` → `CoordRead { field: "u", coord: { kind: "prev" } }`.
   WGSL: `f_u_prev[cell]`.
 - v2 `sum n in neighbors { u@n - u }` →
-  `NeighborReduce { op: "sum", coord: "n", body: ... }` where the body
+  `NeighborReduce { op: "sum", coord: "n", source: { kind: "neighbors" }, body: ... }` where the body
   contains `CoordRead { field: "u", coord: { kind: "neighbor", binding: "n" } }`.
   `emitReduction` walks the body to derive per-field bindings,
   synthesizes `let _n_u: f32 = f_u[neighborIdx]`, then compiles the
   body with the locals in scope.
+- v2 `mean n in disk(2) { u@n }` uses the same AST shape with
+  `source: { kind: "disk", radius: 2 }`. WGSL currently emits a bounded
+  graph walk over the existing immediate-neighbor buffers, dedupes visited
+  cells in a fixed local array, and reduces only the requested topological
+  shells.
 - v2 multi-field reductions (`sum n in neighbors { u@n + v@n - u - v }`)
   emit one local per coord-bound field; the WGSL emitter loops over
   neighbors once and reads each field at the resolved neighbor index.

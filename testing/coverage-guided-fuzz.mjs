@@ -119,7 +119,7 @@ function mutate(dsl, rng) {
       return dsl.slice(0, m.index) + swaps[m[1]] + dsl.slice(m.index + m[1].length);
     },
     () => {
-      const re = /\b(sum|mean|max|min)( n in neighbors)\b/g;
+      const re = /\b(sum|mean|max|min)( n in (?:neighbors|ring\(2\)|disk\(2\)|disk\(3\)))\b/g;
       const matches = [...dsl.matchAll(re)];
       if (!matches.length) return null;
       const m = matches[Math.floor(rng() * matches.length)];

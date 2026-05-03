@@ -684,6 +684,9 @@ function walkExprForImports(ast, ctx, label) {
   if (ast.type === "NeighborReduce" && !allowed.has("neighbor")) {
     throw new Error(`${label}: core.neighbor is not imported`);
   }
+  if (ast.type === "NeighborReduce") {
+    validateNeighborReductionSource(ast.source, label);
+  }
   if (ast.type === "CoordRead" && ast.coord?.kind === "prev" && !allowed.has("prev")) {
     throw new Error(`${label}: clock.prev is not imported`);
   }
@@ -691,6 +694,19 @@ function walkExprForImports(ast, ctx, label) {
     const v = ast[k];
     if (Array.isArray(v)) v.forEach((c) => walkExprForImports(c, ctx, label));
     else if (v && typeof v === "object") walkExprForImports(v, ctx, label);
+  }
+}
+
+function validateNeighborReductionSource(source, label) {
+  if (!source || source.kind === "neighbors") return;
+  if (source.kind !== "ring" && source.kind !== "disk") {
+    throw new Error(`${label}: neighbor reduction source must be neighbors, ring(k), or disk(k)`);
+  }
+  if (!Number.isInteger(source.radius)) {
+    throw new Error(`${label}: ${source.kind}(k) requires a literal integer radius`);
+  }
+  if (source.radius < 1 || source.radius > 3) {
+    throw new Error(`${label}: ${source.kind}(${source.radius}) is outside the supported radius range 1..3`);
   }
 }
 
@@ -1035,8 +1051,9 @@ function validateMetricIdentifiers(metric, schema) {
         // `neighbor` core helper to be imported when imports are
         // explicit. The body opens a new local scope for the binding.
         if (importedNames && !importedNames.includes("neighbor")) {
-          throw new Error(`${label}: core.neighbor is not imported (required for \`<op> n in neighbors { ... }\`)`);
+          throw new Error(`${label}: core.neighbor is not imported (required for \`<op> n in neighbors|ring(k)|disk(k) { ... }\`)`);
         }
+        validateNeighborReductionSource(ast.source, label);
         const bodyLocals = new Set(locals);
         for (const b of ast.bindings ?? []) {
           if (b.name) bodyLocals.add(b.name);
