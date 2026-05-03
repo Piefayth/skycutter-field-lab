@@ -134,9 +134,6 @@ function rejectStencilInUpstreamArg(ast, label, argName) {
 //   - overlay names are in the registered set (`grid` for now).
 const REGISTERED_OVERLAYS = new Set(["grid"]);
 const VIEW_EXPR_OUTPUTS = new Set(["red", "green", "blue"]);
-// Glyph kinds the renderer supports — adding a new shape means adding
-// a base geometry in geodesic-preview.mjs's GLYPH_GEOMETRIES table.
-const GLYPH_KINDS = new Set(["arrow", "dot", "ring", "square", "plus"]);
 
 function validateRenderDecls(schema) {
   const palettes = schema.palettes ?? [];
@@ -198,20 +195,21 @@ function validateRenderDecls(schema) {
         fieldTypes, paramNames, constNames,
       });
     }
-    // Optional `glyph KIND [rotate=F] [size=F] [length=N] [stride=N]`
-    // overlay clause. KIND ∈ {arrow, dot, ring, square, plus}.
+    // Optional `glyph "CHAR" [rotate=F] [size=F] [length=N] [stride=N]`
+    // overlay clause. The character is rasterized via Canvas2D at
+    // recipe load and rendered as a textured quad per cell.
+    // - char: must be non-empty (the parser rejects an empty literal
+    //   already, but defensive check).
     // - rotate=FIELD (optional): vec2 — glyph orientation (in
-    //   tangent plane). Required only for `arrow` kind, which is
-    //   inherently directional; without rotate the arrow points east.
+    //   tangent plane). The glyph's natural facing is whatever the
+    //   font draws; "→" points east when rotate yields angle 0.
     // - size=FIELD (optional): scalar — multiplier on glyph size.
-    //   Magnitude > 0 required at runtime; the validator just checks
-    //   the field exists and is f32.
-    // - length / stride: positive numbers (length is also "base size"
-    //   for non-arrow kinds).
+    //   Cells with magnitude ≈ 0 are skipped at render time.
+    // - length / stride: positive numbers.
     if (v.glyph) {
       const g = v.glyph;
-      if (!GLYPH_KINDS.has(g.kind)) {
-        throw new Error(`view "${v.id}": unknown glyph kind "${g.kind}" (allowed: ${[...GLYPH_KINDS].join(", ")})`);
+      if (typeof g.char !== "string" || g.char.length === 0) {
+        throw new Error(`view "${v.id}": glyph clause needs a non-empty character literal`);
       }
       if (g.rotate) {
         if (!fieldNames.has(g.rotate)) {

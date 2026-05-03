@@ -71,93 +71,62 @@ export async function createGeodesicPreview({ scene, globe, frequency = 48, grid
 // =============================================================================
 // Glyph overlay layer.
 //
-// Each glyph kind is a 2D shape — a list of triangles in the unit
-// tangent plane (x = east, y = north). Per cell, we transform the
-// shape: scale by the glyph's `length` × optional size-field, rotate
-// by the glyph's optional vec2 rotate-field angle, then map the 2D
-// plane to 3D via the cell's east/north basis and translate to the
-// cell position lifted slightly off the sphere.
+// Each cell can render an arbitrary font character — "→", "★", "●",
+// "X", emoji, anything the system font can draw. The character is
+// rasterized to a Canvas2D texture once per recipe load (cached by
+// character, so repeated views of the same glyph share a texture)
+// and rendered as a textured quad per cell via InstancedMesh.
 //
-// One Mesh per kind. populate() fills the active kind's buffer and
-// hides the others. Vertex counts vary by kind so they need
-// separate buffers; pre-allocated for cellCount-many glyphs each.
+// Per-cell matrix: scale × in-plane rotation × tangent-basis →
+// position. Per-cell color: black on bright tiles, white on dark
+// tiles, modulated by the texture's alpha mask.
 // =============================================================================
 
-// 2D triangle list per glyph kind, in tangent-plane coords. Conventions:
-//   - x = east, y = north
-//   - shapes oriented "forward" along +y (so an arrow rotated by
-//     angle=0 points north)
-//   - base size 1 unit; populate() multiplies by glyph.length × baseScale
-const GLYPH_GEOMETRIES = {
-  // Isoceles triangle, base in -y, tip in +y. 1 triangle = 3 verts.
-  arrow: [
-    [-0.18, 0.0], [0.18, 0.0], [0.0, 1.0],
-  ],
-  // Square, side 1, centered at origin. 2 triangles = 6 verts.
-  square: [
-    [-0.5, -0.5], [0.5, -0.5], [0.5, 0.5],
-    [-0.5, -0.5], [0.5, 0.5], [-0.5, 0.5],
-  ],
-  // 8-sided regular polygon (octagon), approximating a disc. Triangle
-  // fan from origin, 8 wedges = 24 verts.
-  dot: (() => {
-    const verts = [];
-    const N = 8;
-    const r = 0.5;
-    for (let i = 0; i < N; i++) {
-      const a0 = (i / N) * Math.PI * 2;
-      const a1 = ((i + 1) / N) * Math.PI * 2;
-      verts.push([0, 0]);
-      verts.push([Math.cos(a0) * r, Math.sin(a0) * r]);
-      verts.push([Math.cos(a1) * r, Math.sin(a1) * r]);
-    }
-    return verts;
-  })(),
-  // Hollow circle / annulus, 8 segments. Outer radius 0.5, inner 0.32.
-  // Each segment is 2 triangles = 6 verts. 8 × 6 = 48 verts.
-  ring: (() => {
-    const verts = [];
-    const N = 8;
-    const ro = 0.5, ri = 0.32;
-    for (let i = 0; i < N; i++) {
-      const a0 = (i / N) * Math.PI * 2;
-      const a1 = ((i + 1) / N) * Math.PI * 2;
-      const o0 = [Math.cos(a0) * ro, Math.sin(a0) * ro];
-      const o1 = [Math.cos(a1) * ro, Math.sin(a1) * ro];
-      const i0 = [Math.cos(a0) * ri, Math.sin(a0) * ri];
-      const i1 = [Math.cos(a1) * ri, Math.sin(a1) * ri];
-      verts.push(o0, o1, i1);
-      verts.push(o0, i1, i0);
-    }
-    return verts;
-  })(),
-  // Plus sign — two thin rectangles overlapping at origin. 4 triangles = 12 verts.
-  plus: (() => {
-    const w = 0.14;
-    const r = 0.5;
-    const verts = [];
-    // Vertical bar
-    verts.push([-w, -r], [w, -r], [w, r]);
-    verts.push([-w, -r], [w, r], [-w, r]);
-    // Horizontal bar
-    verts.push([-r, -w], [r, -w], [r, w]);
-    verts.push([-r, -w], [r, w], [-r, w]);
-    return verts;
-  })(),
-};
+const GLYPH_TEXTURE_SIZE = 128;
+
+// Rasterize a character to a CanvasTexture. White-on-transparent so
+// the per-instance color tints it via fragment-shader multiply. Big
+// enough that mip-mapped renderings look clean at typical zoom; the
+// alphaTest discards the transparent surround.
+function rasterizeGlyph(char) {
+  if (typeof document === "undefined") return null;        // not in a browser
+  const canvas = document.createElement("canvas");
+  canvas.width = GLYPH_TEXTURE_SIZE;
+  canvas.height = GLYPH_TEXTURE_SIZE;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, GLYPH_TEXTURE_SIZE, GLYPH_TEXTURE_SIZE);
+  // Pick a font size that fills most of the canvas without clipping
+  // wide characters. Bold weight makes thin characters readable at
+  // small render scales.
+  ctx.font = `bold ${Math.floor(GLYPH_TEXTURE_SIZE * 0.78)}px "Helvetica Neue", "Arial", sans-serif`;
+  ctx.fillStyle = "#ffffff";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(char, GLYPH_TEXTURE_SIZE / 2, GLYPH_TEXTURE_SIZE / 2);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.anisotropy = 4;
+  tex.needsUpdate = true;
+  return tex;
+}
 
 function createGlyphLayer(scene, grid) {
-  const meshes = {};
-  for (const [kind, points] of Object.entries(GLYPH_GEOMETRIES)) {
-    const vertCount = points.length;
-    const positions = new Float32Array(grid.cellCount * vertCount * 3);
-    const colors = new Float32Array(grid.cellCount * vertCount * 3);
-    const geom = new THREE.BufferGeometry();
-    geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    geom.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-    geom.setDrawRange(0, 0);
-    const mat = new THREE.MeshBasicMaterial({
+  const cache = new Map();             // char → { texture, mesh, material, geometry }
+  let activeChar = null;
+
+  // Build a fresh InstancedMesh + texture for `char` and cache it.
+  // Reused across refreshes; only the per-instance matrices and
+  // colors change per tick.
+  function ensureMeshFor(char) {
+    if (cache.has(char)) return cache.get(char);
+    const texture = rasterizeGlyph(char);
+    const geometry = new THREE.PlaneGeometry(1, 1);
+    const material = new THREE.MeshBasicMaterial({
+      map: texture,
       vertexColors: true,
+      transparent: true,
+      alphaTest: 0.05,
       side: THREE.DoubleSide,
       depthTest: true,
       depthWrite: false,
@@ -165,21 +134,38 @@ function createGlyphLayer(scene, grid) {
       polygonOffsetFactor: -2,
       polygonOffsetUnits: -2,
     });
-    const mesh = new THREE.Mesh(geom, mat);
-    mesh.name = `geodesic-glyph-${kind}`;
+    const mesh = new THREE.InstancedMesh(geometry, material, grid.cellCount);
+    mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(grid.cellCount * 3), 3);
+    mesh.count = 0;
+    mesh.frustumCulled = false;
     mesh.visible = false;
     mesh.renderOrder = 5;
+    mesh.name = `geodesic-glyph-${char}`;
     scene.add(mesh);
-    meshes[kind] = { mesh, geom, mat, points, vertCount };
+    const slot = { texture, geometry, material, mesh };
+    cache.set(char, slot);
+    return slot;
   }
+
   return {
-    populate(args) { populateGlyph(meshes, args); },
+    populate(args) {
+      const glyph = args.viewSpec?.glyph;
+      // Hide every cached mesh; we only show one at a time.
+      for (const slot of cache.values()) slot.mesh.visible = false;
+      activeChar = null;
+      if (!glyph) return;
+      const slot = ensureMeshFor(glyph.char);
+      activeChar = glyph.char;
+      populateGlyphMesh(slot, args);
+    },
     dispose() {
-      for (const { mesh, geom, mat } of Object.values(meshes)) {
+      for (const { mesh, geometry, material, texture } of cache.values()) {
         scene.remove(mesh);
-        geom.dispose();
-        mat.dispose();
+        geometry.dispose();
+        material.dispose();
+        texture?.dispose?.();
       }
+      cache.clear();
     },
   };
 }
@@ -188,13 +174,14 @@ function createGlyphLayer(scene, grid) {
 // distance ≈ 2π / (5.5 × N) sphere-radians. Use that as the
 // base unit; `length=1` produces glyphs ~ one neighbor-spacing big.
 // Default length=0.5 → half a cell.
-function populateGlyph(meshes, { grid, tileGeometry, fields = {}, viewSpec }) {
-  const glyph = viewSpec?.glyph;
-  // Hide every kind first; show only the active one (if any).
-  for (const { mesh } of Object.values(meshes)) mesh.visible = false;
-  if (!glyph) return;
-  const slot = meshes[glyph.kind];
-  if (!slot) return;     // unknown kind (validator should catch upstream)
+// Per-instance matrix scratch. Reused across cells/calls to avoid
+// allocating fresh Matrix4s in the hot loop.
+const _glyphMatrix = new THREE.Matrix4();
+const _glyphColor = new THREE.Color();
+
+function populateGlyphMesh(slot, { grid, tileGeometry, fields = {}, viewSpec }) {
+  const glyph = viewSpec.glyph;
+  const mesh = slot.mesh;
 
   const tileColors = tileGeometry.getAttribute("color")?.array;
   const tileStarts = tileGeometry.userData.tileStarts;
@@ -203,28 +190,19 @@ function populateGlyph(meshes, { grid, tileGeometry, fields = {}, viewSpec }) {
   const stride = Math.max(1, glyph.stride | 0);
   const length = glyph.length;
 
-  // Optional source fields for rotation (vec2) and size (scalar).
-  // Both are by name; absence means the glyph has uniform rotation
-  // (0 = pointing north) and uniform size.
+  // Optional source fields. rotate is vec2 (interleaved); size is
+  // scalar. When unset, glyph has fixed orientation (faces +x =
+  // east) and uniform size.
   const rotateField = glyph.rotate ? fields[glyph.rotate] : null;
-  const sizeField = glyph.size ? fields[glyph.size] : null;
+  const sizeField   = glyph.size   ? fields[glyph.size]   : null;
 
-  const positions = slot.geom.getAttribute("position").array;
-  const colors = slot.geom.getAttribute("color").array;
-  const points = slot.points;
-  const vertCount = slot.vertCount;
-  const stridePerCell = vertCount * 3;
-
-  let writeIdx = 0;
   let activeCount = 0;
   for (let cell = 0; cell < grid.cellCount; cell += stride) {
     const cx = grid.positions[cell * 3 + 0];
     const cy = grid.positions[cell * 3 + 1];
     const cz = grid.positions[cell * 3 + 2];
 
-    // East / north tangent basis. Same construction as
-    // dsl-init-runtime's tangentBasis() — east = horizontal-only
-    // tangent, north = center × east.
+    // East / north tangent basis at this cell.
     let ex = -cz, ey = 0, ez = cx;
     let elen = Math.hypot(ex, ey, ez);
     if (elen < 1e-6) { ex = 1; ey = 0; ez = 0; elen = 1; }
@@ -233,9 +211,8 @@ function populateGlyph(meshes, { grid, tileGeometry, fields = {}, viewSpec }) {
     const ny = ez * cx - ex * cz;
     const nz = ex * cy - ey * cx;
 
-    // Glyph orientation. If a vec2 field is supplied for rotation,
-    // its (x, y) components are interpreted as east/north components
-    // and the angle = atan2(y, x). Otherwise glyph faces north (0).
+    // Glyph orientation. atan2(field.y, field.x) gives the in-plane
+    // rotation; cos/sin of that angle is just (vx/mag, vy/mag).
     let cosA = 1, sinA = 0;
     if (rotateField) {
       const vx = rotateField[cell * 2];
@@ -246,8 +223,6 @@ function populateGlyph(meshes, { grid, tileGeometry, fields = {}, viewSpec }) {
       sinA = vy / mag;
     }
 
-    // Glyph size. `length` × baseScale × optional size-field
-    // magnitude. size-field of 0 skips the glyph entirely.
     let scale = length * baseScale;
     if (sizeField) {
       const s = sizeField[cell];
@@ -255,58 +230,54 @@ function populateGlyph(meshes, { grid, tileGeometry, fields = {}, viewSpec }) {
       scale *= Math.abs(s);
     }
 
-    // Tile-tinted gradient coloring (same comet-tail trick as before
-    // but generalised: the "tip" is the maximum-y vertex of the local
-    // 2D shape, the "base" is everything else).
+    // Build the per-instance transform. The PlaneGeometry is unit
+    // sized in the local x/y plane; we want to map local x → "rotated
+    // east", local y → "rotated north", local z → outward normal,
+    // then translate to the cell position lifted to sphereR.
+    //
+    // Combined rotation+basis: the columns of the 3x3 rotation block
+    // are the world-space basis vectors of local-x, local-y, local-z
+    // respectively. We compute those directly:
+    //   localX_world = (cosA*east + sinA*north) * scale
+    //   localY_world = (-sinA*east + cosA*north) * scale
+    //   localZ_world = center  (outward normal — quad faces outward)
+    const lx_x = (cosA * ex + sinA * nx) * scale;
+    const lx_y = (cosA * ey + sinA * ny) * scale;
+    const lx_z = (cosA * ez + sinA * nz) * scale;
+    const ly_x = (-sinA * ex + cosA * nx) * scale;
+    const ly_y = (-sinA * ey + cosA * ny) * scale;
+    const ly_z = (-sinA * ez + cosA * nz) * scale;
+    const lz_x = cx;
+    const lz_y = cy;
+    const lz_z = cz;
+    const px = cx * sphereR;
+    const py = cy * sphereR;
+    const pz = cz * sphereR;
+    const m = _glyphMatrix.elements;
+    m[0] = lx_x; m[4] = ly_x; m[8]  = lz_x; m[12] = px;
+    m[1] = lx_y; m[5] = ly_y; m[9]  = lz_y; m[13] = py;
+    m[2] = lx_z; m[6] = ly_z; m[10] = lz_z; m[14] = pz;
+    m[3] = 0;    m[7] = 0;    m[11] = 0;    m[15] = 1;
+    mesh.setMatrixAt(activeCount, _glyphMatrix);
+
+    // Per-cell color: black on bright tiles, white on dark. Texture
+    // alpha gates the visible pixels; this just tints them.
     let rT = 0, gT = 0, bT = 0;
     if (tileColors && tileStarts) {
       const v = tileStarts[cell] * 3;
       rT = tileColors[v]; gT = tileColors[v + 1]; bT = tileColors[v + 2];
     }
     const luma = 0.299 * rT + 0.587 * gT + 0.114 * bT;
-    const tipC = luma > 0.55 ? 0.04 : 0.96;
-    const baseR = rT * 0.35 + tipC * 0.30;
-    const baseG = gT * 0.35 + tipC * 0.30;
-    const baseB = bT * 0.35 + tipC * 0.30;
+    const c = luma > 0.55 ? 0.05 : 0.97;
+    _glyphColor.setRGB(c, c, c);
+    mesh.setColorAt(activeCount, _glyphColor);
 
-    // Find the shape's maximum-y point so we can color it as the
-    // gradient endpoint (only matters for arrow; for symmetric shapes
-    // the gradient just becomes a slight tint shift).
-    let maxY = -Infinity;
-    for (const p of points) if (p[1] > maxY) maxY = p[1];
-
-    const cxr = cx * sphereR, cyr = cy * sphereR, czr = cz * sphereR;
-    for (let i = 0; i < vertCount; i++) {
-      const px2 = points[i][0];
-      const py2 = points[i][1];
-      // 1) scale, 2) rotate by glyph angle in tangent plane, 3) lift
-      //    via east/north basis to 3D, 4) translate to cell.
-      const sx = px2 * scale;
-      const sy = py2 * scale;
-      const rx = sx * cosA - sy * sinA;
-      const ry = sx * sinA + sy * cosA;
-      const wx = cxr + rx * ex + ry * nx;
-      const wy = cyr + rx * ey + ry * ny;
-      const wz = czr + rx * ez + ry * nz;
-      positions[writeIdx + i * 3 + 0] = wx;
-      positions[writeIdx + i * 3 + 1] = wy;
-      positions[writeIdx + i * 3 + 2] = wz;
-      // Color: linear blend from base (at y=0 or below) to tip (at maxY).
-      const t = maxY > 0 ? Math.max(0, Math.min(1, py2 / maxY)) : 0;
-      const cR = baseR + (tipC - baseR) * t;
-      const cG = baseG + (tipC - baseG) * t;
-      const cB = baseB + (tipC - baseB) * t;
-      colors[writeIdx + i * 3 + 0] = cR;
-      colors[writeIdx + i * 3 + 1] = cG;
-      colors[writeIdx + i * 3 + 2] = cB;
-    }
-    writeIdx += stridePerCell;
     activeCount++;
   }
-  slot.geom.attributes.position.needsUpdate = true;
-  slot.geom.attributes.color.needsUpdate = true;
-  slot.geom.setDrawRange(0, activeCount * vertCount);
-  slot.mesh.visible = activeCount > 0;
+  mesh.instanceMatrix.needsUpdate = true;
+  if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  mesh.count = activeCount;
+  mesh.visible = activeCount > 0;
 }
 
 function muteGlobeMaterial(globe) {

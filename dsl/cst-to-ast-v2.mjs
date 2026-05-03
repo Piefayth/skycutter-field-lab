@@ -529,47 +529,62 @@ function viewCstToAst(cst, block) {
 }
 
 // `glyph` is a sibling clause to `color` inside a `view` block —
-// renders a small per-cell shape (arrow / dot / ring / square / plus)
-// overlaid on the colored sphere, with optional rotation and size
-// driven by recipe fields. Generalises the earlier `arrows`-only
-// surface: any glyph shape, rotated by any vec2 field, scaled by any
-// scalar field.
+// renders a font character (the literal Unicode glyph) rasterized to
+// each cell, with optional rotation and size driven by recipe
+// fields. The character is whatever the recipe author writes between
+// the quotes — "→", "★", "●", "X", emoji, anything the system font
+// can draw.
 //
 //   view flow "Velocity field" {
 //     color ramp speed range [0, 1] palette HEAT
-//     glyph arrow rotate=wind size=length(wind) length=0.6 stride=2
+//     glyph "→" rotate=wind size=length(wind) length=0.6 stride=2
 //   }
 //
 //   view density "Density dots" {
 //     color ramp rho range [0, 1] palette MONO
-//     glyph dot size=rho length=0.4
+//     glyph "●" size=rho length=0.4
 //   }
 //
-// `KIND` is one of: arrow, dot, ring, square, plus.
+//   view stars "Activity" {
+//     color ramp activity range [0, 1] palette ACT
+//     glyph "★" length=0.5
+//   }
+//
+// `"CHAR"` — the literal character (or short string) to rasterize per cell.
 // `rotate=FIELD` (optional, vec2) — orient glyph by atan2(field.y, field.x).
+//                                    The glyph's natural orientation
+//                                    is whatever the font draws; "→"
+//                                    points right (+x), "↑" points
+//                                    up (+y), etc. The recipe author
+//                                    picks a character whose natural
+//                                    orientation matches the
+//                                    convention they want.
 // `size=FIELD` (optional, scalar) — scale glyph by field magnitude.
 // `length=N` (default 0.5) — base size, units of cell-radius.
 // `stride=N` (default 1) — render every Nth cell only.
 function glyphFromViewBlock(block) {
   const stmt = sorted(block.statements).find((s) => s.keyword === "glyph");
   if (!stmt) return null;
+  // The character lives in the RAW statement text, not the sanitized
+  // cleanText — sanitizeDsl() blanks out string contents (it leaves
+  // `glyph     rotate=heading` for `glyph "→" rotate=heading`).
+  const raw = stmt.text;
+  const head = /\bglyph\s+(?:"([^"]*)"|'([^']*)')/.exec(raw);
+  if (!head) throw new Error(`v2 CST projection: view ${block.id}: glyph clause needs a quoted character — e.g. \`glyph "→"\``);
+  const char = head[1] ?? head[2] ?? "";
+  // The named-arg parses use cleanText so quoted strings can't sneak
+  // back in as field-name references.
   const text = stmt.cleanText;
-  // First word after `glyph` is the KIND.
-  const head = /\bglyph\s+([A-Za-z_][A-Za-z0-9_]*)/.exec(text);
-  if (!head) throw new Error(`v2 CST projection: view ${block.id}: glyph clause missing kind`);
-  const kind = head[1];
-  // `name=identifier` (rotate / size — field references)
   const fieldArgs = {};
   for (const m of text.matchAll(/\b(rotate|size)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)/g)) {
     fieldArgs[m[1]] = m[2];
   }
-  // `name=number` (length / stride)
   const numericArgs = {};
   for (const m of text.matchAll(/\b(length|stride)\s*=\s*(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)/g)) {
     numericArgs[m[1]] = Number(m[2]);
   }
   return {
-    kind,
+    char,
     rotate: fieldArgs.rotate ?? null,
     size:   fieldArgs.size   ?? null,
     length: Number.isFinite(numericArgs.length) ? numericArgs.length : 0.5,
