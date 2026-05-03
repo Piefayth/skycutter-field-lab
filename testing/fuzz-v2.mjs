@@ -54,6 +54,30 @@ const intIn = (rng, lo, hi) => Math.floor(rng() * (hi - lo + 1)) + lo;
 const maybe = (rng, p = 0.5) => rng() < p;
 const round = (n, places = 3) => Number(n.toFixed(places));
 
+// Numeric leaf with special-value bias. Uniform random covers the
+// "boring" middle of the float line; tests rarely fail there. The
+// interesting bugs cluster around boundary values: 0 / -0 (sign
+// quirks, divide-by-zero), exact integers (cast paths), π / TAU
+// (trig identities), very large (overflow / Inf), very small
+// (underflow / denormals). Mix all of those into the leaf
+// distribution at ~25% combined; otherwise fall back to uniform.
+const SPECIAL_NUMERIC_LEAVES = [
+  "0",
+  "-0",
+  "1",
+  "-1",
+  "PI",
+  "TAU",
+  "1e-30",       // denormal-ish; survives multiply-by-small
+  "1e10",        // large but finite
+  "0.0001",
+  "100",
+];
+function genNumericLeaf(rng) {
+  if (rng() < 0.25) return pick(rng, SPECIAL_NUMERIC_LEAVES);
+  return round(rng() * 4 - 1).toString();
+}
+
 const MATH_FUNCS_1 = ["sin", "cos", "exp", "abs", "sqrt", "wrapAngle"];
 const MATH_FUNCS_2 = ["pow", "atan2", "min", "max"];
 const BIN_OPS = ["+", "-", "*", "/"];
@@ -120,7 +144,7 @@ function genCellExpr(ctx, scope, depth = 0) {
       leaves.push(`${v}.x`, `${v}.y`, `length(${v})`);
     }
     if (leaves.length === 0 || maybe(r, 0.35)) {
-      return round(r() * 4 - 1).toString();
+      return genNumericLeaf(r);
     }
     return pick(r, leaves);
   }
@@ -188,7 +212,7 @@ function genCellExpr(ctx, scope, depth = 0) {
   if (!scope.neighborBound && !scope.disallowReductions && scope.scalarReads.length > 0 && depth <= 1) {
     return genNeighborReduce(ctx, scope, depth + 1);
   }
-  return round(r() * 2).toString();
+  return genNumericLeaf(r);
 }
 
 // Generate a bool-typed expression. Used for `when` predicates,
