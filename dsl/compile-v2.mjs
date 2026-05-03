@@ -144,6 +144,120 @@ export function diagnoseV2(source) {
     const result = compileV2(source);
     return { ok: true, errors: [], ...result.dsl };
   } catch (error) {
-    return { ok: false, errors: [{ message: error.message }], stages: [] };
+    return { ok: false, errors: [diagnosticFromError(source, error)], stages: [] };
   }
+}
+
+function diagnosticFromError(source, error) {
+  const message = error?.message ?? String(error);
+  const range = locateDiagnosticRange(source, message);
+  const position = range ? lineColumnAt(source, range.from) : null;
+  return {
+    message,
+    severity: "error",
+    ...(range ?? {}),
+    ...(position ?? {}),
+  };
+}
+
+function locateDiagnosticRange(source, message) {
+  source = String(source ?? "");
+  if (!source) return null;
+
+  const lineMatch = /unexpected line "([^"]+)"/.exec(message);
+  if (lineMatch) {
+    const trimmed = lineMatch[1].trim();
+    const index = source.indexOf(trimmed);
+    if (index >= 0) return spanWordOrLine(source, index, trimmed.length);
+  }
+
+  const atMatch = /\bat "([^"]+)"/.exec(message);
+  if (atMatch) {
+    const snippet = atMatch[1].trim();
+    const index = source.indexOf(snippet);
+    if (index >= 0) return spanWordOrLine(source, index, snippet.length);
+  }
+
+  const candidates = [
+    /unknown identifier "([^"]+)"/,
+    /unknown identifier ([A-Za-z_][A-Za-z0-9_]*)/,
+    /unknown field "([^"]+)"/,
+    /unknown function "([^"]+)"/,
+    /unknown function ([A-Za-z_][A-Za-z0-9_]*)/,
+    /function "([^"]+)" used but not imported/,
+    /field ([A-Za-z_][A-Za-z0-9_]*) is not declared/,
+    /writes to undeclared field ([A-Za-z_][A-Za-z0-9_]*)/,
+    /field not visible[^;]*; add it to reads/,
+    /add ([A-Za-z_][A-Za-z0-9_]*) to the stage's reads/,
+    /assigning \w+ to \w+ field "([^"]+)"/,
+    /`([A-Za-z_][A-Za-z0-9_]*)` is no longer/,
+  ];
+  for (const pattern of candidates) {
+    const match = pattern.exec(message);
+    if (!match) continue;
+    const token = match[1];
+    if (!token) continue;
+    const range = findToken(source, token);
+    if (range) return range;
+  }
+
+  const stageMatch = /(?:stage|scenario|stamp|metric) "([^"]+)"/.exec(message)
+    ?? /\bstage ([A-Za-z_][A-Za-z0-9_]*)[: ]/.exec(message);
+  if (stageMatch) {
+    const range = findNamedBlockOrDecl(source, stageMatch[1]);
+    if (range) return range;
+  }
+
+  const quoted = [...message.matchAll(/"([A-Za-z_][A-Za-z0-9_]*)"/g)]
+    .map((m) => m[1])
+    .filter((token) => token.length <= 48);
+  for (const token of quoted) {
+    const range = findToken(source, token);
+    if (range) return range;
+  }
+
+  const firstLineEnd = source.indexOf("\n");
+  if (firstLineEnd > 0) return { from: 0, to: firstLineEnd };
+  const firstWord = /[A-Za-z_][A-Za-z0-9_]*/.exec(source);
+  if (firstWord) return { from: firstWord.index, to: firstWord.index + firstWord[0].length };
+  return { from: 0, to: Math.min(source.length, 1) };
+}
+
+function findNamedBlockOrDecl(source, id) {
+  const block = new RegExp(`\\b(?:stage|scenario|stamp|metric)\\s+${escapeRegExp(id)}\\b`).exec(source);
+  if (block) {
+    const from = block.index + block[0].lastIndexOf(id);
+    return { from, to: from + id.length };
+  }
+  return findToken(source, id);
+}
+
+function findToken(source, token) {
+  if (!token) return null;
+  const re = new RegExp(`\\b${escapeRegExp(token)}\\b`, "g");
+  const match = re.exec(source);
+  if (!match) return null;
+  return { from: match.index, to: match.index + token.length };
+}
+
+function spanWordOrLine(source, from, fallbackLength) {
+  const word = /[A-Za-z_][A-Za-z0-9_]*/.exec(source.slice(from));
+  if (word?.index === 0) return { from, to: from + word[0].length };
+  return { from, to: Math.min(source.length, from + Math.max(1, fallbackLength)) };
+}
+
+function lineColumnAt(source, pos) {
+  let line = 1;
+  let lineStart = 0;
+  for (let i = 0; i < pos; i++) {
+    if (source.charCodeAt(i) === 10) {
+      line++;
+      lineStart = i + 1;
+    }
+  }
+  return { line, column: pos - lineStart + 1 };
+}
+
+function escapeRegExp(text) {
+  return String(text).replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
 }

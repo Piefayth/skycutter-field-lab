@@ -311,21 +311,24 @@ export function mountPipelineGraph(rootEl, api) {
   }
 
   function validatePipelineDsl() {
-    const source = composePipelineDsl();
+    const composed = composePipelineDslWithOffsets();
+    const source = composed.source;
     refreshDslFieldNames();
     dslCmHost.classList.toggle("pg-dsl-pane__cm--empty", !dslEditor.getSource());
     updateDslExtractCounts();
     const result = diagnoseDsl(source);
     dslStatus.classList.toggle("is-error", !result.ok);
     if (result.ok) {
+      applyEditorDiagnostics([], composed.parts);
       const stageCount = result.stages.length;
       dslStatus.textContent = `${dslDirty ? "edited, " : ""}valid — ${stageCount} stage${stageCount === 1 ? "" : "s"}`;
       dslDiagnostics.textContent = "";
       dslDiagnostics.hidden = true;
       return result;
     }
+    applyEditorDiagnostics(result.errors, composed.parts);
     dslStatus.textContent = `${dslDirty ? "edited, " : ""}${result.errors.length} diagnostic${result.errors.length === 1 ? "" : "s"}`;
-    dslDiagnostics.textContent = result.errors.map((error) => `error: ${error.message}`).join("\n");
+    dslDiagnostics.textContent = result.errors.map(formatDiagnosticLine).join("\n");
     dslDiagnostics.hidden = false;
     return result;
   }
@@ -349,6 +352,7 @@ export function mountPipelineGraph(rootEl, api) {
       dslStatus.classList.add("is-error");
       dslDiagnostics.textContent = `error: ${error.message}`;
       dslDiagnostics.hidden = false;
+      applyEditorDiagnostics([{ message: error.message, severity: "error" }], composePipelineDslWithOffsets().parts);
     }
   }
 
@@ -379,11 +383,54 @@ export function mountPipelineGraph(rootEl, api) {
   }
 
   function composePipelineDsl() {
-    return [
-      dslEditor.getSource().trim(),
-      stampDslSection.editor.getSource().trim(),
-      presetDslSection.editor.getSource().trim(),
-    ].filter(Boolean).join("\n\n");
+    return composePipelineDslWithOffsets().source;
+  }
+
+  function composePipelineDslWithOffsets() {
+    const rawParts = [
+      { kind: "pipeline", editor: dslEditor, source: dslEditor.getSource() },
+      { kind: "stamps", editor: stampDslSection.editor, source: stampDslSection.editor.getSource() },
+      { kind: "presets", editor: presetDslSection.editor, source: presetDslSection.editor.getSource() },
+    ].filter((part) => part.source.trim().length > 0);
+    let source = "";
+    const parts = [];
+    for (const part of rawParts) {
+      if (source.length > 0) source += "\n\n";
+      const from = source.length;
+      source += part.source;
+      parts.push({ ...part, from, to: from + part.source.length });
+    }
+    return { source, parts };
+  }
+
+  function applyEditorDiagnostics(errors = [], parts = composePipelineDslWithOffsets().parts) {
+    const byEditor = new Map(dslSections.map((section) => [section.editor, []]));
+    for (const error of errors) {
+      const part = findDiagnosticPart(error, parts) ?? parts[0];
+      if (!part) continue;
+      const docLength = part.editor.getSource().length;
+      const from = clampNumber(Number.isFinite(error.from) ? error.from - part.from : 0, 0, Math.max(0, docLength));
+      const to = clampNumber(Number.isFinite(error.to) ? error.to - part.from : from + 1, from + 1, Math.max(from + 1, docLength));
+      byEditor.get(part.editor)?.push({
+        from,
+        to,
+        severity: error.severity ?? "error",
+        message: error.message,
+      });
+    }
+    for (const [editor, diagnostics] of byEditor) editor.setDiagnostics?.(diagnostics);
+  }
+
+  function findDiagnosticPart(error, parts) {
+    if (!Number.isFinite(error?.from)) return null;
+    return parts.find((part) => error.from >= part.from && error.from <= part.to) ?? null;
+  }
+
+  function formatDiagnosticLine(error) {
+    const where = Number.isFinite(error.line) && Number.isFinite(error.column)
+      ? `${error.line}:${error.column}: `
+      : "";
+    return `error: ${where}${error.message}`;
   }
 
   function updateDslExtractCounts() {

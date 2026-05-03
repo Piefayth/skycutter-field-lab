@@ -2111,6 +2111,25 @@ input[type="range"]::-moz-range-thumb {
   min-height: 0;
 }
 
+.pg-dsl-pane__cm .cm-lintRange-error {
+  background-image: linear-gradient(
+    90deg,
+    rgba(255, 107, 107, 0.75) 50%,
+    transparent 50%
+  );
+  background-position: left bottom;
+  background-repeat: repeat-x;
+  background-size: 6px 1px;
+}
+
+.pg-dsl-pane__cm .cm-lintPoint-error::after {
+  border-bottom-color: var(--danger);
+}
+
+.pg-dsl-pane__cm .cm-lint-marker-error {
+  color: var(--danger);
+}
+
 .pg-dsl-pane__cm--empty .cm-content::before {
   content: "stage id \"Name\" { ... }";
   color: var(--bone-mute);

@@ -2,7 +2,7 @@
 // WebGPU geodesic compiler → WGSL output. If this passes, v2 wave equation is
 // runnable in the browser.
 
-import { compileV2 } from "./compile-v2.mjs";
+import { compileV2, diagnoseV2 } from "./compile-v2.mjs";
 import { compileWebGpuGeodesicPipeline } from "./webgpu-geodesic-compiler.mjs";
 
 function test(name, fn) {
@@ -79,4 +79,53 @@ test("v2 wave-equation lowers + compiles to WGSL", () => {
     "WGSL should bind f_u_prev for u@prev reads");
   assert(cellPass.source.includes("var<storage, read> f_u"),
     "WGSL should bind f_u for current reads");
+});
+
+test("diagnoseV2 includes a source range for editor diagnostics", () => {
+  const source = `
+recipe "Bad"
+substrate geodesic frequency 16
+field u: f32
+scenario init { set u = 0 }
+step {
+  stage broken {
+    reads u
+    writes u
+    cell { set u = nope }
+  }
+}`;
+  const result = diagnoseV2(source);
+  assert(!result.ok, "expected diagnostic failure");
+  const [error] = result.errors;
+  assert(error.message.includes("nope"), `expected message to mention nope, got ${error.message}`);
+  assertEq(source.slice(error.from, error.to), "nope", "diagnostic should target the bad identifier");
+  assert(error.line > 0 && error.column > 0, "diagnostic should include line/column");
+});
+
+test("diagnoseV2 locates parse errors at the quoted tail", () => {
+  const source = `recipe "Blank"
+summary "Empty starter recipe. Replace step body with your own simulation."
+recommendedPreset blank
+
+substrate geodesic frequency 64
+
+field a: f32
+
+scenario blank "Blank canvas" {
+  set a f 0
+}
+
+step {
+  stage hold "No-op hold (replace with real physics)" {
+    reads a
+    writes a
+    cell { set a = clamp(a, 0, 1) }
+  }
+}`;
+  const result = diagnoseV2(source);
+  assert(!result.ok, "expected diagnostic failure");
+  const [error] = result.errors;
+  assert(error.message.includes('expected "="'), `expected parse error, got ${error.message}`);
+  assertEq(source.slice(error.from, error.to), "f", "diagnostic should point at the unexpected token");
+  assertEq(error.line, 10, "diagnostic should report the scenario action line");
 });

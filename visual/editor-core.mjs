@@ -11,6 +11,7 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirro
 import {
   syntaxHighlighting, indentOnInput, bracketMatching, foldGutter, foldKeymap,
 } from "@codemirror/language";
+import { lintGutter, setDiagnostics as setLintDiagnostics } from "@codemirror/lint";
 import { javascript } from "@codemirror/lang-javascript";
 import {
   createFieldLabExtensions, fieldLabHighlight, fieldNameKey,
@@ -95,6 +96,7 @@ export function createEditorView({ parent, onApply, onDocChange, language = "jav
         indentOnInput(),
         bracketMatching(),
         foldGutter(),
+        ...(isFieldLab ? [lintGutter()] : []),
         highlightActiveLine(),
         languageCompartment.of(isFieldLab
           ? createFieldLabExtensions([])
@@ -161,6 +163,9 @@ export function createEditorView({ parent, onApply, onDocChange, language = "jav
     view.requestMeasure?.();
     view.scrollDOM.dispatchEvent(new Event("scroll"));
   }
+  function setDiagnostics(diagnostics = []) {
+    view.dispatch(setLintDiagnostics(view.state, diagnostics));
+  }
 
-  return { view, setSource, getSource, setFieldNames, refreshLayout };
+  return { view, setSource, getSource, setFieldNames, refreshLayout, setDiagnostics };
 }
