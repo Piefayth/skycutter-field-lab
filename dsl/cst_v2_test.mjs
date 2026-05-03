@@ -88,6 +88,8 @@ test("CST expression spans record identifiers, coord reads, and reduction binder
   const expr = letStmt.expressions[0];
   assertEq(expr.coordReads.map((read) => `${read.field}@${read.coord}`), ["u@n"]);
   assertEq(expr.reductions.map((reduction) => `${reduction.op}:${reduction.binder}`), ["sum:n"]);
+  assert(cst.references.some((ref) => ref.role === "coordField" && ref.name === "u"));
+  assert(cst.references.some((ref) => ref.role === "coord" && ref.name === "n"));
   const ctx = cursorContextAt(cst, SOURCE.indexOf("u@n - u"));
   assert(ctx.symbols.some((symbol) => symbol.kind === "binder" && symbol.name === "n"));
 });

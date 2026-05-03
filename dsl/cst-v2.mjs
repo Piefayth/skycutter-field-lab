@@ -37,6 +37,7 @@ export function parseDslCst(source) {
   const { blocks, errors } = scanBlocks(source, sanitized, root);
   const statements = scanStatements(source, sanitized, root, blocks);
   const symbols = scanSymbols(statements);
+  const references = scanReferences(statements);
   const names = namesFromSymbols(symbols);
   root.children = blocks.filter((block) => block.parent === root);
   root.statements = statements.filter((stmt) => stmt.block === root);
@@ -48,6 +49,7 @@ export function parseDslCst(source) {
     blocks,
     statements,
     symbols,
+    references,
     names,
     errors,
   };
@@ -612,6 +614,33 @@ function scanSymbols(statements) {
     });
   }
   return symbols;
+}
+
+function scanReferences(statements) {
+  const out = [];
+  for (const stmt of statements) {
+    for (const expr of stmt.expressions ?? []) {
+      const coordFieldStarts = new Set((expr.coordReads ?? []).map((read) => read.fieldFrom));
+      const coordCoordStarts = new Set((expr.coordReads ?? []).map((read) => read.coordFrom));
+      const binderStarts = new Set((expr.reductions ?? []).map((reduction) => reduction.binderFrom));
+      for (const ident of expr.identifiers ?? []) {
+        let role = "identifier";
+        if (coordFieldStarts.has(ident.from)) role = "coordField";
+        else if (coordCoordStarts.has(ident.from)) role = "coord";
+        else if (binderStarts.has(ident.from)) role = "binder";
+        out.push({
+          type: "Reference",
+          role,
+          name: ident.value,
+          from: ident.from,
+          to: ident.to,
+          statement: stmt,
+          expression: expr,
+        });
+      }
+    }
+  }
+  return out;
 }
 
 function namesFromSymbols(symbols) {

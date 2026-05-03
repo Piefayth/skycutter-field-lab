@@ -137,3 +137,24 @@ step {
   assertEq(source.slice(error.from, error.to), "f", "diagnostic should point at the unexpected token");
   assertEq(error.line, 11, "diagnostic should report the scenario action line");
 });
+
+test("diagnoseV2 prefers CST expression references over declarations", () => {
+  const source = `
+recipe "Bad"
+substrate geodesic frequency 16
+field nope: f32
+field u: f32
+step {
+  stage broken {
+    reads u
+    writes u
+    cell { set u = nope }
+  }
+}`;
+  const result = diagnoseV2(source);
+  assert(!result.ok, "expected diagnostic failure");
+  const [error] = result.errors;
+  assert(error.message.includes("nope"), `expected message to mention nope, got ${error.message}`);
+  assertEq(source.slice(error.from, error.to), "nope", "diagnostic should target expression reference");
+  assert(error.line > 8, "diagnostic should not point at the field declaration");
+});

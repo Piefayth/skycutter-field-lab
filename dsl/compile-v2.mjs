@@ -157,7 +157,8 @@ export function diagnoseV2(source) {
 
 function diagnosticFromError(source, error) {
   const message = error?.message ?? String(error);
-  const range = locateDiagnosticRange(source, message);
+  const cst = error?.cst ?? parseRecipeSource(source, { tolerant: true, includeAst: false }).cst;
+  const range = locateDiagnosticRange(source, message, cst);
   const position = range ? lineColumnAt(source, range.from) : null;
   return {
     message,
@@ -167,7 +168,7 @@ function diagnosticFromError(source, error) {
   };
 }
 
-function locateDiagnosticRange(source, message) {
+function locateDiagnosticRange(source, message, cst = null) {
   source = String(source ?? "");
   if (!source) return null;
 
@@ -204,7 +205,7 @@ function locateDiagnosticRange(source, message) {
     if (!match) continue;
     const token = match[1];
     if (!token) continue;
-    const range = findToken(source, token);
+    const range = findTokenInCst(cst, token) ?? findToken(source, token);
     if (range) return range;
   }
 
@@ -219,7 +220,7 @@ function locateDiagnosticRange(source, message) {
     .map((m) => m[1])
     .filter((token) => token.length <= 48);
   for (const token of quoted) {
-    const range = findToken(source, token);
+    const range = findTokenInCst(cst, token) ?? findToken(source, token);
     if (range) return range;
   }
 
@@ -228,6 +229,16 @@ function locateDiagnosticRange(source, message) {
   const firstWord = /[A-Za-z_][A-Za-z0-9_]*/.exec(source);
   if (firstWord) return { from: firstWord.index, to: firstWord.index + firstWord[0].length };
   return { from: 0, to: Math.min(source.length, 1) };
+}
+
+function findTokenInCst(cst, token) {
+  if (!cst || !token) return null;
+  const reference = (cst.references ?? []).find((ref) => ref.name === token && ref.role !== "binder")
+    ?? (cst.references ?? []).find((ref) => ref.name === token);
+  if (reference) return { from: reference.from, to: reference.to };
+  const symbol = (cst.symbols ?? []).find((sym) => sym.name === token);
+  if (symbol) return { from: symbol.from, to: symbol.to };
+  return null;
 }
 
 function findNamedBlockOrDecl(source, id) {
