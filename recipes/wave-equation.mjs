@@ -37,7 +37,7 @@ export const regime = {
 
 export const pipelineDsl = `
 recipe "Wave equation"
-summary "Hyperbolic wave on the sphere — displacement plus velocity first-order integration. The default stamp adds velocity, so held painting injects a sustained impulse instead of fighting the history buffer. With no damping, ripples bounce around the sphere and refocus at the antipode."
+summary "Hyperbolic wave on the sphere — displacement plus velocity first-order integration. The default stamp adds a visible surface drop plus a velocity impulse, so held painting injects waves without fighting a hidden history buffer."
 recommendedPreset droplet
 
 substrate geodesic frequency 64
@@ -104,9 +104,11 @@ views {
 
 stamps {
   stamp ripple "Drop ripple" {
-    // Explicit impulse. Holding the mouse now keeps adding velocity,
-    // which reads as sustained wave injection rather than a phase flip.
-    spot v at brush.pos, radius=brush.r, amount=8
+    // Visible displacement + explicit impulse. The u spot gives the
+    // immediate "drop a stone" surface bump; the v spot carries the
+    // outgoing wave energy while held painting remains intuitive.
+    spot u at brush.pos, radius=brush.r, amount=0.8
+    spot v at brush.pos, radius=brush.r, amount=5
   }
 
   stamp lift "Lift surface" {
@@ -131,15 +133,18 @@ scenarios {
   scenario droplet "Single droplet" {
     set u = 0
     set v = 0
-    spot v at lon=0, lat=0, radius=0.08, amount=8
+    spot u at lon=0, lat=0, radius=0.08, amount=1
+    spot v at lon=0, lat=0, radius=0.08, amount=5
   }
 
   scenario twoStones "Two pebbles" {
-    // Two impulses at antipodes — wave fronts meet at the equator.
+    // Two drops at antipodes — wave fronts meet at the equator.
     set u = 0
     set v = 0
-    spot v at lon=-PI/2, lat=0.4,  radius=0.06, amount=8
-    spot v at lon= PI/2, lat=-0.4, radius=0.06, amount=8
+    spot u at lon=-PI/2, lat=0.4,  radius=0.06, amount=1
+    spot v at lon=-PI/2, lat=0.4,  radius=0.06, amount=5
+    spot u at lon= PI/2, lat=-0.4, radius=0.06, amount=1
+    spot v at lon= PI/2, lat=-0.4, radius=0.06, amount=5
   }
 
   scenario standing "Standing wave seed" {
