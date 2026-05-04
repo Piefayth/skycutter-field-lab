@@ -148,7 +148,7 @@
       "id": "wave-equation",
       "name": "Wave equation (example)",
       "path": "recipes/wave-equation.mjs",
-      "summary": "Hyperbolic wave on a sphere — explicit displacement plus velocity. The default brush paints a visible surface bump plus a velocity impulse, so click-and-hold injects waves predictably."
+      "summary": "Hyperbolic wave on a sphere — explicit displacement plus velocity. Scenarios seed a visible surface bump; the default brush paints velocity only so click-and-hold injects waves predictably."
     },
     {
       "id": "shallow-water",

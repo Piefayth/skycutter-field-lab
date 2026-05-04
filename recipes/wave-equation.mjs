@@ -37,7 +37,7 @@ export const regime = {
 
 export const pipelineDsl = `
 recipe "Wave equation"
-summary "Hyperbolic wave on the sphere — displacement plus velocity first-order integration. The default stamp adds a visible surface drop plus a velocity impulse, so held painting injects waves without fighting a hidden history buffer."
+summary "Hyperbolic wave on the sphere — displacement plus velocity first-order integration. Scenarios seed a visible surface drop, while the default stamp paints velocity only so held painting injects waves without pinning or reversing the displacement field."
 recommendedPreset droplet
 
 substrate geodesic frequency 64
@@ -64,7 +64,7 @@ step {
     cell {
       let lap = sum n in neighbors { u@n - u }
       let nextV = v + (speed * speed * lap - damping * v) * dt
-      set v = clamp(nextV, -12, 12)
+      set v = clamp(nextV, -24, 24)
     }
   }
 
@@ -98,17 +98,16 @@ views {
   }
 
   view v "Velocity (v)" {
-    color ramp v range [-8, 8] palette WAVE
+    color ramp v range [-16, 16] palette WAVE
   }
 }
 
 stamps {
   stamp ripple "Drop ripple" {
-    // Visible displacement + explicit impulse. The u spot gives the
-    // immediate "drop a stone" surface bump; the v spot carries the
-    // outgoing wave energy while held painting remains intuitive.
-    spot u at brush.pos, radius=brush.r, amount=0.8
-    spot v at brush.pos, radius=brush.r, amount=5
+    // Velocity-only impulse. Painting u continuously pins the surface
+    // and fights the wave phase while the mouse is held; painting v
+    // behaves like sustained pressure from a stone entering the water.
+    spot v at brush.pos, radius=brush.r, amount=16
   }
 
   stamp lift "Lift surface" {
