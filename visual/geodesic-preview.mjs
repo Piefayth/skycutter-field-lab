@@ -10,7 +10,7 @@ import { createGeodesicGrid } from "../kernel/geodesic-grid.mjs";
 
 // Geodesic display mesh for recipe state. It renders one tile per state cell
 // and keeps the hidden globe alive underneath for existing raycasts.
-export async function createGeodesicPreview({ scene, globe, frequency = 48, grid: providedGrid = null } = {}) {
+export async function createGeodesicPreview({ scene, globe, camera = null, frequency = 48, grid: providedGrid = null } = {}) {
   const grid = providedGrid ?? createGeodesicGrid({ frequency });
 
   const geometry = createTileGeometry(grid, { radius: 1.006, inset: 0 });
@@ -40,7 +40,7 @@ export async function createGeodesicPreview({ scene, globe, frequency = 48, grid
   // Lines aren't an option (WebGL clamps line widths to 1px on Chrome
   // and Safari) so even "ring" and "plus" are built from triangles.
   const glyphLayer = createGlyphLayer(scene, grid);
-  const particleLayer = createParticleLayer(scene, grid);
+  const particleLayer = createParticleLayer(scene, grid, camera);
 
   const globeMaterialSnapshot = muteGlobeMaterial(globe);
 
@@ -412,7 +412,7 @@ const particleGlowAlpha = wgslFn(`
   }
 `);
 
-function createParticleLayer(scene, grid) {
+function createParticleLayer(scene, grid, camera = null) {
   let geometry = null;
   let material = null;
   let mesh = null;
@@ -428,6 +428,8 @@ function createParticleLayer(scene, grid) {
   let lastParticleFrame = -Infinity;
   const sampleScratch = { x: 0, y: 0 };
   const basisScratch = { ex: 1, ey: 0, ez: 0, nx: 0, ny: 1, nz: 0 };
+  const viewScratch = { x: 0, y: 0, z: 1 };
+  const cameraScratch = new THREE.Vector3();
 
   function ensure(spec) {
     const count = Math.max(1, Math.min(20000, spec.count | 0));
@@ -554,18 +556,20 @@ function createParticleLayer(scene, grid) {
       const frameNumber = Number.isFinite(frame) ? frame : 0;
       if (lastParticleFrame !== -Infinity && cadence > 1 && frameNumber % cadence !== 0) return;
       lastParticleFrame = frameNumber;
-      stepParticles({ spec, vectorField, count: layout.count, trailLength: layout.trailLength });
-      writeParticleGeometry({ spec, count: layout.count, trailLength: layout.trailLength });
+      const viewDir = updateParticleViewDir();
+      stepParticles({ spec, vectorField, count: layout.count, trailLength: layout.trailLength, viewDir, frame: frameNumber });
+      writeParticleGeometry({ spec, count: layout.count, trailLength: layout.trailLength, viewDir });
     },
     dispose() {
       disposeMesh();
     },
   };
 
-  function stepParticles({ spec, vectorField, count, trailLength }) {
+  function stepParticles({ spec, vectorField, count, trailLength, viewDir, frame }) {
     const baseScale = (2 * Math.PI) / (5.5 * Math.max(1, grid.frequency ?? 32));
     const stepScale = baseScale * spec.speed * 0.22;
     for (let i = 0; i < count; i++) {
+      if (!shouldStepParticle(i, trailLength, viewDir, frame)) continue;
       if (ages[i]-- === 0) {
         respawnParticle(i, trailLength);
         ages[i] = 90 + Math.floor(rng() * 240);
@@ -618,13 +622,14 @@ function createParticleLayer(scene, grid) {
     }
   }
 
-  function writeParticleGeometry({ spec, count, trailLength }) {
+  function writeParticleGeometry({ spec, count, trailLength, viewDir }) {
     const sphereR = 1.032;
     const sizeWorld = Math.max(0.004, Math.min(0.12, (Number.isFinite(spec.size) ? spec.size : 4) * 0.0027));
     let quad = 0;
     for (let i = 0; i < count; i++) {
       const base = i * trailLength * 3;
       const head = heads[i] ?? 0;
+      if (!isTrailVisible(base, head, trailLength, viewDir, -0.10)) continue;
       for (let t = 0; t < trailLength; t++) {
         let slot = head + t;
         if (slot >= trailLength) slot -= trailLength;
@@ -649,7 +654,47 @@ function createParticleLayer(scene, grid) {
         quad++;
       }
     }
-    geometry.attributes.position.needsUpdate = true;
+    const activeVertices = quad * 4;
+    geometry.setDrawRange(0, activeVertices > 0 ? quad * 6 : 0);
+    markAttributeNeedsUpdate(geometry.attributes.position, activeVertices * 3);
+    mesh.visible = activeVertices > 0;
+  }
+
+  function updateParticleViewDir() {
+    if (!camera) return null;
+    camera.updateMatrixWorld?.();
+    const p = camera.getWorldPosition?.(cameraScratch) ?? camera.position;
+    const len = Math.hypot(p.x, p.y, p.z);
+    if (!Number.isFinite(len) || len < 1e-6) return null;
+    viewScratch.x = p.x / len;
+    viewScratch.y = p.y / len;
+    viewScratch.z = p.z / len;
+    return viewScratch;
+  }
+
+  function shouldStepParticle(i, trailLength, viewDir, frame) {
+    if (!viewDir) return true;
+    const base = i * trailLength * 3;
+    const head = heads[i] ?? 0;
+    if (isTrailVisible(base, head, trailLength, viewDir, -0.22)) return true;
+    // Keep hidden tracers alive at a low cadence so rotating the globe
+    // back into view does not reveal a completely frozen particle layer.
+    return ((i + frame) & 7) === 0;
+  }
+
+  function isTrailVisible(base, head, trailLength, viewDir, threshold) {
+    if (!viewDir) return true;
+    const headSrc = base + head * 3;
+    if (dotView(headSrc, viewDir) > threshold) return true;
+    const tailSlot = head + trailLength - 1;
+    const wrappedTail = tailSlot >= trailLength ? tailSlot - trailLength : tailSlot;
+    return dotView(base + wrappedTail * 3, viewDir) > threshold;
+  }
+
+  function dotView(src, viewDir) {
+    return history[src + 0] * viewDir.x
+      + history[src + 1] * viewDir.y
+      + history[src + 2] * viewDir.z;
   }
 
   function fillParticleStyle({ spec, count, trailLength }) {
@@ -747,6 +792,21 @@ function setTangentBasis(out, x, y, z) {
   out.ny = ez * x - ex * z;
   out.nz = ex * y - ey * x;
   return out;
+}
+
+function markAttributeNeedsUpdate(attr, componentCount = -1) {
+  if (!attr) return;
+  if (componentCount === 0) return;
+  if (componentCount > 0) {
+    if (typeof attr.clearUpdateRanges === "function" && typeof attr.addUpdateRange === "function") {
+      attr.clearUpdateRanges();
+      attr.addUpdateRange(0, componentCount);
+    } else if (attr.updateRange) {
+      attr.updateRange.offset = 0;
+      attr.updateRange.count = componentCount;
+    }
+  }
+  attr.needsUpdate = true;
 }
 
 function seededRng(seed) {

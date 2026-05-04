@@ -264,7 +264,7 @@ async function syncGeodesicPreview() {
   geodesicPreview = null;
   geodesicPreviewLoadingFrequency = grid.frequency;
   try {
-    const preview = await createGeodesicPreview({ scene, globe, grid: grid.topology });
+    const preview = await createGeodesicPreview({ scene, globe, camera, grid: grid.topology });
     if (state.grid?.topology !== grid.topology) {
       preview.dispose?.();
       if (geodesicPreviewLoadingFrequency === grid.frequency) geodesicPreviewLoadingFrequency = null;
