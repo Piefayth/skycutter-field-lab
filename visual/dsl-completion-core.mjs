@@ -312,6 +312,9 @@ function optionsForGrammarPosition(ctx, mode, prefix) {
   }
 
   if (mode.mode === "presetBody") {
+    if (/^\s*on\s+$/.test(line) && ctx.stack.includes("stamp")) {
+      return structural([keywordOption("press", "on press { ... }", 30), keywordOption("drag", "on drag { ... }", 30)]);
+    }
     if (/^\s*(set|spot|ellipse|region)\s+$/.test(line)) return structural(storageNamesFromAst(ctx));
     if (/^\s*set\s+[A-Za-z_][A-Za-z0-9_]*\s+$/.test(line)) return structural([keywordOption("at", "set field at ..., value=...")]);
     if (/\bat\s+$/.test(line) && ctx.stack.includes("stamp")) return structural([declaredOption("brush", "declared")]);
@@ -323,6 +326,7 @@ function optionsForGrammarPosition(ctx, mode, prefix) {
         keywordOption("ellipse", "ellipse field at ...", 30),
         keywordOption("region", "region field at ...", 30),
         keywordOption("for", "for each cell { ... }", 30),
+        ...(ctx.stack.includes("stamp") ? [keywordOption("on", "on press|drag { ... }", 30)] : []),
       ]);
     }
   }

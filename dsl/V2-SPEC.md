@@ -292,7 +292,12 @@ container:
 ```
 stamps {
   stamp ripple "Drop ripple" {
-    spot u at brush.pos, radius=brush.r, amount=1
+    on press {
+      spot u at brush.pos, radius=brush.r, amount=1
+    }
+    on drag {
+      spot v at brush.pos, radius=brush.r, amount=16
+    }
   }
 
   stamp impulse "Impulse" {
@@ -305,6 +310,16 @@ Available bindings in stamp body: `brush.pos` (current paint center as
 {lon, lat}), `brush.r` (current paint radius). Stamps can target multiple
 fields. Stamps CANNOT write derived fields. Same expression-subset
 restrictions as scenarios.
+
+Stamp bodies can optionally split actions by stroke phase:
+
+- `on press { ... }` runs once at pointer-down.
+- `on drag { ... }` runs at pointer-down and on subsequent drag samples.
+- Unwrapped actions keep the older continuous behavior and are treated like
+  `on drag`.
+
+This lets recipes combine a one-shot visible mark with continuous held
+painting without forcing the same field every drag sample.
 
 ## Render: palettes, views, overlays
 

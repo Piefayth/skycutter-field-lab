@@ -90,6 +90,41 @@ step { stage s { reads u, mask; writes u; cell { set u = u + mask } } }
   assert(nonZeroCount(state.fields.mask) === 0, "set-at radius=0 source stamp should erase exactly that cell");
 });
 
+test("stamp phase blocks distinguish press from drag", () => {
+  const recipe = materializeRecipe({
+    pipeline: compileV2(`
+recipe "Phased stamp"
+substrate geodesic frequency 8
+field u: f32
+field v: f32
+stamps {
+  stamp ripple "Ripple" {
+    on press {
+      spot u at brush.pos, radius=0, amount=1
+    }
+    on drag {
+      spot v at brush.pos, radius=0, amount=2
+    }
+  }
+}
+step { stage s { reads u, v; writes u; cell { set u = u + v } } }
+`),
+  });
+  const hit = { lon: 0, lat: 0, u: 0.5, v: 0.5, px: 1, py: 0, pz: 0 };
+  const stamp = recipe.stamps.find((s) => s.id === "ripple");
+  assert(stamp, "phased stamp must materialize");
+
+  const dragState = makeGeodesicStampState(8, recipe);
+  stamp.run(dragState, 128, 64, 0, hit, "drag");
+  assert(nonZeroCount(dragState.fields.u) === 0, "drag phase must not run press-only u action");
+  assert(nonZeroCount(dragState.fields.v) === 1, "drag phase should run v action");
+
+  const pressState = makeGeodesicStampState(8, recipe);
+  stamp.run(pressState, 128, 64, 0, hit, "press");
+  assert(nonZeroCount(pressState.fields.u) === 1, "press phase should run u action");
+  assert(nonZeroCount(pressState.fields.v) === 1, "press phase should also run drag action for immediate impulse");
+});
+
 function makeGeodesicStampState(frequency, recipe = stampRecipe) {
   const topology = createGeodesicGrid({ frequency });
   const state = createState();

@@ -51,7 +51,7 @@ const DECLARATION_KEYWORDS = new Set([
 // `step { }` blocks still highlight cleanly, just with modifier
 // styling rather than control-keyword styling.
 const CONTROL_KEYWORDS = new Set([
-  "cell", "for", "when", "if", "else",
+  "cell", "for", "when", "if", "else", "on",
   "neighbors", "neighbor", "ring", "disk", "kernel", "bell",
   "views", "stamps", "scenarios",
 ]);
@@ -83,6 +83,7 @@ const MODIFIER_KEYWORDS = new Set([
   "radius", "angle", "rx", "ry", "lon", "lat",
   "lonMin", "lonMax", "latMin", "latMax", "amount",
   "slider", "toggle", "boolean", "label",
+  "press", "drag",
   "step", "default",
   "geodesic", "frequency",
   // Render-DSL trailing keywords:

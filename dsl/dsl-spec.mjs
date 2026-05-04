@@ -829,8 +829,8 @@ export const BLOCK_KEYWORDS = [
   {
     name: "stamp",
     signature: 'stamp NAME [\"Label\"] { ... }',
-    doc: "A paint-brush composite inside `stamps { }`. User clicks the canvas with this stamp selected to apply. Body uses init verbs scoped to the click position via `brush.pos` and `brush.r`. Stamps cannot write `derived` fields. Stamps deliberately leave the prev buffer of history fields untouched — the asymmetry between current and prev is the launch velocity.",
-    example: 'stamp ripple "Drop ripple" {\n  spot u at brush.pos, radius=brush.r, amount=1\n}',
+    doc: "A paint-brush composite inside `stamps { }`. User clicks the canvas with this stamp selected to apply. Body uses init verbs scoped to the click position via `brush.pos` and `brush.r`. Optional `on press { }` and `on drag { }` blocks split one-shot stroke-start actions from continuous held painting. Unwrapped stamp actions keep the old continuous behavior. Stamps cannot write `derived` fields.",
+    example: 'stamp ripple "Drop ripple" {\n  on press { spot u at brush.pos, radius=brush.r, amount=1 }\n  on drag  { spot v at brush.pos, radius=brush.r, amount=16 }\n}',
   },
   {
     name: "palette",
@@ -886,6 +886,12 @@ export const STAGE_IO_KEYWORDS = [
 // ---------------------------------------------------------------------------
 
 export const CONTROL_KEYWORDS = [
+  {
+    name: "on",
+    signature: "on press { ... } | on drag { ... }",
+    doc: "`stamp`-only stroke phase block. `on press` runs once at pointer-down; `on drag` runs at pointer-down and on subsequent drag samples. Use it when a brush needs a one-shot visible mark plus continuous held behavior.",
+    example: "stamp ripple {\n  on press { spot u at brush.pos, radius=brush.r, amount=1 }\n  on drag { spot v at brush.pos, radius=brush.r, amount=16 }\n}",
+  },
   {
     name: "when",
     signature: "when CONDITION { ... }",

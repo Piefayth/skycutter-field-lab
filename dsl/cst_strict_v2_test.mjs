@@ -274,6 +274,34 @@ step { stage s { reads u; writes u; cell { set u = u } } }
   assertEq(st.actions[0].lat, { type: "Identifier", name: "lat" });
 });
 
+test("stamp phase blocks split press and drag actions", () => {
+  const out = parseStrict(`
+recipe "S"
+substrate geodesic frequency 16
+field u: f32
+field v: f32
+
+stamps {
+  stamp ripple "Drop ripple" {
+    on press {
+      spot u at brush.pos, radius=brush.r, amount=1
+    }
+    on drag {
+      spot v at brush.pos, radius=brush.r, amount=2
+    }
+  }
+}
+
+step { stage s { reads u, v; writes u; cell { set u = u + v } } }
+`);
+  const st = out.stamps[0];
+  assertEq(st.phases.press.length, 1);
+  assertEq(st.phases.drag.length, 1);
+  assertEq(st.phases.press[0].field, "u");
+  assertEq(st.phases.drag[0].field, "v");
+  assertEq(st.actions.map((a) => a.field), ["u", "v"]);
+});
+
 test("grouped views, stamps, and scenarios sections", () => {
   const out = parseStrict(`
 recipe "Sections"

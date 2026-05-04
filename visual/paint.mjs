@@ -97,22 +97,22 @@ export function initPaint(deps) {
     };
   }
 
-  function applyStamp(brush, x, y, r, hit) {
+  function applyStamp(brush, x, y, r, hit, phase = "drag") {
     // Recipe-declared stamps drive painting. Recipes that ship an
     // empty `stamps: []` array intentionally have no brushes — left
     // click does nothing because the dispatch map is empty.
     const compiled = controls.stamps;
     const fn = compiled && compiled[brush];
-    if (fn) fn(state, x, y, r, hit);
+    if (fn) fn(state, x, y, r, hit, phase);
   }
 
-  function paintAtPointer(event) {
+  function paintAtPointer(event, phase = "drag") {
     const hit = pointerHit(event);
     if (!hit) return;
     const r = controls.brushRadius.value;
     const brush = ui.brushSelect.value;
     onBeforePaint?.();
-    applyStamp(brush, hit.x, hit.y, r, hit);
+    applyStamp(brush, hit.x, hit.y, r, hit, phase);
     registry.lastPaintLabel = `${brush} @ lon ${hit.lon.toFixed(2)}, lat ${hit.lat.toFixed(2)}`;
     onAfterPaint();
   }
@@ -147,7 +147,7 @@ export function initPaint(deps) {
     if (!canvas.hasPointerCapture(event.pointerId)) {
       canvas.setPointerCapture(event.pointerId);
     }
-    paintAtPointer(event);
+    paintAtPointer(event, "press");
   }, { capture: true });
   canvas.addEventListener("pointerup", endPaintStroke, { capture: true });
   canvas.addEventListener("pointercancel", endPaintStroke, { capture: true });

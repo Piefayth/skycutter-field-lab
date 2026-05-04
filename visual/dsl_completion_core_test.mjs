@@ -158,6 +158,24 @@ views {
   assertEq(labels(source, "@@").filter((label) => ["palette", "view", "overlay"].includes(label)), ["palette", "view", "overlay"]);
 });
 
+test("stamp body offers stroke phase blocks", () => {
+  const source = `
+recipe "S"
+substrate geodesic frequency 16
+field u: f32
+stamps {
+  stamp ripple {
+    @@
+  }
+}
+step { stage hold { reads u; writes u; cell { set u = u } } }
+`;
+  assertEq(labels(source, "@@").filter((label) => label === "on"), ["on"]);
+
+  const phase = source.replace("@@", "on @@");
+  assertEq(labels(phase, "@@"), ["press", "drag"]);
+});
+
 test("expr view set target offers color channels", () => {
   const source = `
 recipe "V"

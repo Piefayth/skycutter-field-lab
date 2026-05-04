@@ -8,7 +8,7 @@
 const BLOCK_KEYWORDS = new Set([
   "views", "stamps", "scenarios",
   "palette", "view", "stamp", "scenario",
-  "step", "stage", "cell", "when", "for",
+  "step", "stage", "cell", "when", "for", "on",
 ]);
 
 const NAME_DECL_KEYWORDS = new Set([
@@ -1260,6 +1260,7 @@ function classifyMode(stack) {
     const keyword = stack[i].keyword;
     if (keyword === "?" || keyword === "when") continue;
     if (keyword === "for") return "initCellBody";
+    if (keyword === "on") return "presetBody";
     if (keyword === "cell") return "cellBody";
     if (keyword === "view") return "viewBody";
     if (keyword === "palette") return "paletteBody";

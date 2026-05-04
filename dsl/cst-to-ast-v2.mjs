@@ -114,6 +114,7 @@ function validateStrictRecipeCst(cst) {
     else if (block.keyword === "stamps") validateSectionBlock(block, ["stamp"], ["stamp"]);
     else if (block.keyword === "scenarios") validateSectionBlock(block, ["scenario"], ["scenario"]);
     else if (block.keyword === "scenario" || block.keyword === "stamp") validateInitBlock(block);
+    else if (block.keyword === "on") validateStampPhaseBlock(block);
     else if (block.keyword === "cell" || block.keyword === "for" || block.keyword === "when") validateCellLikeBlock(block);
     else if (block.keyword === "palette") validatePaletteBlock(block);
     else if (block.keyword === "view") validateViewBlock(block);
@@ -127,7 +128,8 @@ function validateBlockPlacement(block) {
     || (block.keyword === "stage" && parent === "step")
     || (block.keyword === "cell" && parent === "stage")
     || (block.keyword === "when" && (parent === "cell" || parent === "for" || parent === "when" || parent === "view"))
-    || (block.keyword === "for" && (parent === "scenario" || parent === "stamp"))
+    || (block.keyword === "for" && (parent === "scenario" || parent === "stamp" || parent === "on"))
+    || (block.keyword === "on" && parent === "stamp")
     || (block.keyword === "palette" && parent === "views")
     || (block.keyword === "view" && parent === "views")
     || (block.keyword === "scenario" && parent === "scenarios")
@@ -186,10 +188,25 @@ function validateInitBlock(block) {
   // are paint actions, not regime switches.
   const allowed = block.keyword === "scenario"
     ? new Set(["set", "spot", "ellipse", "region", "for", "param"])
-    : new Set(["set", "spot", "ellipse", "region", "for"]);
+    : block.keyword === "stamp"
+      ? new Set(["set", "spot", "ellipse", "region", "for", "on"])
+      : new Set(["set", "spot", "ellipse", "region", "for"]);
   for (const stmt of sorted(block.statements)) {
     if (!allowed.has(stmt.keyword)) throw new Error(`v2 parse: ${block.keyword} ${block.id}: unknown action "${stmt.keyword}"`);
   }
+  const childAllowed = block.keyword === "stamp" ? new Set(["for", "on"]) : new Set(["for"]);
+  for (const child of sorted(block.children ?? [])) {
+    if (!childAllowed.has(child.keyword)) throw new Error(`v2 parse: ${block.keyword} ${block.id}: unexpected ${child.keyword} block`);
+  }
+}
+
+function validateStampPhaseBlock(block) {
+  const parent = block.parent?.keyword ?? "root";
+  if (parent !== "stamp") throw new Error("v2 parse: `on` blocks must live inside `stamp { ... }`");
+  if (!["press", "drag"].includes(block.id)) {
+    throw new Error(`v2 parse: stamp ${block.parent?.id}: \`on\` phase must be \`press\` or \`drag\``);
+  }
+  validateInitBlock(block);
 }
 
 function validateCellLikeBlock(block) {
@@ -486,20 +503,38 @@ function constantNumber(ast) {
 }
 
 function stampCstToAst(cst, block) {
+  const directActions = initActionsCstToAst(cst, block, true, { includePhaseBlocks: false });
+  const phaseBlocks = sorted(block.children ?? []).filter((child) => child.keyword === "on");
+  const phases = phaseBlocks.length > 0
+    ? {
+        press: [],
+        drag: [...directActions],
+      }
+    : null;
+  for (const phase of phaseBlocks) {
+    phases[phase.id].push(...initActionsCstToAst(cst, phase, true));
+  }
+  const actions = phases
+    ? [...phases.press, ...phases.drag]
+    : directActions;
   return {
     id: block.id,
     label: blockLabel(cst, block) ?? block.id,
-    actions: initActionsCstToAst(cst, block, true),
+    actions,
+    ...(phases ? { phases } : {}),
   };
 }
 
-function initActionsCstToAst(cst, block, allowBrush) {
+function initActionsCstToAst(cst, block, allowBrush, { includePhaseBlocks = true } = {}) {
   const entries = [
     ...sorted(block.statements).filter((stmt) => ["set", "spot", "ellipse", "region"].includes(stmt.keyword)),
-    ...(block.children ?? []).filter((child) => child.keyword === "for"),
+    ...(block.children ?? []).filter((child) => child.keyword === "for" || (includePhaseBlocks && child.keyword === "on")),
   ].sort(byFrom);
   return entries.map((entry) => {
     if (entry.type === "Block" && entry.keyword === "for") return eachCellCstToAst(cst, entry);
+    if (entry.type === "Block" && entry.keyword === "on") {
+      throw new Error("v2 CST projection: internal error: stamp phase block was not projected through stampCstToAst");
+    }
     return initActionCstToAst(entry, allowBrush);
   });
 }

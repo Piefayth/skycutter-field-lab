@@ -36,7 +36,7 @@ export function buildDslStampDecls(stamps, dsl, getParam) {
   return stamps.map((stamp) => ({
     id: stamp.id,
     label: stamp.label ?? stamp.id,
-    run: (state, x, y, r, hit = null) => runDslStamp(state, stamp, x, y, r, dsl, hit, getParam),
+    run: (state, x, y, r, hit = null, phase = "drag") => runDslStamp(state, stamp, x, y, r, dsl, hit, getParam, phase),
   }));
 }
 
@@ -55,7 +55,7 @@ function runDslPreset(state, preset, dsl, getParam, setParam) {
   for (const action of preset.actions ?? []) runPresetAction(state, action, context);
 }
 
-function runDslStamp(state, stamp, x, y, r, dsl, hit = null, getParam) {
+function runDslStamp(state, stamp, x, y, r, dsl, hit = null, getParam, phase = "drag") {
   const cell = {
     x, y, r,
     ...(hit ?? {}),
@@ -63,7 +63,12 @@ function runDslStamp(state, stamp, x, y, r, dsl, hit = null, getParam) {
     field: Object.create(null),
     ...initContext(dsl, getParam),
   };
-  for (const action of stamp.actions ?? []) runPresetAction(state, action, cell);
+  const actions = stamp.phases
+    ? (phase === "press"
+        ? [...(stamp.phases.press ?? []), ...(stamp.phases.drag ?? [])]
+        : (stamp.phases.drag ?? []))
+    : (stamp.actions ?? []);
+  for (const action of actions) runPresetAction(state, action, cell);
 }
 
 function initContext(dsl, getParam) {
