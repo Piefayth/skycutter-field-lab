@@ -6,6 +6,7 @@
     "wave-equation",
     "shallow-water",
     "weather-cycle",
+    "downwind-pollution",
     "runoff-erosion",
     "edge-heat-exchange",
     "smoothlife",
@@ -56,6 +57,7 @@
         "wave-equation",
         "shallow-water",
         "weather-cycle",
+        "downwind-pollution",
         "runoff-erosion",
         "edge-heat-exchange",
         "schrodinger",
@@ -183,6 +185,12 @@
       "name": "Weather cycle (example)",
       "path": "recipes/weather-cycle.mjs",
       "summary": "Toy planetary weather loop. Land/ocean mask, water, vapor, temperature, clouds, rain, wind, and tides interact: evaporation feeds vapor, wind advects it, condensation rains it back out, and a tide field shoves ocean pressure."
+    },
+    {
+      "id": "downwind-pollution",
+      "name": "Downwind pollution plume (coord example)",
+      "path": "recipes/downwind-pollution.mjs",
+      "summary": "Persistent single-cell factories emit pollutant. A derived wind field drives conservative edge flux only toward neighbors aligned with direction(n), producing long downwind plumes instead of isotropic diffusion."
     },
     {
       "id": "runoff-erosion",
