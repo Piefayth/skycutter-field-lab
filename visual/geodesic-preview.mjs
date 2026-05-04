@@ -575,7 +575,7 @@ function createParticleLayer(scene, grid) {
     const cg = (spec.color[1] ?? 245) / 255;
     const cb = (spec.color[2] ?? 255) / 255;
     const fade = Math.max(0, Math.min(1, spec.fade));
-    const sizeWorld = Math.max(0.006, Math.min(0.22, (Number.isFinite(spec.size) ? spec.size : 6) * 0.005));
+    const sizeWorld = Math.max(0.004, Math.min(0.12, (Number.isFinite(spec.size) ? spec.size : 4) * 0.0027));
     let quad = 0;
     for (let i = 0; i < count; i++) {
       const base = i * trailLength * 3;

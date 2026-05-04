@@ -221,7 +221,7 @@ views {
       set green = baseG * (1 - c) + cloudG * c
       set blue = baseB * (1 - c) + cloudB * c
     }
-    particles advect=wind count=5600 length=18 speed=0.85 fade=0.88 size=7.5 color [235, 250, 255]
+    particles advect=wind count=5600 length=18 speed=0.85 fade=0.88 size=5 color [235, 250, 255]
   }
 
   view water "Surface water" {
@@ -242,7 +242,7 @@ views {
 
   view wind "Wind" {
     color ramp speed range [0, 1.5] palette WIND
-    particles advect=wind count=6200 length=16 speed=0.95 fade=0.88 size=8 color [255, 225, 135]
+    particles advect=wind count=6200 length=16 speed=0.95 fade=0.88 size=5.5 color [255, 225, 135]
   }
 }
 

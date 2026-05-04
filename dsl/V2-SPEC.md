@@ -530,7 +530,7 @@ view weather "Weather" {
     set green = ...
     set blue = ...
   }
-  particles advect=wind count=3500 length=18 speed=0.8 fade=0.9 size=6 color [235, 245, 255]
+  particles advect=wind count=3500 length=18 speed=0.8 fade=0.9 size=4 color [235, 245, 255]
 }
 ```
 
@@ -548,7 +548,7 @@ particles advect=VEC2_FIELD [count=N] [length=N] [speed=N] [fade=N] [size=N] [co
 - `speed=N` (default `0.8`) — visual multiplier. This changes only
   tracer motion, not the simulation.
 - `fade=N` (default `0.9`) — trail intensity falloff in [0, 1].
-- `size=N` (default `6`) — visual particle size. Larger values
+- `size=N` (default `4`) — visual particle size. Larger values
   make each tracer sample occupy more of the globe surface.
 - `color [R, G, B]` (default `[235, 245, 255]`) — trail color.
 
