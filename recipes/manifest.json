@@ -7,6 +7,7 @@
     "shallow-water",
     "weather-cycle",
     "runoff-erosion",
+    "edge-heat-exchange",
     "smoothlife",
     "nonlocal-ecology",
     "forager-migration",
@@ -55,6 +56,7 @@
         "shallow-water",
         "weather-cycle",
         "runoff-erosion",
+        "edge-heat-exchange",
         "schrodinger",
         "burgers",
         "ice-albedo",
@@ -179,6 +181,12 @@
       "name": "Runoff erosion (edge flux example)",
       "path": "recipes/runoff-erosion.mjs",
       "summary": "Rain collects on terrain and moves downhill through conservative edge flux. The resulting wet channels erode height, carving drainage basins and ridges on the sphere."
+    },
+    {
+      "id": "edge-heat-exchange",
+      "name": "Edge heat exchange (edge flux example)",
+      "path": "recipes/edge-heat-exchange.mjs",
+      "summary": "Minimal conservative edge-flux demo. Heat moves only from hotter cells to colder neighboring cells; total heat stays constant while peaks spread out."
     },
     {
       "id": "vicsek-flock",
