@@ -148,7 +148,7 @@
       "id": "wave-equation",
       "name": "Wave equation (example)",
       "path": "recipes/wave-equation.mjs",
-      "summary": "Hyperbolic wave on a sphere — leapfrog second-order time integration via history fields. Drop a stone, watch the ripple bounce around the sphere forever (γ=0) or decay smoothly (γ>0)."
+      "summary": "Hyperbolic wave on a sphere — explicit displacement plus velocity. The default brush paints velocity impulses, so click-and-hold injects waves predictably instead of fighting a hidden history buffer."
     },
     {
       "id": "shallow-water",
