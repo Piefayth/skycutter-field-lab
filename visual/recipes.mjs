@@ -440,6 +440,7 @@ export function initRecipes({
     let presetJustApplied = true;
     let failed = false;
     let reading = false;
+    let readPromise = null;
     let disposed = false;
     const wrapper = {
       ...metadataRunner,
@@ -457,10 +458,10 @@ export function initRecipes({
         presetJustApplied = true;
       },
       readFields(state, names) {
-        void readBack(state, names).catch(handleReadbackError);
+        return readBack(state, names).catch(handleReadbackError);
       },
       syncState(state) {
-        void readBack(state).catch(handleReadbackError);
+        return readBack(state).catch(handleReadbackError);
       },
       runTick(state, dt) {
         if (disposed || !gpuReady || failed) return;
@@ -498,13 +499,18 @@ export function initRecipes({
     };
 
     async function readBack(state, names = gpuRunner?.fieldNames) {
-      if (disposed || !gpuReady || failed || dirty || reading) return;
+      if (disposed || !gpuReady || failed || dirty) return;
+      if (reading) return readPromise;
       reading = true;
-      try {
+      readPromise = (async () => {
         await gpuRunner.readState(state, names);
         await gpuRunner.readEventCounts?.(state);
+      })();
+      try {
+        await readPromise;
       } finally {
         reading = false;
+        readPromise = null;
       }
     }
 

@@ -106,12 +106,12 @@ export function initPaint(deps) {
     if (fn) fn(state, x, y, r, hit, phase);
   }
 
-  function paintAtPointer(event, phase = "drag") {
+  async function paintAtPointer(event, phase = "drag") {
     const hit = pointerHit(event);
     if (!hit) return;
     const r = controls.brushRadius.value;
     const brush = ui.brushSelect.value;
-    onBeforePaint?.();
+    await onBeforePaint?.();
     applyStamp(brush, hit.x, hit.y, r, hit, phase);
     registry.lastPaintLabel = `${brush} @ lon ${hit.lon.toFixed(2)}, lat ${hit.lat.toFixed(2)}`;
     onAfterPaint();
@@ -147,7 +147,7 @@ export function initPaint(deps) {
     if (!canvas.hasPointerCapture(event.pointerId)) {
       canvas.setPointerCapture(event.pointerId);
     }
-    paintAtPointer(event, "press");
+    void paintAtPointer(event, "press");
   }, { capture: true });
   canvas.addEventListener("pointerup", endPaintStroke, { capture: true });
   canvas.addEventListener("pointercancel", endPaintStroke, { capture: true });
@@ -164,7 +164,7 @@ export function initPaint(deps) {
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();
-    paintAtPointer(event);
+    void paintAtPointer(event);
   }, { capture: true });
   canvas.addEventListener("pointermove", (event) => {
     if (!paintDown) onProbeMove(event);
