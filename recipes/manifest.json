@@ -10,6 +10,7 @@
     "edge-heat-exchange",
     "smoothlife",
     "nonlocal-ecology",
+    "nutrient-grazing-cycle",
     "forager-migration",
     "chemotaxis-colony",
     "kuramoto-chimera",
@@ -68,6 +69,7 @@
       "label": "Ecology / Populations",
       "recipes": [
         "klausmeier",
+        "nutrient-grazing-cycle",
         "forager-migration",
         "predator-prey",
         "chemotaxis-colony",
@@ -157,6 +159,12 @@
       "name": "Forager migration (edge flux example)",
       "path": "recipes/forager-migration.mjs",
       "summary": "A conserved herd moves through first-class edge flux toward richer neighboring food and away from crowding. Grazing depletes food, regrowth creates fronts, and migration paths form without ordinary diffusion."
+    },
+    {
+      "id": "nutrient-grazing-cycle",
+      "name": "Nutrient grazing cycle (edge flux example)",
+      "path": "recipes/nutrient-grazing-cycle.mjs",
+      "summary": "Persistent springs and badlands shape an ecosystem. Nutrient moves by conservative edge flux toward favorable soil; grazers move by edge flux toward forage; plants, nutrient, and grazing chase each other around the terrain."
     },
     {
       "id": "wave-equation",
