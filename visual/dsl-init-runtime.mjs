@@ -24,6 +24,14 @@ function isVec2(v) {
   return v && typeof v === "object" && v.__vec2 === true;
 }
 
+function debugPaintEnabled() {
+  try {
+    return globalThis.localStorage?.getItem("fieldLabDebugPaint") === "1";
+  } catch (_) {
+    return false;
+  }
+}
+
 export function buildDslPresetDecls(presets, dsl, getParam, setParam = null) {
   return presets.map((preset) => ({
     id: preset.id,
@@ -68,7 +76,47 @@ function runDslStamp(state, stamp, x, y, r, dsl, hit = null, getParam, phase = "
         ? [...(stamp.phases.press ?? []), ...(stamp.phases.drag ?? [])]
         : (stamp.phases.drag ?? []))
     : (stamp.actions ?? []);
+  const debug = debugPaintEnabled();
+  const before = debug ? snapshotFields(state, actionFieldNames(actions)) : null;
   for (const action of actions) runPresetAction(state, action, cell);
+  if (debug) {
+    const after = snapshotFields(state, actionFieldNames(actions));
+    console.debug("[field-lab stamp]", {
+      id: stamp.id,
+      phase,
+      actions: actions.map((action) => `${action.type}:${action.field ?? "-"}`),
+      before,
+      after,
+    });
+  }
+}
+
+function actionFieldNames(actions, out = new Set()) {
+  for (const action of actions ?? []) {
+    if (action?.field) out.add(action.field);
+    if (action?.actions) actionFieldNames(action.actions, out);
+  }
+  return [...out];
+}
+
+function snapshotFields(state, names) {
+  const out = {};
+  for (const name of names) {
+    const field = state.fields?.[name];
+    if (!field) continue;
+    let min = Infinity;
+    let max = -Infinity;
+    let sum = 0;
+    let nonzero = 0;
+    for (const value of field) {
+      if (value < min) min = value;
+      if (value > max) max = value;
+      sum += value;
+      if (Math.abs(value) > 1e-9) nonzero++;
+    }
+    out[name] = { min, max, sum, nonzero };
+  }
+  return out;
 }
 
 function initContext(dsl, getParam) {

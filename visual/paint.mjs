@@ -31,6 +31,16 @@ export const paint = registry;
 
 let initialized = false;
 
+function debugPaint(...args) {
+  try {
+    if (globalThis.localStorage?.getItem("fieldLabDebugPaint") === "1") {
+      console.debug("[field-lab paint]", ...args);
+    }
+  } catch (_) {
+    // localStorage may be unavailable in hardened contexts.
+  }
+}
+
 /**
  * Wire canvas pointer events for the paint flow and raycast-driven
  * cell hit-testing. Idempotency-protected.
@@ -111,10 +121,12 @@ export function initPaint(deps) {
     if (!hit) return;
     const r = controls.brushRadius.value;
     const brush = ui.brushSelect.value;
+    debugPaint("begin", { phase, brush, r, lon: hit.lon, lat: hit.lat });
     await onBeforePaint?.();
     applyStamp(brush, hit.x, hit.y, r, hit, phase);
     registry.lastPaintLabel = `${brush} @ lon ${hit.lon.toFixed(2)}, lat ${hit.lat.toFixed(2)}`;
     onAfterPaint();
+    debugPaint("end", { phase, brush });
   }
 
   function endPaintStroke(event) {
