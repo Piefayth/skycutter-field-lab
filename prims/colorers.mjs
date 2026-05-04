@@ -115,7 +115,18 @@ export function exprColorer(actions, fieldDecls, paramDecls, constDecls) {
   collectFieldRefs(actions, new Set(fieldDecls.map((d) => d.name)), usedFields);
 
   const fieldTypes = new Map(fieldDecls.map((d) => [d.name, d.type ?? "f32"]));
+  const compiledWrite = compileViewWriter(actions, {
+    fieldTypes,
+    fieldNames: new Set(fieldDecls.map((d) => d.name)),
+    paramNames: new Set(paramDecls.map((d) => d.name)),
+    constNames: new Set(constDecls.map((d) => d.name)),
+  });
   const sample = (i, fields, params, consts) => {
+    if (compiledWrite) {
+      const rgb = [0, 0, 0];
+      compiledWrite(i, fields, params, consts, rgb, 0);
+      return rgb;
+    }
     const cell = { fields, params, consts, locals: Object.create(null), i };
     const out = { red: 0, green: 0, blue: 0 };
     runViewBody(actions, cell, out, fieldTypes);
@@ -134,6 +145,10 @@ export function exprColorer(actions, fieldDecls, paramDecls, constDecls) {
   let cachedConsts = {};
   const colorer = (i, fields) => sample(i, fields, cachedParams, cachedConsts);
   colorer.write = (i, fields, data, k) => {
+    if (compiledWrite) {
+      compiledWrite(i, fields, cachedParams, cachedConsts, data, k);
+      return;
+    }
     const rgb = sample(i, fields, cachedParams, cachedConsts);
     data[k + 0] = rgb[0];
     data[k + 1] = rgb[1];
@@ -148,6 +163,147 @@ export function exprColorer(actions, fieldDecls, paramDecls, constDecls) {
     cachedConsts = consts ?? {};
   };
   return colorer;
+}
+
+function compileViewWriter(actions, { fieldTypes, fieldNames, paramNames, constNames }) {
+  try {
+    const locals = new Map();
+    let localIndex = 0;
+    const lines = [
+      `"use strict";`,
+      `let red = 0, green = 0, blue = 0;`,
+      `const clamp = (x, a, b) => Math.min(Math.max(x, a), b);`,
+      `const smoothstep = (e0, e1, x) => { const t = Math.min(Math.max((x - e0) / (e1 - e0), 0), 1); return t * t * (3 - 2 * t); };`,
+      `const wrapAngle = (x) => Math.atan2(Math.sin(x), Math.cos(x));`,
+    ];
+    emitViewActions(actions, { lines, locals, fieldTypes, fieldNames, paramNames, constNames, nextLocal });
+    lines.push(`data[k + 0] = Math.max(0, Math.min(255, Math.round(red)));`);
+    lines.push(`data[k + 1] = Math.max(0, Math.min(255, Math.round(green)));`);
+    lines.push(`data[k + 2] = Math.max(0, Math.min(255, Math.round(blue)));`);
+    return new Function("i", "fields", "params", "consts", "data", "k", lines.join("\n"));
+
+    function nextLocal(name) {
+      const safe = `_l${localIndex++}_${String(name).replace(/[^A-Za-z0-9_]/g, "_")}`;
+      locals.set(name, safe);
+      return safe;
+    }
+  } catch (_) {
+    return null;
+  }
+}
+
+function emitViewActions(actions, ctx) {
+  for (const action of actions ?? []) {
+    if (!action) continue;
+    if (action.type === "let") {
+      const local = ctx.nextLocal(action.name);
+      ctx.lines.push(`let ${local} = ${compileViewExpr(action.expr, ctx)};`);
+      continue;
+    }
+    if (action.type === "set") {
+      if (action.field === "red" || action.field === "green" || action.field === "blue") {
+        ctx.lines.push(`${action.field} = ${compileViewExpr(action.expr, ctx)};`);
+      }
+      continue;
+    }
+    if (action.type === "when") {
+      ctx.lines.push(`if (${compileViewExpr(action.condition, ctx)}) {`);
+      emitViewActions(action.actions ?? [], ctx);
+      ctx.lines.push(`}`);
+    }
+  }
+}
+
+function compileViewExpr(ast, ctx) {
+  if (!ast) return "0";
+  switch (ast.type) {
+    case "Number":
+      return Number.isFinite(Number(ast.value)) ? String(Number(ast.value)) : "0";
+    case "Identifier":
+      return compileViewIdentifier(ast.name, ctx);
+    case "Member":
+      return compileViewMember(ast, ctx);
+    case "Unary": {
+      const v = compileViewExpr(ast.expr, ctx);
+      if (ast.op === "!") return `(!(${v}) ? 1 : 0)`;
+      if (ast.op === "-") return `(-(${v}))`;
+      if (ast.op === "+") return `(+(${v}))`;
+      return v;
+    }
+    case "Binary": {
+      const a = compileViewExpr(ast.left, ctx);
+      const b = compileViewExpr(ast.right, ctx);
+      const op = ast.op === "and" ? "&&" : ast.op === "or" ? "||" : ast.op;
+      if (!["+", "-", "*", "/", "%", "==", "!=", "<", "<=", ">", ">=", "&&", "||", "??"].includes(op)) return "0";
+      if (op === "%") return `((${a}) - (${b}) * Math.floor((${a}) / (${b})))`;
+      return `((${a}) ${op} (${b}))`;
+    }
+    case "Conditional":
+      return `((${compileViewExpr(ast.test, ctx)}) ? (${compileViewExpr(ast.consequent, ctx)}) : (${compileViewExpr(ast.alternate, ctx)}))`;
+    case "Call":
+      return compileViewCallExpr(ast, ctx);
+    default:
+      return "0";
+  }
+}
+
+function compileViewIdentifier(name, ctx) {
+  if (name === "true") return "1";
+  if (name === "false") return "0";
+  if (name === "PI") return "Math.PI";
+  if (name === "TAU") return "(Math.PI * 2)";
+  if (ctx.locals.has(name)) return ctx.locals.get(name);
+  if (ctx.fieldNames.has(name)) {
+    const type = ctx.fieldTypes.get(name);
+    if (type === "vec2") return `{ __vec2: true, x: (fields[${JSON.stringify(name)}]?.[i * 2] ?? 0), y: (fields[${JSON.stringify(name)}]?.[i * 2 + 1] ?? 0) }`;
+    return `(fields[${JSON.stringify(name)}]?.[i] ?? 0)`;
+  }
+  if (ctx.paramNames.has(name)) return `(params?.[${JSON.stringify(name)}] ?? 0)`;
+  if (ctx.constNames.has(name)) return `(consts?.[${JSON.stringify(name)}] ?? 0)`;
+  return "0";
+}
+
+function compileViewMember(ast, ctx) {
+  if (ast.object?.type === "Identifier" && ctx.fieldTypes.get(ast.object.name) === "vec2") {
+    if (ast.prop === "x") return `(fields[${JSON.stringify(ast.object.name)}]?.[i * 2] ?? 0)`;
+    if (ast.prop === "y") return `(fields[${JSON.stringify(ast.object.name)}]?.[i * 2 + 1] ?? 0)`;
+  }
+  const obj = compileViewExpr(ast.object, ctx);
+  if (ast.prop === "x" || ast.prop === "y") return `((${obj})?.${ast.prop} ?? 0)`;
+  return "0";
+}
+
+function compileViewCallExpr(ast, ctx) {
+  const name = ast.callee?.name;
+  const args = ast.args ?? [];
+  const compiled = args.map((arg) => compileViewExpr(arg, ctx));
+  switch (name) {
+    case "clamp": return `clamp(${compiled[0] ?? 0}, ${compiled[1] ?? 0}, ${compiled[2] ?? 0})`;
+    case "min": return `Math.min(${compiled.join(",")})`;
+    case "max": return `Math.max(${compiled.join(",")})`;
+    case "abs": return `Math.abs(${compiled[0] ?? 0})`;
+    case "sin": return `Math.sin(${compiled[0] ?? 0})`;
+    case "cos": return `Math.cos(${compiled[0] ?? 0})`;
+    case "asin": return `Math.asin(${compiled[0] ?? 0})`;
+    case "atan2": return `Math.atan2(${compiled[0] ?? 0}, ${compiled[1] ?? 0})`;
+    case "exp": return `Math.exp(${compiled[0] ?? 0})`;
+    case "sqrt": return `Math.sqrt(${compiled[0] ?? 0})`;
+    case "pow": return `Math.pow(${compiled[0] ?? 0}, ${compiled[1] ?? 0})`;
+    case "hypot": return `Math.hypot(${compiled.join(",")})`;
+    case "wrapAngle": return `wrapAngle(${compiled[0] ?? 0})`;
+    case "smoothstep": return `smoothstep(${compiled[0] ?? 0}, ${compiled[1] ?? 0}, ${compiled[2] ?? 0})`;
+    case "length": {
+      const arg = args[0];
+      if (arg?.type === "Identifier" && ctx.fieldTypes.get(arg.name) === "vec2") {
+        const key = JSON.stringify(arg.name);
+        return `Math.hypot(fields[${key}]?.[i * 2] ?? 0, fields[${key}]?.[i * 2 + 1] ?? 0)`;
+      }
+      const v = compiled[0] ?? "0";
+      return `((${v})?.__vec2 ? Math.hypot((${v}).x, (${v}).y) : Math.abs(Number(${v})))`;
+    }
+    default:
+      return "0";
+  }
 }
 
 function runViewBody(actions, cell, out, fieldTypes) {

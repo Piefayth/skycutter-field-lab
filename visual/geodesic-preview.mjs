@@ -462,7 +462,6 @@ function createParticleLayer(scene, grid) {
     const colorAttr = new THREE.BufferAttribute(colors, 3);
     const alphaAttr = new THREE.BufferAttribute(alphas, 1);
     positionAttr.setUsage(THREE.DynamicDrawUsage);
-    colorAttr.setUsage(THREE.DynamicDrawUsage);
     alphaAttr.setUsage(THREE.DynamicDrawUsage);
     geometry.setAttribute("position", positionAttr);
     geometry.setAttribute("color", colorAttr);
@@ -488,6 +487,7 @@ function createParticleLayer(scene, grid) {
     activeKey = key;
     rng = seededRng(hashString(key));
     resetParticles({ count, trailLength });
+    fillParticleColors({ spec, count, trailLength });
     return { count, trailLength };
   }
 
@@ -619,9 +619,6 @@ function createParticleLayer(scene, grid) {
 
   function writeParticleGeometry({ spec, count, trailLength }) {
     const sphereR = 1.032;
-    const cr = (spec.color[0] ?? 235) / 255;
-    const cg = (spec.color[1] ?? 245) / 255;
-    const cb = (spec.color[2] ?? 255) / 255;
     const fade = Math.max(0, Math.min(1, spec.fade));
     const trailFade = 0.50 + fade * 0.50;
     const sizeWorld = Math.max(0.004, Math.min(0.12, (Number.isFinite(spec.size) ? spec.size : 4) * 0.0027));
@@ -632,12 +629,7 @@ function createParticleLayer(scene, grid) {
       let ageT = 1;
       for (let t = 0; t < trailLength; t++) {
         const speedT = Math.max(0, Math.min(1, speedHistory[speedBase + t] ?? 0));
-        const intensity = (t === 0 ? 1.28 : 1.04) * ageT * (0.64 + 0.66 * speedT);
         const alpha = Math.max(0.04, Math.min(1, (t === 0 ? 0.78 : 0.64) * ageT * (0.48 + 0.66 * speedT)));
-        const hot = 0.20 * speedT;
-        const tr = cr * (1 - hot) + hot;
-        const tg = cg * (1 - hot) + hot;
-        const tb = cb * (1 - hot) + hot;
         const src = base + t * 3;
         const px = history[src + 0];
         const py = history[src + 1];
@@ -655,9 +647,6 @@ function createParticleLayer(scene, grid) {
           positions[dst + 0] = cx + cornerX * basis.ex + cornerY * basis.nx;
           positions[dst + 1] = cy + cornerX * basis.ey + cornerY * basis.ny;
           positions[dst + 2] = cz + cornerX * basis.ez + cornerY * basis.nz;
-          colors[dst + 0] = tr * intensity;
-          colors[dst + 1] = tg * intensity;
-          colors[dst + 2] = tb * intensity;
           alphas[quad * 4 + corner] = alpha;
         }
         quad++;
@@ -665,8 +654,31 @@ function createParticleLayer(scene, grid) {
       }
     }
     geometry.attributes.position.needsUpdate = true;
-    geometry.attributes.color.needsUpdate = true;
     geometry.attributes.particleAlpha.needsUpdate = true;
+  }
+
+  function fillParticleColors({ spec, count, trailLength }) {
+    const cr = (spec.color[0] ?? 235) / 255;
+    const cg = (spec.color[1] ?? 245) / 255;
+    const cb = (spec.color[2] ?? 255) / 255;
+    let quad = 0;
+    for (let i = 0; i < count; i++) {
+      for (let t = 0; t < trailLength; t++) {
+        const brightness = t === 0 ? 1.06 : 0.94;
+        const r = cr * brightness;
+        const g = cg * brightness;
+        const b = cb * brightness;
+        const vBase = quad * 4 * 3;
+        for (let corner = 0; corner < 4; corner++) {
+          const dst = vBase + corner * 3;
+          colors[dst + 0] = r;
+          colors[dst + 1] = g;
+          colors[dst + 2] = b;
+        }
+        quad++;
+      }
+    }
+    geometry.attributes.color.needsUpdate = true;
   }
 
   function sampleVectorField(out, vectorField, cell, px, py, pz) {
@@ -783,9 +795,11 @@ function refreshColors({ grid, geometry, fields = {}, viewSpec = null }) {
   const colors = geometry.getAttribute("color");
   const colorValues = colors.array;
   const tileStarts = geometry.userData.tileStarts;
+  const tileColorCache = geometry.userData.tileColorCache;
   const color = typeof viewSpec?.color === "function" ? viewSpec.color : null;
   const writeColor = typeof color?.write === "function" ? color.write : null;
   const scratch = new Uint8ClampedArray(4);
+  let changed = false;
 
   for (let cell = 0; cell < grid.cellCount; cell++) {
     let r = 0;
@@ -798,6 +812,9 @@ function refreshColors({ grid, geometry, fields = {}, viewSpec = null }) {
       const c = color(cell, fields);
       r = c?.[0] ?? 0; g = c?.[1] ?? 0; b = c?.[2] ?? 0;
     }
+    const packed = ((r & 255) << 16) | ((g & 255) << 8) | (b & 255);
+    if (tileColorCache && tileColorCache[cell] === packed) continue;
+    if (tileColorCache) tileColorCache[cell] = packed;
     const start = tileStarts?.[cell] ?? cell;
     const end = tileStarts?.[cell + 1] ?? start + 1;
     const rr = r / 255;
@@ -809,8 +826,9 @@ function refreshColors({ grid, geometry, fields = {}, viewSpec = null }) {
       colorValues[out + 1] = gg;
       colorValues[out + 2] = bb;
     }
+    changed = true;
   }
-  colors.needsUpdate = true;
+  if (changed) colors.needsUpdate = true;
 }
 
 function createTileGeometry(grid, { radius = 1, inset = 0 } = {}) {
@@ -840,6 +858,8 @@ function createTileGeometry(grid, { radius = 1, inset = 0 } = {}) {
   geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(positions), 3));
   geometry.setAttribute("color", new THREE.BufferAttribute(new Float32Array(colors), 3));
   geometry.userData.tileStarts = tileStarts;
+  geometry.userData.tileColorCache = new Uint32Array(grid.cellCount);
+  geometry.userData.tileColorCache.fill(0xffffffff);
   geometry.computeVertexNormals();
   return geometry;
 }
