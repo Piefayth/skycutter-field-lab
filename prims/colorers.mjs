@@ -12,6 +12,9 @@
 
 import { clamp, lerp } from "../kernel/kernel.mjs";
 
+const COLOR_LUT_SIZE = 2048;
+const FALLBACK_RGB = [80, 60, 90];
+
 // Generic stops-based ramp. `stops` is `[{t, color}, ...]` with t in
 // [0, 1] in ascending order. `range` is `[a, b]` — input value gets
 // remapped to t = clamp((value - a) / (b - a), 0, 1) before
@@ -19,32 +22,19 @@ import { clamp, lerp } from "../kernel/kernel.mjs";
 export function rampFromStops(fieldName, stops, range) {
   const [lo, hi] = range;
   const span = hi - lo;
+  const lut = buildRampLut(stops);
   const writeSample = (value, data, k) => {
     if (!Number.isFinite(value)) {
-      data[k + 0] = 80;
-      data[k + 1] = 60;
-      data[k + 2] = 90;
+      data[k + 0] = FALLBACK_RGB[0];
+      data[k + 1] = FALLBACK_RGB[1];
+      data[k + 2] = FALLBACK_RGB[2];
       return;
     }
     const t = clamp((value - lo) / span, 0, 1);
-    // Single-stop is just that color (validator should reject this
-    // upstream, but be safe).
-    if (stops.length === 1) {
-      data[k + 0] = stops[0].color[0];
-      data[k + 1] = stops[0].color[1];
-      data[k + 2] = stops[0].color[2];
-      return;
-    }
-    // Find the segment containing t. Stops are sorted ascending.
-    let i = 0;
-    while (i < stops.length - 1 && t > stops[i + 1].t) i++;
-    const a = stops[i];
-    const b = stops[i + 1] ?? a;
-    const segSpan = b.t - a.t;
-    const segT = segSpan > 0 ? (t - a.t) / segSpan : 0;
-    data[k + 0] = Math.round(lerp(a.color[0], b.color[0], segT));
-    data[k + 1] = Math.round(lerp(a.color[1], b.color[1], segT));
-    data[k + 2] = Math.round(lerp(a.color[2], b.color[2], segT));
+    const src = Math.min(COLOR_LUT_SIZE - 1, Math.max(0, Math.round(t * (COLOR_LUT_SIZE - 1)))) * 3;
+    data[k + 0] = lut[src + 0];
+    data[k + 1] = lut[src + 1];
+    data[k + 2] = lut[src + 2];
   };
   const sample = (value) => {
     const rgb = [0, 0, 0];
@@ -66,28 +56,21 @@ export function rampFromStops(fieldName, stops, range) {
 export function wheelFromRange(fieldName, range) {
   const [lo, hi] = range;
   const span = hi - lo;
+  const lut = buildWheelLut();
   const writeSample = (value, data, k) => {
     if (!Number.isFinite(value)) {
-      data[k + 0] = 80;
-      data[k + 1] = 60;
-      data[k + 2] = 90;
+      data[k + 0] = FALLBACK_RGB[0];
+      data[k + 1] = FALLBACK_RGB[1];
+      data[k + 2] = FALLBACK_RGB[2];
       return;
     }
     // Wrap into [0, 1) — no clamp, so values outside [a, b] still
     // map to a hue (cyclic data is the whole point).
     const h = ((value - lo) / span % 1 + 1) % 1;
-    const sector = Math.floor(h * 6);
-    const f = h * 6 - sector;
-    const q = Math.round((1 - f) * 255);
-    const t = Math.round(f * 255);
-    switch (sector % 6) {
-      case 0: data[k + 0] = 255; data[k + 1] = t;   data[k + 2] = 0;   return;
-      case 1: data[k + 0] = q;   data[k + 1] = 255; data[k + 2] = 0;   return;
-      case 2: data[k + 0] = 0;   data[k + 1] = 255; data[k + 2] = t;   return;
-      case 3: data[k + 0] = 0;   data[k + 1] = q;   data[k + 2] = 255; return;
-      case 4: data[k + 0] = t;   data[k + 1] = 0;   data[k + 2] = 255; return;
-      default: data[k + 0] = 255; data[k + 1] = 0;  data[k + 2] = q;   return;
-    }
+    const src = Math.min(COLOR_LUT_SIZE - 1, Math.max(0, Math.floor(h * COLOR_LUT_SIZE))) * 3;
+    data[k + 0] = lut[src + 0];
+    data[k + 1] = lut[src + 1];
+    data[k + 2] = lut[src + 2];
   };
   const sample = (value) => {
     const rgb = [0, 0, 0];
@@ -100,6 +83,61 @@ export function wheelFromRange(fieldName, range) {
   };
   color.fields = [fieldName];
   return color;
+}
+
+function buildRampLut(stops) {
+  const lut = new Uint8ClampedArray(COLOR_LUT_SIZE * 3);
+  if (stops.length === 0) {
+    for (let i = 0; i < COLOR_LUT_SIZE; i++) lut.set(FALLBACK_RGB, i * 3);
+    return lut;
+  }
+  if (stops.length === 1) {
+    const c = stops[0].color;
+    for (let i = 0; i < COLOR_LUT_SIZE; i++) {
+      const k = i * 3;
+      lut[k + 0] = c[0];
+      lut[k + 1] = c[1];
+      lut[k + 2] = c[2];
+    }
+    return lut;
+  }
+  let segment = 0;
+  for (let i = 0; i < COLOR_LUT_SIZE; i++) {
+    const t = i / (COLOR_LUT_SIZE - 1);
+    while (segment < stops.length - 1 && t > stops[segment + 1].t) segment++;
+    const a = stops[segment];
+    const b = stops[segment + 1] ?? a;
+    const segSpan = b.t - a.t;
+    const segT = segSpan > 0 ? (t - a.t) / segSpan : 0;
+    const k = i * 3;
+    lut[k + 0] = Math.round(lerp(a.color[0], b.color[0], segT));
+    lut[k + 1] = Math.round(lerp(a.color[1], b.color[1], segT));
+    lut[k + 2] = Math.round(lerp(a.color[2], b.color[2], segT));
+  }
+  return lut;
+}
+
+let wheelLut = null;
+function buildWheelLut() {
+  if (wheelLut) return wheelLut;
+  wheelLut = new Uint8ClampedArray(COLOR_LUT_SIZE * 3);
+  for (let i = 0; i < COLOR_LUT_SIZE; i++) {
+    const h = i / COLOR_LUT_SIZE;
+    const sector = Math.floor(h * 6);
+    const f = h * 6 - sector;
+    const q = Math.round((1 - f) * 255);
+    const t = Math.round(f * 255);
+    const k = i * 3;
+    switch (sector % 6) {
+      case 0: wheelLut[k + 0] = 255; wheelLut[k + 1] = t;   wheelLut[k + 2] = 0;   break;
+      case 1: wheelLut[k + 0] = q;   wheelLut[k + 1] = 255; wheelLut[k + 2] = 0;   break;
+      case 2: wheelLut[k + 0] = 0;   wheelLut[k + 1] = 255; wheelLut[k + 2] = t;   break;
+      case 3: wheelLut[k + 0] = 0;   wheelLut[k + 1] = q;   wheelLut[k + 2] = 255; break;
+      case 4: wheelLut[k + 0] = t;   wheelLut[k + 1] = 0;   wheelLut[k + 2] = 255; break;
+      default: wheelLut[k + 0] = 255; wheelLut[k + 1] = 0;  wheelLut[k + 2] = q;   break;
+    }
+  }
+  return wheelLut;
 }
 
 // Block-form `color expr { ... }`. The body is a parsed cell-action

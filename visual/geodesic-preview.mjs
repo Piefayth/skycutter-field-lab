@@ -421,10 +421,11 @@ function createParticleLayer(scene, grid) {
   let alphas = null;
   let cells = null;
   let history = null;
-  let speedHistory = null;
+  let heads = null;
   let ages = null;
   let rng = seededRng(0x9e3779b9);
   let activeKey = "";
+  let lastParticleFrame = -Infinity;
   const sampleScratch = { x: 0, y: 0 };
   const basisScratch = { ex: 1, ey: 0, ez: 0, nx: 0, ny: 1, nz: 0 };
 
@@ -432,7 +433,8 @@ function createParticleLayer(scene, grid) {
     const count = Math.max(1, Math.min(20000, spec.count | 0));
     const trailLength = Math.max(2, Math.min(128, spec.length | 0));
     const size = Number.isFinite(spec.size) ? Math.max(0.5, Math.min(32, spec.size)) : 4;
-    const key = `${count}:${trailLength}:${size}:${spec.color.join(",")}`;
+    const fade = Math.max(0, Math.min(1, Number.isFinite(spec.fade) ? spec.fade : 0.86));
+    const key = `${count}:${trailLength}:${size}:${fade}:${spec.color.join(",")}`;
     if (key === activeKey && geometry) return { count, trailLength };
     disposeMesh();
 
@@ -454,7 +456,7 @@ function createParticleLayer(scene, grid) {
     }
     cells = new Uint32Array(count);
     history = new Float32Array(count * trailLength * 3);
-    speedHistory = new Float32Array(count * trailLength);
+    heads = new Uint16Array(count);
     ages = new Uint16Array(count);
 
     geometry = new THREE.BufferGeometry();
@@ -485,9 +487,10 @@ function createParticleLayer(scene, grid) {
     scene.add(mesh);
 
     activeKey = key;
+    lastParticleFrame = -Infinity;
     rng = seededRng(hashString(key));
     resetParticles({ count, trailLength });
-    fillParticleColors({ spec, count, trailLength });
+    fillParticleStyle({ spec, count, trailLength });
     return { count, trailLength };
   }
 
@@ -505,12 +508,12 @@ function createParticleLayer(scene, grid) {
     const py = grid.positions[cell * 3 + 1];
     const pz = grid.positions[cell * 3 + 2];
     const base = i * trailLength * 3;
+    heads[i] = 0;
     for (let t = 0; t < trailLength; t++) {
       const off = base + t * 3;
       history[off + 0] = px;
       history[off + 1] = py;
       history[off + 2] = pz;
-      speedHistory[i * trailLength + t] = 0;
     }
   }
 
@@ -526,13 +529,14 @@ function createParticleLayer(scene, grid) {
     alphas = null;
     cells = null;
     history = null;
-    speedHistory = null;
+    heads = null;
     ages = null;
     activeKey = "";
+    lastParticleFrame = -Infinity;
   }
 
   return {
-    populate({ fields = {}, viewSpec = null } = {}) {
+    populate({ fields = {}, viewSpec = null, frame = 0 } = {}) {
       const spec = viewSpec?.particles;
       if (!spec) {
         if (mesh) mesh.visible = false;
@@ -545,6 +549,11 @@ function createParticleLayer(scene, grid) {
       }
       const layout = ensure(spec);
       mesh.visible = true;
+      const pointCount = layout.count * layout.trailLength;
+      const cadence = pointCount > 12000 ? 2 : 1;
+      const frameNumber = Number.isFinite(frame) ? frame : 0;
+      if (lastParticleFrame !== -Infinity && cadence > 1 && frameNumber % cadence !== 0) return;
+      lastParticleFrame = frameNumber;
       stepParticles({ spec, vectorField, count: layout.count, trailLength: layout.trailLength });
       writeParticleGeometry({ spec, count: layout.count, trailLength: layout.trailLength });
     },
@@ -563,9 +572,11 @@ function createParticleLayer(scene, grid) {
       }
       const cell = cells[i];
       const base = i * trailLength * 3;
-      const px = history[base + 0];
-      const py = history[base + 1];
-      const pz = history[base + 2];
+      const head = heads[i];
+      const src = base + head * 3;
+      const px = history[src + 0];
+      const py = history[src + 1];
+      const pz = history[src + 2];
       sampleVectorField(sampleScratch, vectorField, cell, px, py, pz);
       let vx = sampleScratch.x;
       let vy = sampleScratch.y;
@@ -575,20 +586,7 @@ function createParticleLayer(scene, grid) {
         continue;
       }
 
-      for (let t = trailLength - 1; t > 0; t--) {
-        const dst = base + t * 3;
-        const src = dst - 3;
-        history[dst + 0] = history[src + 0];
-        history[dst + 1] = history[src + 1];
-        history[dst + 2] = history[src + 2];
-      }
-      const speedBase = i * trailLength;
-      for (let t = trailLength - 1; t > 0; t--) {
-        speedHistory[speedBase + t] = speedHistory[speedBase + t - 1];
-      }
-
       const speedNorm = Math.max(0, Math.min(1, mag / 6));
-      speedHistory[speedBase] = speedNorm;
       const jitter = (rng() - 0.5) * (0.10 + 0.22 * speedNorm);
       const invMag = 1 / Math.max(1e-6, mag);
       const oldVx = vx;
@@ -605,9 +603,12 @@ function createParticleLayer(scene, grid) {
       const nextX = nx / len;
       const nextY = ny / len;
       const nextZ = nz / len;
-      history[base + 0] = nextX;
-      history[base + 1] = nextY;
-      history[base + 2] = nextZ;
+      const nextHead = head === 0 ? trailLength - 1 : head - 1;
+      heads[i] = nextHead;
+      const dst = base + nextHead * 3;
+      history[dst + 0] = nextX;
+      history[dst + 1] = nextY;
+      history[dst + 2] = nextZ;
       cells[i] = nearestNeighborCell(cells[i], nextX, nextY, nextZ);
       const dropRate = 0.0015 + 0.0045 * speedNorm;
       if (rng() < dropRate) {
@@ -619,18 +620,15 @@ function createParticleLayer(scene, grid) {
 
   function writeParticleGeometry({ spec, count, trailLength }) {
     const sphereR = 1.032;
-    const fade = Math.max(0, Math.min(1, spec.fade));
-    const trailFade = 0.50 + fade * 0.50;
     const sizeWorld = Math.max(0.004, Math.min(0.12, (Number.isFinite(spec.size) ? spec.size : 4) * 0.0027));
     let quad = 0;
     for (let i = 0; i < count; i++) {
       const base = i * trailLength * 3;
-      const speedBase = i * trailLength;
-      let ageT = 1;
+      const head = heads[i] ?? 0;
       for (let t = 0; t < trailLength; t++) {
-        const speedT = Math.max(0, Math.min(1, speedHistory[speedBase + t] ?? 0));
-        const alpha = Math.max(0.04, Math.min(1, (t === 0 ? 0.78 : 0.64) * ageT * (0.48 + 0.66 * speedT)));
-        const src = base + t * 3;
+        let slot = head + t;
+        if (slot >= trailLength) slot -= trailLength;
+        const src = base + slot * 3;
         const px = history[src + 0];
         const py = history[src + 1];
         const pz = history[src + 2];
@@ -647,38 +645,42 @@ function createParticleLayer(scene, grid) {
           positions[dst + 0] = cx + cornerX * basis.ex + cornerY * basis.nx;
           positions[dst + 1] = cy + cornerX * basis.ey + cornerY * basis.ny;
           positions[dst + 2] = cz + cornerX * basis.ez + cornerY * basis.nz;
-          alphas[quad * 4 + corner] = alpha;
         }
         quad++;
-        ageT *= trailFade;
       }
     }
     geometry.attributes.position.needsUpdate = true;
-    geometry.attributes.particleAlpha.needsUpdate = true;
   }
 
-  function fillParticleColors({ spec, count, trailLength }) {
+  function fillParticleStyle({ spec, count, trailLength }) {
     const cr = (spec.color[0] ?? 235) / 255;
     const cg = (spec.color[1] ?? 245) / 255;
     const cb = (spec.color[2] ?? 255) / 255;
+    const fade = Math.max(0, Math.min(1, spec.fade));
+    const trailFade = 0.50 + fade * 0.50;
     let quad = 0;
     for (let i = 0; i < count; i++) {
+      let ageT = 1;
       for (let t = 0; t < trailLength; t++) {
         const brightness = t === 0 ? 1.06 : 0.94;
         const r = cr * brightness;
         const g = cg * brightness;
         const b = cb * brightness;
+        const alpha = Math.max(0.04, Math.min(1, (t === 0 ? 0.78 : 0.64) * ageT * 0.84));
         const vBase = quad * 4 * 3;
         for (let corner = 0; corner < 4; corner++) {
           const dst = vBase + corner * 3;
           colors[dst + 0] = r;
           colors[dst + 1] = g;
           colors[dst + 2] = b;
+          alphas[quad * 4 + corner] = alpha;
         }
         quad++;
+        ageT *= trailFade;
       }
     }
     geometry.attributes.color.needsUpdate = true;
+    geometry.attributes.particleAlpha.needsUpdate = true;
   }
 
   function sampleVectorField(out, vectorField, cell, px, py, pz) {
