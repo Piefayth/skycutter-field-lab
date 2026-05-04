@@ -13,9 +13,10 @@ field`. Every construct in the DSL is either a query into that tensor or an
 update of one slice of it.**
 
 Reads happen at coordinates: bare `u` means `(now, this_cell, u)`; `u@prev`
-means `(now - 1, this_cell, u)`; inside a neighbor reduction, `u@n` means
-`(now, neighbor_cell, u)`. The compiler dispatches based on the kind of
-coordinate.
+means `(now - 1, this_cell, u)`; inside a neighbor reduction or edge block,
+`u@n` means `(now, neighbor_cell, u)`. A coordinate can also be a first-class
+local expression: `let p = upstream(wind, dt)` followed by `u@p`. The compiler
+dispatches based on the kind of coordinate.
 
 Writes happen to the stage's output slice for that field. For ordinary fields,
 the output becomes the field's current value immediately after the stage pass,
@@ -29,6 +30,8 @@ Compared to v1:
 - Neighbor reductions are cell-centered: `sum n in neighbors { u@n - u + v@n }`
   binds a *cell coordinate* `n`, then any field can be read at `n`. Replaces
   v1's field-centered `neighbor sum n in u { ... }`.
+- Continuous coordinate samples are first-class: prefer
+  `let p = upstream(wind, dt); u@p` over legacy `u@upstream(...)`.
 - Special primitives (`diffuse`, `clamp`, `advect`, `wind`, `normalize`)
   collapse into the universal `cell { ... }` block. Each is now expressible as
   one or two lines of cell expression.
@@ -153,6 +156,10 @@ paints or erases them.
   vec2s with WGSL-compatible broadcast semantics; `vec2(x, y)`,
   `length(v)`, `gradient(scalarField)`, and `divergence(vec2Field)`
   are first-class builtins.
+- `coord` — expression-only geodesic coordinate. It is not a field storage
+  type. It appears as a reduction / edge binder (`sum n in neighbors { ... }`,
+  `edge n in neighbors { ... }`) or as the return type of coordinate helpers
+  such as `upstream(wind, dt)`.
 - `u32` — one unsigned integer per cell. Inside expressions it reads as
   `f32`; writes round and cast back to `u32`. This keeps arithmetic in
   scalar expression space while supporting cellular automata and state
@@ -280,11 +287,12 @@ scenario dropdown. Initialization actions:
 Scenarios CANNOT write derived fields (validator rejects).
 
 The init-context expression subset is stricter than the cell-stage
-grammar: no `@prev` / `@n` / `@upstream` (scenarios run once at start,
-no previous tick exists; stamps run on click without GPU stencil
-topology), no neighbor reductions, no `gradient` / `divergence`. Use
-bare-field reads + math functions only. The validator emits clear
-errors with redirect hints if you reach for a stage-only construct.
+grammar: no `@prev` / `field@n` / `field@coord` (scenarios run once at
+start, no previous tick exists; stamps run on click without GPU stencil
+topology), no neighbor reductions, no coordinate helpers (`upstream`,
+`direction`, `distance`), no `gradient` / `divergence`. Use bare-field
+reads + math functions only. The validator emits clear errors with
+redirect hints if you reach for a stage-only construct.
 
 ## Stamps
 
@@ -422,9 +430,10 @@ view phase "Phase (θ)" {
 ```
 
 **`color expr { ... }`** — programmable per-cell RGB. Body uses a
-restricted subset of the cell-expression grammar: no `@prev` / `@n` /
-`@upstream` coord queries, no neighbor reductions, no `gradient` /
-`divergence`, no field writes (only `set red = ...` / `set green =
+restricted subset of the cell-expression grammar: no `@prev` /
+`field@n` / `field@coord` coord queries, no neighbor reductions, no
+coordinate helpers (`upstream`, `direction`, `distance`), no
+`gradient` / `divergence`, no field writes (only `set red = ...` / `set green =
 ...` / `set blue = ...`), no `add` (`set` only). Each of the three
 channels must be assigned at the body's *root level* — assignments
 inside a `when` don't satisfy the requirement on their own (the
@@ -663,9 +672,11 @@ The first version is intentionally narrow:
 - Source is exactly `neighbors`; no `ring`, `disk`, or metric kernel edge flux
   yet.
 - Edge expressions can read bare fields at the current cell and `field@n` at the
-  neighbor endpoint. Nested stencils (`sum n in neighbors`, `gradient`,
-  `divergence`, `@upstream`, `@prev`) are rejected inside edge flux; compute
-  those into fields in a preceding `cell` stage.
+  neighbor endpoint. The edge binder `n` is a coord, so `direction(n)` and
+  `distance(n)` are available for directional / distance-weighted flux. Nested
+  stencils (`sum n in neighbors`, `gradient`, `divergence`, `@prev`) are
+  rejected inside edge flux; compute those into fields in a preceding `cell`
+  stage.
 
 ## Expressions
 
@@ -674,14 +685,23 @@ The first version is intentionally narrow:
 ```
 u                                  # this cell, current tick
 u@prev                             # this cell, previous tick (triggers history allocation)
-u@n                                # neighbor cell, current tick (only valid inside a reduction
-                                   # body where `n` is a bound neighbor coordinate)
-u@upstream(velX, velY, dt)         # continuous-position semi-Lagrangian sample —
-                                   # walks back along the (velX, velY) tangent
-                                   # vector for `dt` seconds, gathers self +
-                                   # neighbors with inverse-distance weighting.
-                                   # Replaces the v1 advect kernel.
+u@n                                # bound coordinate read (reduction binder or edge binder)
+let p = upstream(wind, dt)         # continuous coordinate one timestep upstream
+u@p                                # sample field u at coordinate p
+u@upstream(velX, velY, dt)         # legacy spelling, equivalent to a temporary coord
 ```
+
+`coord` is an expression type, not a storage type. The currently implemented
+coordinate values are:
+
+- neighbor / edge binders such as `n`
+- `upstream(vec2, dt)`, which walks back along a tangent vector field and returns
+  a continuous point on the sphere
+
+`field@coord` uses an exact neighbor read when `coord` is a neighbor / edge
+binder. For arbitrary continuous coords, the first implementation supports
+sampling `f32` fields by gathering the current cell and its immediate neighbors
+with inverse-distance weighting.
 
 Reserved for future:
 - `u@prev(N)` for N-deep history
@@ -698,12 +718,15 @@ sum  n in ring(3) { activator@n }
 mean n in kernel bell(0, 0.05) { u@n }
 mean n in kernel bell(0.12, 0.03) { u@n }
 max  n in neighbors { temperature@n }
-min  n in neighbors { distance(self, n) }
+mean n in neighbors { max(dot(wind, direction(n)), 0) * pollutant@n }
+min  n in neighbors { distance(n) }
 ```
 
 `n` is a cell coordinate; expression body can read any field at `n` via
-`field@n`. The body is a single expression: math functions, field reads, and
-conditionals are allowed, but `let` locals are not.
+`field@n`, compute the tangent direction from the current cell with
+`direction(n)`, and compute great-circle distance with `distance(n)`. The body
+is a single expression: math functions, field reads, and conditionals are
+allowed, but `let` locals are not.
 
 A reduction body MAY contain another expression but MAY NOT contain another
 reduction. Use the bounded source forms below instead of hand-nesting
@@ -761,11 +784,19 @@ sampling. Use `kernel bell(...)` when authored semantics are metric.
 ### Math functions and globals (always available, no `use` clauses)
 
 - Math: `clamp`, `min`, `max`, `abs`, `sin`, `cos`, `asin`, `exp`, `sqrt`,
-  `pow`, `hypot`, `wrapAngle`, `smoothstep`
+  `pow`, `hypot`, `wrapAngle`, `smoothstep`, `dot`
+- Coordinate helpers: `upstream(vec2, dt) -> coord`, `direction(coord) -> vec2`,
+  `distance(coord) -> f32`
 - Noise / RNG: `cellNoise(seed, scale?)`, `cellRand(seed)`,
   `rand01(state)`, `rngNext(state)`
 - Globals: `dt`, `frame`, `PI`, `TAU`, `N` (cell count)
 - Substrate-specific (geodesic): `lon`, `lat`, `x`, `y`, `z`, `i`
+
+`direction(coord)` returns the unit tangent vector from the current cell toward
+the coordinate in the current cell's local east/north basis. `distance(coord)`
+returns great-circle distance on the unit sphere. These names are deliberately
+generic; their behavior comes from the argument type, not from an `edge.*` or
+`neighbor.*` namespace.
 
 ### RNG and reproducibility
 
@@ -1051,7 +1082,8 @@ The compile path:
 
 - `cst-v2.mjs` produces a tolerant concrete syntax tree with source ranges.
   `cst-to-ast-v2.mjs` strictly projects it into the compiler-facing v2 AST:
-  CoordRead nodes for `field@coord` (kinds: `prev`, `neighbor`, `upstream`),
+  CoordRead nodes for `field@coord` (kinds: `prev`, `coord`, plus legacy
+  `upstream`),
   NeighborReduce nodes carrying a `coord` binding name, plus cell-action types
   (`set`, `add`, `let`, `when`). The v1 stage primitives (`wind`, `advect`,
   `diffuse`, `clamp`, `normalize`) are rejected during strict projection with
@@ -1076,10 +1108,17 @@ Concrete shapes:
   WGSL: `f_u_prev[cell]`.
 - v2 `sum n in neighbors { u@n - u }` →
   `NeighborReduce { op: "sum", coord: "n", source: { kind: "neighbors" }, body: ... }` where the body
-  contains `CoordRead { field: "u", coord: { kind: "neighbor", binding: "n" } }`.
+  contains `CoordRead { field: "u", coord: { kind: "coord", name: "n" } }`.
   `emitReduction` walks the body to derive per-field bindings,
-  synthesizes `let _n_u: f32 = f_u[neighborIdx]`, then compiles the
-  body with the locals in scope.
+  synthesizes `let _n_u: f32 = f_u[neighborIdx]` for exact field-at-neighbor
+  reads and `let n = vec3<f32>(...)` for coord-valued geometry helpers, then
+  compiles the body with the locals in scope.
+- v2 `let p = upstream(wind, dt); set dye = dye@p` →
+  a coord-valued local plus a field sampler helper. WGSL: `p` is a unit-sphere
+  `vec3<f32>` and `dye@p` lowers to `_sample_dye_at_coord(cell, p)`.
+- v2 `edge n in neighbors { flux water = water * max(dot(wind, direction(n)), 0) }`
+  binds `n` as the neighbor endpoint coord; `direction(n)` and `distance(n)`
+  lower to geometry helpers over the current cell and endpoint position.
 - v2 `mean n in disk(2) { u@n }` uses the same AST shape with
   `source: { kind: "disk", radius: 2 }`. WGSL currently emits a bounded
   graph walk over the existing immediate-neighbor buffers, dedupes visited

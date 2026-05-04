@@ -10,7 +10,7 @@
 // DSL-level error message.
 //
 // Scope is intentionally minimal:
-//   - Three types: "f32", "vec2", "bool"
+//   - Core types: "f32", "vec2", "bool", "coord"
 //   - Field types come from the recipe's field declarations
 //   - Params, consts, planet constants, geo builtins, clock builtins
 //     are all f32
@@ -32,7 +32,7 @@
 
 import { MATH_FUNCTIONS } from "./dsl-spec.mjs";
 
-const KNOWN_TYPES = new Set(["f32", "vec2", "bool", "unknown"]);
+const KNOWN_TYPES = new Set(["f32", "vec2", "bool", "coord", "coord-neighbor", "unknown"]);
 
 // Registry-backed math-fn dispatch. Each MATH_FUNCTIONS entry's
 // argTypes / returnType drives the per-call type check; adding a new
@@ -107,7 +107,9 @@ function typecheckStage(stage, ctx) {
     if (statement.type === "cell") {
       typecheckActionList(statement.actions ?? [], new Map(), ctx, label);
     } else if (statement.type === "edge") {
-      typecheckEdgeActionList(statement.actions ?? [], new Map(), ctx, `${label} edge`);
+      const locals = new Map();
+      if (statement.coord) locals.set(statement.coord, "coord-neighbor");
+      typecheckEdgeActionList(statement.actions ?? [], locals, ctx, `${label} edge`);
     }
   }
 }
@@ -323,6 +325,16 @@ function typeOfExpr(ast, locals, ctx, label) {
           if (t === "bool") throwTypeError(`${argLabel}: ${name} must be a scalar, got bool`);
         }
       }
+      if (ast.coord?.kind === "coord") {
+        const coordType = typeOfIdentifier(ast.coord.name, locals, ctx);
+        if (!isCoordType(coordType) && coordType !== "unknown") {
+          throwTypeError(`${label}: ${ast.field}@${ast.coord.name} expects a coord, got ${coordType}`);
+        }
+        const declaredForCoord = ctx.fieldTypes.get(ast.field);
+        if (declaredForCoord && coordType === "coord" && declaredForCoord !== "f32") {
+          throwTypeError(`${label}: ${ast.field}@${ast.coord.name} samples an arbitrary coord; only f32 fields support continuous coordinate sampling for now`);
+        }
+      }
       const declared = ctx.fieldTypes.get(ast.field);
       return declared ? expressionTypeOf(declared) : "unknown";
     }
@@ -395,6 +407,10 @@ function typeOfBinary(ast, locals, ctx, label) {
   const leftType = typeOfExpr(ast.left, locals, ctx, label);
   const rightType = typeOfExpr(ast.right, locals, ctx, label);
 
+  if (leftType === "coord" || leftType === "coord-neighbor" || rightType === "coord" || rightType === "coord-neighbor") {
+    throwTypeError(`${label}: coordinate values cannot be used with binary operator \`${op}\`; use distance(coord), direction(coord), or field@coord`);
+  }
+
   if (op === "&&" || op === "||") {
     if (leftType !== "bool" && leftType !== "unknown") {
       throwTypeError(`${label}: \`${op}\` expects bool on the left, got ${leftType}`);
@@ -451,6 +467,31 @@ function typeOfCall(ast, locals, ctx, label) {
   if (callee?.type !== "Identifier") return "unknown";
   const name = callee.name;
   const args = ast.args ?? [];
+
+  if (name === "distance") {
+    if (args.length !== 1) throwTypeError(`${label}: distance(...) expects 1 argument, got ${args.length}`);
+    const t = typeOfExpr(args[0], locals, ctx, label);
+    if (!isCoordType(t) && t !== "unknown") {
+      throwTypeError(`${label}: distance(...) expects a coord, got ${t}`);
+    }
+    return "f32";
+  }
+  if (name === "direction") {
+    if (args.length !== 1) throwTypeError(`${label}: direction(...) expects 1 argument, got ${args.length}`);
+    const t = typeOfExpr(args[0], locals, ctx, label);
+    if (!isCoordType(t) && t !== "unknown") {
+      throwTypeError(`${label}: direction(...) expects a coord, got ${t}`);
+    }
+    return "vec2";
+  }
+  if (name === "upstream") {
+    if (args.length !== 2) throwTypeError(`${label}: upstream(...) expects 2 arguments, got ${args.length}`);
+    const vel = typeOfExpr(args[0], locals, ctx, label);
+    const dt = typeOfExpr(args[1], locals, ctx, label);
+    if (vel !== "vec2" && vel !== "unknown") throwTypeError(`${label}: upstream(...) argument 1 must be vec2, got ${vel}`);
+    if (dt !== "f32" && dt !== "unknown") throwTypeError(`${label}: upstream(...) argument 2 must be f32, got ${dt}`);
+    return "coord";
+  }
 
   // gradient and divergence accept either a bare field identifier
   // (compiled via the per-(field) helper-fn path) or an arbitrary
@@ -533,6 +574,12 @@ function typeOfCall(ast, locals, ctx, label) {
         }
         continue;
       }
+      if (expected === "coord") {
+        if (!isCoordType(t) && t !== "unknown") {
+          throwTypeError(`${label}: ${name}(...) argument ${i + 1} must be a coord, got ${t}`);
+        }
+        continue;
+      }
       if (t !== expected && t !== "unknown") {
         throwTypeError(`${label}: ${name}(...) argument ${i + 1} must be a ${expected}, got ${t}`);
       }
@@ -555,6 +602,9 @@ function typeOfNeighborReduce(ast, locals, ctx, label) {
   // The v2 shape uses CoordRead inside the body and doesn't go through
   // this branch.
   const innerLocals = new Map(locals);
+  if (typeof ast.coord === "string") {
+    innerLocals.set(ast.coord, "coord-neighbor");
+  }
   for (const binding of ast.bindings ?? []) {
     const declared = ctx.fieldTypes.get(binding.field);
     if (declared === "vec2") {
@@ -565,6 +615,9 @@ function typeOfNeighborReduce(ast, locals, ctx, label) {
   const bodyType = typeOfExpr(ast.body, innerLocals, ctx, bodyLabel);
   if (bodyType === "bool") {
     throwTypeError(`${bodyLabel}: neighbor reduction body produces a bool — reductions accumulate numeric values`);
+  }
+  if (isCoordType(bodyType)) {
+    throwTypeError(`${bodyLabel}: neighbor reduction body produces a coord — use distance(coord), direction(coord), or field@coord to reduce numeric values`);
   }
   // Vec2 bodies are now allowed for `sum` and `mean` — accumulator is
   // `vec2<f32>(0, 0)` and the per-neighbor value adds component-wise.
@@ -579,6 +632,10 @@ function typeOfNeighborReduce(ast, locals, ctx, label) {
     return "vec2";
   }
   return "f32";
+}
+
+function isCoordType(type) {
+  return type === "coord" || type === "coord-neighbor";
 }
 
 // =============================================================================

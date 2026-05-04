@@ -84,7 +84,7 @@ test("CST expression projection handles neighbor reductions", () => {
       left: {
         type: "CoordRead",
         field: "u",
-        coord: { kind: "neighbor", binding: "n" },
+        coord: { kind: "coord", name: "n" },
       },
       right: { type: "Identifier", name: "u" },
     },
@@ -100,7 +100,7 @@ test("CST expression projection handles ring and disk reductions", () => {
     body: {
       type: "CoordRead",
       field: "u",
-      coord: { kind: "neighbor", binding: "n" },
+      coord: { kind: "coord", name: "n" },
     },
   });
   assertExpressionProjection("sum n in disk(3) { u@n - u }", {
@@ -114,7 +114,7 @@ test("CST expression projection handles ring and disk reductions", () => {
       left: {
         type: "CoordRead",
         field: "u",
-        coord: { kind: "neighbor", binding: "n" },
+        coord: { kind: "coord", name: "n" },
       },
       right: { type: "Identifier", name: "u" },
     },
@@ -135,7 +135,7 @@ test("CST expression projection handles metric kernel reductions", () => {
     body: {
       type: "CoordRead",
       field: "u",
-      coord: { kind: "neighbor", binding: "n" },
+      coord: { kind: "coord", name: "n" },
     },
   });
 });

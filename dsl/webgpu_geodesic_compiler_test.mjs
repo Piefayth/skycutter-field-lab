@@ -694,10 +694,10 @@ test("MATH_FUNCTIONS registry drives all consumers (smoke)", async () => {
       `${fn.name}: returnType must be set (got ${fn.returnType})`);
     assert(Array.isArray(fn.argTypes),
       `${fn.name}: argTypes must be set`);
-    // wgsl + js callbacks. gradient/divergence are intentionally null
+    // wgsl + js callbacks. Stage-only helpers are intentionally null
     // (compiler-side specials emit helper-fn calls; init runtime
     // rejects them via the init-subset validator).
-    if (fn.name !== "gradient" && fn.name !== "divergence") {
+    if (!["gradient", "divergence", "direction", "distance", "upstream"].includes(fn.name)) {
       assert(typeof fn.wgsl === "function",
         `${fn.name}: wgsl callback missing — adding a math fn now means ONE entry in dsl-spec.mjs`);
       assert(typeof fn.js === "function",
@@ -926,6 +926,63 @@ step {
   assert(pass.source.includes("fn _upstream_u("), "conditional upstream read must emit helper function");
   assert(pass.source.includes("_upstream_u(cell, v_wind.x, v_wind.y, params.dt)"),
     "conditional body should call the emitted upstream helper");
+});
+
+test("coord-valued upstream can be bound and sampled with field@coord", () => {
+  const recipe = compileV2(`
+recipe "Coord upstream"
+substrate geodesic frequency 16
+field dye: f32
+field wind: vec2
+
+step {
+  stage advect {
+    reads dye, wind
+    writes dye
+    cell {
+      let p = upstream(wind, dt)
+      set dye = dye@p
+    }
+  }
+}
+`);
+  const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
+  assert(pass.needsNeighbors === true, "field@coord sampling needs neighbor topology bindings");
+  assert(pass.source.includes("fn _coord_upstream("), "coord upstream helper emitted");
+  assert(pass.source.includes("fn _sample_dye_at_coord("), "field@coord sample helper emitted");
+  assert(pass.source.includes("let p = _coord_upstream(cell, v_wind, params.dt);"),
+    "upstream(wind, dt) should lower to a coord-valued local");
+  assert(pass.source.includes("_sample_dye_at_coord(cell, p)"),
+    "field@p should lower through the generic coord sampler");
+});
+
+test("direction and distance work on neighbor coordinate binders", () => {
+  const recipe = compileV2(`
+recipe "Coord geometry"
+substrate geodesic frequency 16
+field pollutant: f32
+field wind: vec2
+
+step {
+  stage edgeBias {
+    reads pollutant, wind
+    writes pollutant
+    edge n in neighbors {
+      let downwind = max(dot(wind, direction(n)), 0)
+      let close = 1 / max(distance(n), 0.001)
+      flux pollutant = pollutant * downwind * close * dt * 0.01
+    }
+  }
+}
+`);
+  const pipe = compileWebGpuGeodesicPipeline(recipe.dsl);
+  const pass = pipe.stages.flatMap((stage) => stage.passes)
+    .find((p) => p.kind === "edgeFlux" && p.field === "pollutant");
+  assert(pass, "edge flux pass missing");
+  assert(pass.source.includes("fn _coord_direction("), "direction(coord) helper emitted");
+  assert(pass.source.includes("fn _coord_distance("), "distance(coord) helper emitted");
+  assert(pass.source.includes("_coord_direction(cell, n)"), "direction(n) should lower against the edge coord binder");
+  assert(pass.source.includes("_coord_distance(cell, n)"), "distance(n) should lower against the edge coord binder");
 });
 
 test("validator rejects unknown identifier in @upstream coord arguments", () => {

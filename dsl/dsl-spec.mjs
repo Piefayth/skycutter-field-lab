@@ -61,6 +61,7 @@
 const SCALAR1 = ["f32"];
 const SCALAR2 = ["f32", "f32"];
 const SCALAR3 = ["f32", "f32", "f32"];
+const COORD1 = ["coord"];
 
 // Generic "emit a passthrough WGSL call" — works for everything WGSL
 // has builtin under the same name. atan2, sin, cos, exp, sqrt, pow,
@@ -406,6 +407,58 @@ export const MATH_FUNCTIONS = [
     signature: "length(v)",
     doc: "Vector magnitude. WGSL-native — works on vec2 / vec3. For scalars, use `abs`.",
     example: "let speed = length(wind)",
+  },
+  {
+    name: "dot",
+    target: "c.dot",
+    arity: [2],
+    argTypes: ["vec2", "vec2"], returnType: "f32",
+    wgsl: passthrough("dot"),
+    js: (args, cell, helpers) => {
+      const a = args[0], b = args[1];
+      if (helpers.isVec2(a) && helpers.isVec2(b)) return a.x * b.x + a.y * b.y;
+      return Number(a) * Number(b);
+    },
+    importNamespace: "core",
+    signature: "dot(a, b)",
+    doc: "Dot product between two vec2 tangent vectors.",
+    example: "let downwind = max(dot(wind, direction(n)), 0)",
+  },
+  {
+    name: "distance",
+    target: "c.distance",
+    arity: [1],
+    argTypes: COORD1, returnType: "f32",
+    wgsl: null,
+    js: null,
+    importNamespace: "core",
+    signature: "distance(coord)",
+    doc: "Great-circle distance, in sphere radians, from the current cell to a spatial coordinate such as a neighbor binder.",
+    example: "let near = distance(n) < 0.1",
+  },
+  {
+    name: "direction",
+    target: "c.direction",
+    arity: [1],
+    argTypes: COORD1, returnType: "vec2",
+    wgsl: null,
+    js: null,
+    importNamespace: "core",
+    signature: "direction(coord)",
+    doc: "Unit tangent direction from the current cell toward a spatial coordinate, returned as vec2(east, north).",
+    example: "let downwind = max(dot(wind, direction(n)), 0)",
+  },
+  {
+    name: "upstream",
+    target: "c.upstream",
+    arity: [2],
+    argTypes: ["vec2", "f32"], returnType: "coord",
+    wgsl: null,
+    js: null,
+    importNamespace: "core",
+    signature: "upstream(velocity, dt)",
+    doc: "Returns the coordinate reached by walking backward from the current cell along a tangent vec2 velocity for dt. Prefer binding a coordinate with `let p = upstream(wind, dt); set field = field@p`; legacy `field@upstream(velX, velY, dt)` remains accepted.",
+    example: "let p = upstream(wind, dt)\nset dye = dye@p",
   },
   // Tangent-frame differential operators on the geodesic substrate.
   // These are stencil reads (gather over neighbors) compiled to per-cell

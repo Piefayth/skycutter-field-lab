@@ -470,6 +470,8 @@ function compileCellShader({ stage, field, reads, prevReads = [], actions, layou
     usedGradients: new Set(),
     usedDivergences: new Set(),
     usedUpstreams: new Set(),
+    usedCoordSamples: new Set(),
+    usedCoordFns: new Set(),
     kernelSpecs,
   };
   const body = compileActions(actions, ctx);
@@ -618,18 +620,22 @@ function compileEdgeFluxShader({ stage, field, coord, reads, actions, layout }) 
   const neighborsBinding = fluxBinding + 3;
   const neighborCountsBinding = fluxBinding + 4;
   const neighborFields = collectNeighborFieldsFromActions(actions, coord);
-  const body = compileEdgeFluxActions(actions, {
+  const edgeCtx = {
     reads: new Set(reads),
     target: field,
     coord,
-    locals: new Set(),
+    locals: new Set([coord]),
     layout,
     fieldReadOverride: (name) => wgslReadAt(name, typeOf(name), "cell"),
     coordReadResolver: makeCoordReadResolver({
       neighborCoord: coord,
       bindingByField: new Map(neighborFields.map((name) => [name, `_edge_${coord}_${name}`])),
     }),
-  });
+    usedCoordSamples: new Set(),
+    usedCoordFns: new Set(),
+  };
+  const body = compileEdgeFluxActions(actions, edgeCtx);
+  const stencilHelperSource = emitStencilHelpers(edgeCtx, typeOf);
 
   return `
 struct Params {
@@ -662,6 +668,8 @@ fn hashNoise(i: f32, seed: f32) -> f32 {
   return (f32(x) / 4294967295.0) * 2.0 - 1.0;
 }
 
+${stencilHelperSource}
+
 @compute @workgroup_size(128)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let cell = id.x;
@@ -689,6 +697,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   }
   for (var slot: u32 = 0u; slot < count; slot = slot + 1u) {
     let edgeNeighbor = u32(neighbors[cell * 6u + slot]);
+    let ${coord}_posOffset = edgeNeighbor * 3u;
+    let ${coord} = vec3<f32>(positions[${coord}_posOffset + 0u], positions[${coord}_posOffset + 1u], positions[${coord}_posOffset + 2u]);
 ${indent(neighborFields.map((name) => `let _edge_${coord}_${name} = ${wgslReadAt(name, typeOf(name), "edgeNeighbor")};`).join("\n"), 4)}
     var edgeValue = 0.0;
 ${indent(body, 4)}
@@ -933,6 +943,9 @@ function visitExpr(expr, onIdentifier) {
         visitExpr(expr.coord.velY, onIdentifier);
         visitExpr(expr.coord.dt, onIdentifier);
       }
+      if (expr.coord?.kind === "coord") {
+        onIdentifier(expr.coord.name);
+      }
       break;
   }
 }
@@ -1006,10 +1019,12 @@ function actionsUseNeighborReduce(actions) {
   return false;
 }
 
-function exprUsesNeighborReduce(expr) {
+function exprUsesNeighborReduce(expr, coordBindings = new Set()) {
   if (!expr) return false;
   if (expr.type === "NeighborReduce") {
-    if (expr.source?.kind === "kernel") return exprUsesNeighborReduce(expr.body);
+    const innerCoordBindings = new Set(coordBindings);
+    if (expr.coord) innerCoordBindings.add(expr.coord);
+    if (expr.source?.kind === "kernel") return exprUsesNeighborReduce(expr.body, innerCoordBindings);
     return true;
   }
   // gradient / divergence are stencil reads — they need the neighbor
@@ -1018,14 +1033,16 @@ function exprUsesNeighborReduce(expr) {
       && (expr.callee.name === "gradient" || expr.callee.name === "divergence")) {
     return true;
   }
-  // Continuous-position CoordRead (`field@upstream(...)`) gathers from
-  // self + neighbors via inverse-distance weighting.
+  // Continuous-position CoordRead (`field@upstream(...)` or `field@p`
+  // where p is a coord local) gathers from self + neighbors via
+  // inverse-distance weighting.
   if (expr.type === "CoordRead" && expr.coord?.kind === "upstream") return true;
-  if (expr.type === "Member") return exprUsesNeighborReduce(expr.object);
-  if (expr.type === "Unary") return exprUsesNeighborReduce(expr.expr);
-  if (expr.type === "Binary") return exprUsesNeighborReduce(expr.left) || exprUsesNeighborReduce(expr.right);
-  if (expr.type === "Conditional") return exprUsesNeighborReduce(expr.test) || exprUsesNeighborReduce(expr.consequent) || exprUsesNeighborReduce(expr.alternate);
-  if (expr.type === "Call") return exprUsesNeighborReduce(expr.callee) || (expr.args ?? []).some(exprUsesNeighborReduce);
+  if (expr.type === "CoordRead" && expr.coord?.kind === "coord") return !coordBindings.has(expr.coord.name);
+  if (expr.type === "Member") return exprUsesNeighborReduce(expr.object, coordBindings);
+  if (expr.type === "Unary") return exprUsesNeighborReduce(expr.expr, coordBindings);
+  if (expr.type === "Binary") return exprUsesNeighborReduce(expr.left, coordBindings) || exprUsesNeighborReduce(expr.right, coordBindings);
+  if (expr.type === "Conditional") return exprUsesNeighborReduce(expr.test, coordBindings) || exprUsesNeighborReduce(expr.consequent, coordBindings) || exprUsesNeighborReduce(expr.alternate, coordBindings);
+  if (expr.type === "Call") return exprUsesNeighborReduce(expr.callee, coordBindings) || (expr.args ?? []).some((arg) => exprUsesNeighborReduce(arg, coordBindings));
   return false;
 }
 
@@ -1103,12 +1120,15 @@ function emitStencilHelpers(ctx, typeOf) {
   const grads = [...(ctx.usedGradients ?? [])];
   const divs = [...(ctx.usedDivergences ?? [])];
   const upstreams = [...(ctx.usedUpstreams ?? [])];
+  const coordSamples = [...(ctx.usedCoordSamples ?? [])];
+  const usesCoordFns = (ctx.usedCoordFns instanceof Set ? ctx.usedCoordFns.size > 0 : ctx.usedCoordFns === true)
+    || coordSamples.length > 0;
   // The expression-arg gradient/divergence path also depends on the
   // shared `_stencil_position` / `_stencil_eastBasis` helpers, so
   // emit them whenever the inline lift was used even if no per-(
   // field) helpers fire.
   const inlineUsed = ctx.usedStencilInline === true;
-  if (grads.length === 0 && divs.length === 0 && upstreams.length === 0 && !inlineUsed) return "";
+  if (grads.length === 0 && divs.length === 0 && upstreams.length === 0 && !inlineUsed && !usesCoordFns) return "";
   const blocks = [];
   // Shared helpers — emitted once per shader.
   blocks.push(`
@@ -1125,7 +1145,60 @@ fn _stencil_eastBasis(p: vec3<f32>) -> vec3<f32> {
   }
   return e / len;
 }
+
+fn _coord_upstream(cell: u32, velocity2: vec2<f32>, dt: f32) -> vec3<f32> {
+  let p = _stencil_position(cell);
+  let east = _stencil_eastBasis(p);
+  let north = normalize(cross(p, east));
+  let velocity = east * velocity2.x + north * velocity2.y;
+  return normalize(p - velocity * dt);
+}
+
+fn _coord_direction(cell: u32, target: vec3<f32>) -> vec2<f32> {
+  let p = _stencil_position(cell);
+  let east = _stencil_eastBasis(p);
+  let north = normalize(cross(p, east));
+  let tan = target - p * dot(target, p);
+  let len = length(tan);
+  if (len < 0.000001) {
+    return vec2<f32>(0.0, 0.0);
+  }
+  let dir = tan / len;
+  return vec2<f32>(dot(dir, east), dot(dir, north));
+}
+
+fn _coord_distance(cell: u32, target: vec3<f32>) -> f32 {
+  let p = _stencil_position(cell);
+  return acos(clamp(dot(p, normalize(target)), -1.0, 1.0));
+}
 `.trim());
+  for (const fieldName of coordSamples) {
+    const t = typeOf(fieldName);
+    if (t !== "f32") {
+      throw new Error(`${fieldName}@coord requires a scalar (f32) field for continuous coordinate sampling; got ${t}`);
+    }
+    blocks.push(`
+fn _sample_${fieldName}_at_coord(cell: u32, coord: vec3<f32>) -> f32 {
+  let p = _stencil_position(cell);
+  var weightSum = 0.0;
+  var valueSum = 0.0;
+  let selfD2 = max(0.000001, 2.0 * (1.0 - dot(coord, p)));
+  let selfWeight = 1.0 / (selfD2 * selfD2);
+  weightSum = weightSum + selfWeight;
+  valueSum = valueSum + f_${fieldName}[cell] * selfWeight;
+  let count = neighborCounts[cell];
+  for (var slot: u32 = 0u; slot < count; slot = slot + 1u) {
+    let n = u32(neighbors[cell * 6u + slot]);
+    let q = _stencil_position(n);
+    let d2 = max(0.000001, 2.0 * (1.0 - dot(coord, q)));
+    let weight = 1.0 / (d2 * d2);
+    weightSum = weightSum + weight;
+    valueSum = valueSum + f_${fieldName}[n] * weight;
+  }
+  return valueSum / weightSum;
+}
+`.trim());
+  }
   // Per-(field) gradient helper — input must be a scalar f32 field.
   for (const fieldName of grads) {
     const t = typeOf(fieldName);
@@ -1484,9 +1557,6 @@ function emitReduction(node, ctx, statements) {
   let bindings;
   if (node.coord) {
     const fieldNames = collectNeighborFields(node.body, node.coord);
-    if (fieldNames.length === 0) {
-      throw new Error(`emitReduction: reduction over coord ${node.coord} reads no fields`);
-    }
     bindings = fieldNames.map((field) => ({
       name: `_${node.coord}_${field}`,
       field,
@@ -1510,6 +1580,7 @@ function emitReduction(node, ctx, statements) {
   });
 
   const bodyLocals = new Set(ctx.locals);
+  if (node.coord) bodyLocals.add(node.coord);
   for (const b of bindings) bodyLocals.add(b.name);
   const bodyCtx = { ...ctx, locals: bodyLocals, coordReadResolver };
   const bodyWgsl = compileExpr(node.body, bodyCtx);
@@ -1525,6 +1596,10 @@ function emitReduction(node, ctx, statements) {
 
   const emitCandidate = (indexExpr, indent = "    ") => {
     statements.push(`${indent}let ${neighborIdx}: u32 = ${indexExpr};`);
+    if (node.coord) {
+      statements.push(`${indent}let ${accName}_coordOffset: u32 = ${neighborIdx} * 3u;`);
+      statements.push(`${indent}let ${node.coord} = vec3<f32>(positions[${accName}_coordOffset + 0u], positions[${accName}_coordOffset + 1u], positions[${accName}_coordOffset + 2u]);`);
+    }
     for (const b of bindings) {
       const fieldType = fieldTypes[b.field] ?? "f32";
       // Per-neighbor binding's local type — vec2 stays vec2<f32>, u32/
@@ -1721,7 +1796,7 @@ function inferReductionBodyType(ast, bindings, ctx) {
       return inferReductionBodyType(ast.consequent, bindings, ctx);
     case "Call": {
       const name = ast.callee?.name;
-      if (name === "vec2" || name === "gradient") return "vec2";
+      if (name === "vec2" || name === "gradient" || name === "direction") return "vec2";
       // length, divergence, dot, plus all the scalar math fns.
       return "f32";
     }
@@ -1780,6 +1855,17 @@ function compileCoordRead(ast, ctx) {
       }
       return local;
     }
+    case "coord": {
+      const resolver = ctx.coordReadResolver;
+      const local = resolver?.(ast.field, coord.name);
+      if (local) return local;
+      if (fieldType !== "f32") {
+        throw new Error(`compileCoordRead: \`${ast.field}@${coord.name}\` samples an arbitrary coord; only f32 fields are supported for now`);
+      }
+      ctx.usedCoordSamples ??= new Set();
+      ctx.usedCoordSamples.add(ast.field);
+      return `_sample_${ast.field}_at_coord(${ctx.currentCell ?? "cell"}, ${compileIdentifier(coord.name, ctx)})`;
+    }
     case "upstream": {
       // Continuous-position semi-Lagrangian sample. The compiler emits
       // a per-(field) helper function in the prelude (see
@@ -1819,7 +1905,9 @@ function collectNeighborFields(ast, coord) {
   const out = [];
   function walk(node) {
     if (!node || typeof node !== "object") return;
-    if (node.type === "CoordRead" && node.coord?.kind === "neighbor" && node.coord.binding === coord) {
+    const coordMatches = (node.coord?.kind === "neighbor" && node.coord.binding === coord)
+      || (node.coord?.kind === "coord" && node.coord.name === coord);
+    if (node.type === "CoordRead" && coordMatches) {
       if (!seen.has(node.field)) {
         seen.add(node.field);
         out.push(node.field);
@@ -1938,6 +2026,21 @@ function compileCall(ast, ctx) {
     ctx.usedDivergences.add(fieldName);
     return `_divergence_${fieldName}(${cellExpr})`;
   }
+  if (name === "upstream") {
+    if (ast.args.length !== 2) throw new Error(`upstream expects 2 args; got ${ast.args.length}`);
+    markCoordFnUsed(ctx, "upstream");
+    return `_coord_upstream(${ctx.currentCell ?? "cell"}, ${compileExpr(ast.args[0], ctx)}, ${compileExpr(ast.args[1], ctx)})`;
+  }
+  if (name === "direction") {
+    if (ast.args.length !== 1) throw new Error(`direction expects 1 arg; got ${ast.args.length}`);
+    markCoordFnUsed(ctx, "direction");
+    return `_coord_direction(${ctx.currentCell ?? "cell"}, ${compileExpr(ast.args[0], ctx)})`;
+  }
+  if (name === "distance") {
+    if (ast.args.length !== 1) throw new Error(`distance expects 1 arg; got ${ast.args.length}`);
+    markCoordFnUsed(ctx, "distance");
+    return `_coord_distance(${ctx.currentCell ?? "cell"}, ${compileExpr(ast.args[0], ctx)})`;
+  }
   // Generic math-fn dispatch via the registry. Everything else flows
   // through here, including new fns added later — no switch update.
   const args = ast.args.map((arg) => compileExpr(arg, ctx));
@@ -1949,6 +2052,11 @@ function compileCall(ast, ctx) {
     return fn.wgsl(args);
   }
   throw new Error(`Unsupported WebGPU geodesic function: ${name}`);
+}
+
+function markCoordFnUsed(ctx, name) {
+  if (ctx.usedCoordFns instanceof Set) ctx.usedCoordFns.add(name);
+  else ctx.usedCoordFns = true;
 }
 
 function wgslNumber(value) {

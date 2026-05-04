@@ -540,7 +540,7 @@ function describeAstSource(ast) {
 // the user picked the scenario, with an opaque "unknown init function"
 // error. Catch the unsupported constructs at recipe load with a
 // pointer at the cell-stage form that does work.
-const INIT_REJECTED_CALLEES = new Set(["gradient", "divergence"]);
+const INIT_REJECTED_CALLEES = new Set(["gradient", "divergence", "direction", "distance", "upstream"]);
 
 function validateInitExpressions(schema) {
   for (const scenario of schema.presets ?? []) {
@@ -1144,6 +1144,7 @@ function validateMetricIdentifiers(metric, schema) {
         }
         validateNeighborReductionSource(ast.source, label, paramNames);
         const bodyLocals = new Set(locals);
+        if (ast.coord) bodyLocals.add(ast.coord);
         for (const b of ast.bindings ?? []) {
           if (b.name) bodyLocals.add(b.name);
           if (b.field && !fieldNames.has(b.field)) {

@@ -952,5 +952,5 @@ function projectCoordRead(node) {
       },
     };
   }
-  return { type: "CoordRead", field: node.field, coord: { kind: "neighbor", binding: node.coord } };
+  return { type: "CoordRead", field: node.field, coord: { kind: "coord", name: node.coord } };
 }

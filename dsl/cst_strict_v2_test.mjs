@@ -428,7 +428,7 @@ step {
   assertEq(reduce.body.type, "Binary");
   assertEq(reduce.body.left.type, "CoordRead");
   assertEq(reduce.body.left.field, "u");
-  assertEq(reduce.body.left.coord, { kind: "neighbor", binding: "n" });
+  assertEq(reduce.body.left.coord, { kind: "coord", name: "n" });
   assertEq(reduce.body.right, { type: "Identifier", name: "u" });
 });
 
@@ -460,7 +460,7 @@ step {
   const fieldsRead = new Set();
   function walk(ast) {
     if (!ast || typeof ast !== "object") return;
-    if (ast.type === "CoordRead" && ast.coord?.kind === "neighbor" && ast.coord.binding === "n") {
+    if (ast.type === "CoordRead" && ast.coord?.kind === "coord" && ast.coord.name === "n") {
       fieldsRead.add(ast.field);
     }
     for (const k of Object.keys(ast)) {

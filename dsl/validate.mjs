@@ -466,10 +466,10 @@ function validatePresetCellActions(actions, declaredFields, declaredParams, decl
   }
 }
 
-// V2 stages emit exactly one statement per stage: a `cell` block. The
-// v1-era `event` / `each` / `wind` / `advect` / `diffuse` / `clamp` /
-// `normalize` statement shapes are rejected upstream by strict CST projection
-// with redirect messages.
+// V2 stages emit exactly one compute statement per stage: either `cell`
+// or conservative `edge` flux. The v1-era `event` / `each` / `wind` /
+// `advect` / `diffuse` / `clamp` / `normalize` statement shapes are rejected
+// upstream by strict CST projection with redirect messages.
 function validateStatement(statement, stage, reads, writes, declares, visibleFields, declaredParams, declaredConstants, declaredPlanet, imports) {
   if (statement.type === "edge") {
     validateEdgeActions(statement.actions, statement.coord, stage, reads, writes, declares, visibleFields, declaredParams, declaredConstants, declaredPlanet, imports);
@@ -483,6 +483,7 @@ function validateStatement(statement, stage, reads, writes, declares, visibleFie
 
 function validateEdgeActions(actions, coord, stage, reads, writes, declares, visibleFields, declaredParams, declaredConstants, declaredPlanet, imports, locals = new Set()) {
   if (!coord) throw new Error(`${stage.id}: edge block requires a neighbor binding name`);
+  locals.add(coord);
   for (const action of actions) {
     if (action.type === "let") {
       validateLocalName(
@@ -514,8 +515,10 @@ function rejectUnsupportedEdgeExpr(ast, coord, label) {
     throw new Error(`${label}: edge flux expressions cannot contain neighbor reductions; compute that value in a cell stage first`);
   }
   if (ast.type === "CoordRead") {
+    if (ast.coord?.kind === "neighbor" && ast.coord.binding === coord) return;
+    if (ast.coord?.kind === "coord") return;
     if (ast.coord?.kind !== "neighbor" || ast.coord.binding !== coord) {
-      throw new Error(`${label}: edge flux only supports \`field@${coord}\` coordinate reads`);
+      throw new Error(`${label}: edge flux only supports spatial coordinate reads such as \`field@${coord}\``);
     }
     return;
   }
@@ -665,6 +668,13 @@ function validateCoordRead(ast, visibleFields, locals, label, imports, declaredP
     requireImport(imports, "core", "neighbor", label);
     return;
   }
+  if (ast.coord.kind === "coord") {
+    requireImport(imports, "core", "neighbor", label);
+    if (!locals.has(ast.coord.name)) {
+      throw new Error(`${label}: ${ast.field}@${ast.coord.name} — unknown coord ${ast.coord.name}`);
+    }
+    return;
+  }
   if (ast.coord.kind === "upstream") {
     // Continuous-position semi-Lagrangian sample. Self + neighbors are
     // gathered with inverse-distance weighting (see emitStencilHelpers
@@ -714,6 +724,7 @@ function validateNeighborReduce(ast, visibleFields, locals, label, declaredParam
     // inside the body resolve it via the parser's scope frame. The
     // expression validator checks fields against visibleFields and
     // walks every CoordRead via the validateCoordRead case.
+    bodyLocals.add(ast.coord);
   } else {
     for (const binding of ast.bindings) {
       requireVisibleField(binding.field, visibleFields, label, `neighbor ${ast.op} field`);
