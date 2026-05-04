@@ -381,7 +381,114 @@ scenarios { scenario blank "Blank" { set u = 1 } }
     }
   });
 
-  // -- Test 7: weighted metric kernel tables --------------------------------
+  // -- Test 7: coord geometry helpers ---------------------------------------
+  await t.test("coord distance and direction match geodesic neighbor geometry", async () => {
+    const recipe = `
+recipe "Coord Geometry"
+substrate geodesic frequency 8
+field u: f32
+field distMean: f32
+field dirEnergy: f32
+step {
+  stage geometry {
+    reads u
+    writes distMean, dirEnergy
+    cell {
+      set distMean = mean n in neighbors { distance(n) }
+      set dirEnergy = mean n in neighbors { dot(direction(n), direction(n)) }
+    }
+  }
+}
+metric m = mean cells { distMean }
+views {
+  palette MONO {
+    stop 0 color [0, 0, 0]
+    stop 1 color [255, 255, 255]
+  }
+  view distMean "Distance" {
+    color ramp distMean range [0, 1] palette MONO
+  }
+}
+scenarios { scenario blank "Blank" { set u = 0 } }
+`;
+    const h = await makeHarness({ recipeDsl: recipe, frequency: FREQUENCY });
+    try {
+      h.uploadField("u", new Float32Array(h.cellCount).fill(1));
+      await h.tick();
+
+      const distMean = await h.readField("distMean");
+      const dirEnergy = await h.readField("dirEnergy");
+      for (let cell = 0; cell < h.cellCount; cell++) {
+        const expected = meanNeighborDistance(h.grid, cell);
+        assert.ok(closeTo(distMean[cell], expected, 2e-4),
+          `cell ${cell}: distance mean got ${distMean[cell]}, want ${expected}`);
+        assert.ok(closeTo(dirEnergy[cell], 1.0, 2e-4),
+          `cell ${cell}: direction energy got ${dirEnergy[cell]}, want 1`);
+      }
+    } finally {
+      h.dispose();
+    }
+  });
+
+  // -- Test 8: continuous coord sampling ------------------------------------
+  await t.test("upstream coord sampling matches JS inverse-distance gather", async () => {
+    const recipe = `
+recipe "Coord Sample"
+substrate geodesic frequency 8
+field u: f32
+field wind: vec2
+field sampled: f32
+step {
+  stage sample {
+    reads u, wind
+    writes sampled
+    cell {
+      let p = upstream(wind, dt)
+      set sampled = u@p
+    }
+  }
+}
+metric m = mean cells { sampled }
+views {
+  palette MONO {
+    stop 0 color [0, 0, 0]
+    stop 1 color [255, 255, 255]
+  }
+  view sampled "Sampled" {
+    color ramp sampled range [-1, 1] palette MONO
+  }
+}
+scenarios { scenario blank "Blank" { set u = 0 } }
+`;
+    const h = await makeHarness({ recipeDsl: recipe, frequency: FREQUENCY });
+    try {
+      const u = new Float32Array(h.cellCount);
+      const wind = new Float32Array(h.cellCount * 2);
+      for (let cell = 0; cell < h.cellCount; cell++) {
+        u[cell] = h.grid.positions[cell * 3]; // x-coordinate on the unit sphere.
+        wind[cell * 2] = 1.0;                 // eastward tangent velocity.
+        wind[cell * 2 + 1] = 0.0;
+      }
+      h.uploadField("u", u);
+      h.uploadField("wind", wind);
+
+      const dt = 0.04;
+      await h.tick({ dt });
+
+      const sampled = await h.readField("sampled");
+      for (let cell = 0; cell < h.cellCount; cell++) {
+        const pos = gridPosition(h.grid, cell);
+        const coord = upstreamCoord(pos, [1, 0], dt);
+        const expected = sampleScalarAtCoord(h.grid, u, cell, coord);
+        assert.ok(closeTo(sampled[cell], expected, 3e-4),
+          `cell ${cell}: sampled got ${sampled[cell]}, want ${expected}`);
+      }
+    } finally {
+      h.dispose();
+    }
+  });
+
+  // -- Test 9: weighted metric kernel tables --------------------------------
   await t.test("metric bell kernel mean preserves a uniform field", async () => {
     const recipe = `
 recipe "Kernel mean"
@@ -423,6 +530,94 @@ scenarios { scenario blank "Blank" { set u = 1 } }
     }
   });
 });
+
+function meanNeighborDistance(grid, cell) {
+  const p = gridPosition(grid, cell);
+  const count = grid.neighborCounts[cell];
+  let sum = 0;
+  for (let slot = 0; slot < count; slot++) {
+    const n = grid.neighbors[cell * grid.maxNeighbors + slot];
+    sum += greatCircleDistance(p, gridPosition(grid, n));
+  }
+  return sum / count;
+}
+
+function sampleScalarAtCoord(grid, values, cell, coord) {
+  const p = gridPosition(grid, cell);
+  let weightSum = 0;
+  let valueSum = 0;
+  const selfD2 = Math.max(0.000001, 2 * (1 - dot3(coord, p)));
+  const selfWeight = 1 / (selfD2 * selfD2);
+  weightSum += selfWeight;
+  valueSum += values[cell] * selfWeight;
+
+  const count = grid.neighborCounts[cell];
+  for (let slot = 0; slot < count; slot++) {
+    const n = grid.neighbors[cell * grid.maxNeighbors + slot];
+    const q = gridPosition(grid, n);
+    const d2 = Math.max(0.000001, 2 * (1 - dot3(coord, q)));
+    const weight = 1 / (d2 * d2);
+    weightSum += weight;
+    valueSum += values[n] * weight;
+  }
+  return valueSum / weightSum;
+}
+
+function upstreamCoord(p, velocity2, dt) {
+  const east = eastBasis(p);
+  const north = normalize3(cross3(p, east));
+  const velocity = [
+    east[0] * velocity2[0] + north[0] * velocity2[1],
+    east[1] * velocity2[0] + north[1] * velocity2[1],
+    east[2] * velocity2[0] + north[2] * velocity2[1],
+  ];
+  return normalize3([
+    p[0] - velocity[0] * dt,
+    p[1] - velocity[1] * dt,
+    p[2] - velocity[2] * dt,
+  ]);
+}
+
+function greatCircleDistance(a, b) {
+  return Math.acos(clamp(dot3(a, normalize3(b)), -1, 1));
+}
+
+function gridPosition(grid, cell) {
+  const offset = cell * 3;
+  return [
+    grid.positions[offset],
+    grid.positions[offset + 1],
+    grid.positions[offset + 2],
+  ];
+}
+
+function eastBasis(p) {
+  const e = [-p[2], 0, p[0]];
+  const len = Math.hypot(e[0], e[1], e[2]);
+  if (len < 0.0001) return [1, 0, 0];
+  return [e[0] / len, e[1] / len, e[2] / len];
+}
+
+function normalize3(v) {
+  const len = Math.hypot(v[0], v[1], v[2]) || 1;
+  return [v[0] / len, v[1] / len, v[2] / len];
+}
+
+function cross3(a, b) {
+  return [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0],
+  ];
+}
+
+function dot3(a, b) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+function clamp(value, lo, hi) {
+  return Math.max(lo, Math.min(hi, value));
+}
 
 function topoNeighborhoodCount(grid, cell, kind, radius) {
   const seen = new Set([cell]);

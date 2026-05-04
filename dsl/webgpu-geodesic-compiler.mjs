@@ -1136,11 +1136,11 @@ fn _coord_upstream(cell: u32, velocity2: vec2<f32>, dt: f32) -> vec3<f32> {
   return normalize(p - velocity * dt);
 }
 
-fn _coord_direction(cell: u32, target: vec3<f32>) -> vec2<f32> {
+fn _coord_direction(cell: u32, coord: vec3<f32>) -> vec2<f32> {
   let p = _stencil_position(cell);
   let east = _stencil_eastBasis(p);
   let north = normalize(cross(p, east));
-  let tan = target - p * dot(target, p);
+  let tan = coord - p * dot(coord, p);
   let len = length(tan);
   if (len < 0.000001) {
     return vec2<f32>(0.0, 0.0);
@@ -1149,9 +1149,9 @@ fn _coord_direction(cell: u32, target: vec3<f32>) -> vec2<f32> {
   return vec2<f32>(dot(dir, east), dot(dir, north));
 }
 
-fn _coord_distance(cell: u32, target: vec3<f32>) -> f32 {
+fn _coord_distance(cell: u32, coord: vec3<f32>) -> f32 {
   let p = _stencil_position(cell);
-  return acos(clamp(dot(p, normalize(target)), -1.0, 1.0));
+  return acos(clamp(dot(p, normalize(coord)), -1.0, 1.0));
 }
 `.trim());
   for (const fieldName of coordSamples) {
