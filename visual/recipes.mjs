@@ -448,6 +448,7 @@ export function initRecipes({
       grid: deps.state.grid?.topology ?? null,
       markStateDirty() {
         dirty = true;
+        bumpFieldRevision(deps.state);
       },
       // Distinct from markStateDirty: signals that current state.fields
       // came from preset apply rather than a stamp. The next runTick
@@ -456,6 +457,7 @@ export function initRecipes({
       markPresetApplied() {
         dirty = true;
         presetJustApplied = true;
+        bumpFieldRevision(deps.state);
       },
       readFields(state, names) {
         return readBack(state, names).catch(handleReadbackError);
@@ -505,6 +507,7 @@ export function initRecipes({
       readPromise = (async () => {
         await gpuRunner.readState(state, names);
         await gpuRunner.readEventCounts?.(state);
+        bumpFieldRevision(state);
       })();
       try {
         await readPromise;
@@ -912,6 +915,11 @@ function applyDslRecipeMetadata(recipe, dsl, getParam, setParam) {
       label: o.name.charAt(0).toUpperCase() + o.name.slice(1),
     }));
   }
+}
+
+function bumpFieldRevision(state) {
+  if (!state) return;
+  state.__fieldRevision = (state.__fieldRevision ?? 0) + 1;
 }
 
 function declaredPipelineFieldDecls(dsl) {

@@ -45,7 +45,9 @@ export async function createGeodesicPreview({ scene, globe, frequency = 48, grid
   const globeMaterialSnapshot = muteGlobeMaterial(globe);
 
   let disposed = false;
-  let lastRefreshKey = "";
+  let lastColorKey = "";
+  let lastGlyphKey = "";
+  let lastParticleKey = "";
 
   return {
     ok: true,
@@ -54,18 +56,28 @@ export async function createGeodesicPreview({ scene, globe, frequency = 48, grid
     mesh,
     glyphLayer,
     particleLayer,
-    refresh({ fields, viewSpec, frame = 0, force = false } = {}) {
+    refresh({ fields, viewSpec, frame = 0, fieldRevision = 0, force = false } = {}) {
       if (disposed) return;
       const g = viewSpec?.glyph;
       const p = viewSpec?.particles;
       const glyphKey = g ? `${g.kind}:${g.rotate ?? "_"}:${g.size ?? "_"}:${g.length}:${g.stride}` : "";
       const particleKey = p ? `${p.advect}:${p.count}:${p.length}:${p.speed}:${p.fade}:${p.size}:${p.color?.join(",")}` : "";
-      const key = `${frame}:${viewSpec?.id ?? ""}:${glyphKey}:${particleKey}`;
-      if (!force && key === lastRefreshKey) return;
-      lastRefreshKey = key;
-      refreshColors({ grid, geometry, fields, viewSpec });
-      glyphLayer.populate({ grid, tileGeometry: geometry, fields, viewSpec });
-      particleLayer.populate({ fields, viewSpec, frame });
+      const viewId = viewSpec?.id ?? "";
+      const colorKey = `${viewId}:${fieldRevision}`;
+      if (force || colorKey !== lastColorKey) {
+        lastColorKey = colorKey;
+        refreshColors({ grid, geometry, fields, viewSpec });
+      }
+      const nextGlyphKey = `${viewId}:${glyphKey}:${fieldRevision}`;
+      if (force || nextGlyphKey !== lastGlyphKey) {
+        lastGlyphKey = nextGlyphKey;
+        glyphLayer.populate({ grid, tileGeometry: geometry, fields, viewSpec });
+      }
+      const nextParticleKey = `${viewId}:${particleKey}:${frame}`;
+      if (force || nextParticleKey !== lastParticleKey) {
+        lastParticleKey = nextParticleKey;
+        particleLayer.populate({ fields, viewSpec, frame });
+      }
     },
     update() {},
     dispose() {

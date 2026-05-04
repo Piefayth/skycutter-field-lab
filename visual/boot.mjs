@@ -204,6 +204,7 @@ function updateAll({ force = false } = {}) {
     fields: state.fields,
     viewSpec: recipes.viewById?.(ui.viewSelect.value),
     frame: runtime.frame,
+    fieldRevision: state.__fieldRevision ?? 0,
     force,
   });
   if (force || runtime.frame - lastMetricsRefreshFrame >= 6) {
@@ -279,6 +280,7 @@ async function syncGeodesicPreview() {
       fields: state.fields,
       viewSpec: recipes.viewById?.(ui.viewSelect.value),
       frame: runtime.frame,
+      fieldRevision: state.__fieldRevision ?? 0,
       force: true,
     });
     showToast(`geodesic view: ${preview.grid.cellCount} cells`);

@@ -19,12 +19,22 @@ import { clamp, lerp } from "../kernel/kernel.mjs";
 export function rampFromStops(fieldName, stops, range) {
   const [lo, hi] = range;
   const span = hi - lo;
-  const sample = (value) => {
-    if (!Number.isFinite(value)) return [80, 60, 90];
+  const writeSample = (value, data, k) => {
+    if (!Number.isFinite(value)) {
+      data[k + 0] = 80;
+      data[k + 1] = 60;
+      data[k + 2] = 90;
+      return;
+    }
     const t = clamp((value - lo) / span, 0, 1);
     // Single-stop is just that color (validator should reject this
     // upstream, but be safe).
-    if (stops.length === 1) return [...stops[0].color];
+    if (stops.length === 1) {
+      data[k + 0] = stops[0].color[0];
+      data[k + 1] = stops[0].color[1];
+      data[k + 2] = stops[0].color[2];
+      return;
+    }
     // Find the segment containing t. Stops are sorted ascending.
     let i = 0;
     while (i < stops.length - 1 && t > stops[i + 1].t) i++;
@@ -32,18 +42,18 @@ export function rampFromStops(fieldName, stops, range) {
     const b = stops[i + 1] ?? a;
     const segSpan = b.t - a.t;
     const segT = segSpan > 0 ? (t - a.t) / segSpan : 0;
-    return [
-      Math.round(lerp(a.color[0], b.color[0], segT)),
-      Math.round(lerp(a.color[1], b.color[1], segT)),
-      Math.round(lerp(a.color[2], b.color[2], segT)),
-    ];
+    data[k + 0] = Math.round(lerp(a.color[0], b.color[0], segT));
+    data[k + 1] = Math.round(lerp(a.color[1], b.color[1], segT));
+    data[k + 2] = Math.round(lerp(a.color[2], b.color[2], segT));
+  };
+  const sample = (value) => {
+    const rgb = [0, 0, 0];
+    writeSample(value, rgb, 0);
+    return rgb;
   };
   const color = (i, fields) => sample(fields[fieldName]?.[i] ?? 0);
   color.write = (i, fields, data, k) => {
-    const rgb = sample(fields[fieldName]?.[i] ?? 0);
-    data[k + 0] = rgb[0];
-    data[k + 1] = rgb[1];
-    data[k + 2] = rgb[2];
+    writeSample(fields[fieldName]?.[i] ?? 0, data, k);
   };
   color.fields = [fieldName];
   return color;
@@ -56,8 +66,13 @@ export function rampFromStops(fieldName, stops, range) {
 export function wheelFromRange(fieldName, range) {
   const [lo, hi] = range;
   const span = hi - lo;
-  const sample = (value) => {
-    if (!Number.isFinite(value)) return [80, 60, 90];
+  const writeSample = (value, data, k) => {
+    if (!Number.isFinite(value)) {
+      data[k + 0] = 80;
+      data[k + 1] = 60;
+      data[k + 2] = 90;
+      return;
+    }
     // Wrap into [0, 1) — no clamp, so values outside [a, b] still
     // map to a hue (cyclic data is the whole point).
     const h = ((value - lo) / span % 1 + 1) % 1;
@@ -66,20 +81,22 @@ export function wheelFromRange(fieldName, range) {
     const q = Math.round((1 - f) * 255);
     const t = Math.round(f * 255);
     switch (sector % 6) {
-      case 0: return [255, t, 0];
-      case 1: return [q, 255, 0];
-      case 2: return [0, 255, t];
-      case 3: return [0, q, 255];
-      case 4: return [t, 0, 255];
-      default: return [255, 0, q];
+      case 0: data[k + 0] = 255; data[k + 1] = t;   data[k + 2] = 0;   return;
+      case 1: data[k + 0] = q;   data[k + 1] = 255; data[k + 2] = 0;   return;
+      case 2: data[k + 0] = 0;   data[k + 1] = 255; data[k + 2] = t;   return;
+      case 3: data[k + 0] = 0;   data[k + 1] = q;   data[k + 2] = 255; return;
+      case 4: data[k + 0] = t;   data[k + 1] = 0;   data[k + 2] = 255; return;
+      default: data[k + 0] = 255; data[k + 1] = 0;  data[k + 2] = q;   return;
     }
+  };
+  const sample = (value) => {
+    const rgb = [0, 0, 0];
+    writeSample(value, rgb, 0);
+    return rgb;
   };
   const color = (i, fields) => sample(fields[fieldName]?.[i] ?? 0);
   color.write = (i, fields, data, k) => {
-    const rgb = sample(fields[fieldName]?.[i] ?? 0);
-    data[k + 0] = rgb[0];
-    data[k + 1] = rgb[1];
-    data[k + 2] = rgb[2];
+    writeSample(fields[fieldName]?.[i] ?? 0, data, k);
   };
   color.fields = [fieldName];
   return color;
