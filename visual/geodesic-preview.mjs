@@ -388,7 +388,7 @@ function createParticleLayer(scene, grid) {
   function ensure(spec) {
     const count = Math.max(1, Math.min(20000, spec.count | 0));
     const trailLength = Math.max(2, Math.min(128, spec.length | 0));
-    const size = Number.isFinite(spec.size) ? Math.max(0.5, Math.min(32, spec.size)) : 3;
+    const size = Number.isFinite(spec.size) ? Math.max(0.5, Math.min(32, spec.size)) : 6;
     const key = `${count}:${trailLength}:${size}:${spec.color.join(",")}`;
     if (key === activeKey && geometry) return { count, trailLength };
     disposeMesh();
@@ -414,7 +414,7 @@ function createParticleLayer(scene, grid) {
       sizeAttenuation: false,
       vertexColors: true,
       transparent: true,
-      opacity: 0.9,
+      opacity: 1,
       depthTest: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
@@ -542,7 +542,7 @@ function createParticleLayer(scene, grid) {
     for (let i = 0; i < count; i++) {
       const base = i * trailLength * 3;
       for (let t = 0; t < trailLength; t++) {
-        const intensity = t === 0 ? 1.25 : Math.pow(fade, t) * 0.9;
+        const intensity = t === 0 ? 1.8 : Math.pow(fade, t) * 1.1;
         const src = base + t * 3;
         const dst = vertex * 3;
         positions[dst + 0] = history[src + 0] * sphereR;

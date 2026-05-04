@@ -722,7 +722,7 @@ function glyphFromViewBlock(block) {
 
 // Optional sibling clause inside a `view` block:
 //
-//   particles advect=wind count=3500 length=18 speed=0.8 fade=0.92 size=3 color [235, 245, 255]
+//   particles advect=wind count=3500 length=18 speed=0.8 fade=0.92 size=6 color [235, 245, 255]
 //
 // `advect=FIELD` is required and must reference a vec2 field at
 // validation time. Other args are render-only knobs with conservative
@@ -743,7 +743,7 @@ function particlesFromViewBlock(block) {
     length: Number.isFinite(numericArgs.length) ? Math.round(numericArgs.length) : 16,
     speed: Number.isFinite(numericArgs.speed) ? numericArgs.speed : 0.8,
     fade: Number.isFinite(numericArgs.fade) ? numericArgs.fade : 0.9,
-    size: Number.isFinite(numericArgs.size) ? numericArgs.size : 3,
+    size: Number.isFinite(numericArgs.size) ? numericArgs.size : 6,
     color: colorMatch
       ? [Number(colorMatch[1]), Number(colorMatch[2]), Number(colorMatch[3])]
       : [235, 245, 255],
