@@ -20,6 +20,10 @@ const INIT_CELL_KINDS = new Set([
   "actionVerb", "controlKw", "mathFn", "mathConst", "builtin",
   "logicalOp", "literal", "modifier",
 ]);
+const EDGE_BODY_KINDS = new Set([
+  "actionVerb", "mathFn", "mathConst", "builtin",
+  "logicalOp", "literal", "modifier",
+]);
 
 const TOP_LEVEL_COMPLETIONS = [
   keywordOption("recipe", "recipe \"Name\"", 30),
@@ -116,6 +120,7 @@ export function classifyContext(ctx) {
   if (/^\s*(import|use)(\s|$)/.test(line)) {
     return { mode: "v2Import" };
   }
+  if (ctx.stack.at(-1) === "edge") return { mode: "edgeBody" };
   if (ctx.cursor?.mode) return { mode: ctx.cursor.mode };
 
   let inner = null;
@@ -128,6 +133,7 @@ export function classifyContext(ctx) {
   if (!inner) return { mode: "topLevel" };
   if (inner === "for") return { mode: "initCellBody" };
   if (inner === "cell") return { mode: "cellBody" };
+  if (inner === "edge") return { mode: "edgeBody" };
   if (inner === "view") return { mode: "viewBody" };
   if (inner === "palette") return { mode: "paletteBody" };
   if (inner === "stage") return { mode: "stageBody" };
@@ -175,7 +181,7 @@ function buildOptions(docText, ctx, mode, prefix) {
   const grammarOptions = optionsForGrammarPosition(ctx, mode, prefix);
   if (grammarOptions) return grammarOptions;
 
-  const allowDeclared = mode.mode === "cellBody" || mode.mode === "initCellBody"
+  const allowDeclared = mode.mode === "cellBody" || mode.mode === "edgeBody" || mode.mode === "initCellBody"
     || mode.mode === "presetBody" || mode.mode === "stageBody"
     || mode.mode === "viewBody";
 
@@ -211,7 +217,9 @@ function symbolsForMode(mode) {
         s.kind === "declarationKw" || s.kind === "primVerb" || s.kind === "controlKw"
       );
     case "cellBody":
-      return DSL_SYMBOLS.filter((s) => STAGE_BODY_KINDS.has(s.kind));
+      return DSL_SYMBOLS.filter((s) => STAGE_BODY_KINDS.has(s.kind) && s.name !== "flux");
+    case "edgeBody":
+      return DSL_SYMBOLS.filter((s) => EDGE_BODY_KINDS.has(s.kind) && (s.name === "let" || s.name === "flux" || s.kind !== "actionVerb"));
     case "presetBody":
       return DSL_SYMBOLS.filter((s) => PRESET_BODY_KINDS.has(s.kind));
     case "viewBody":
@@ -272,6 +280,7 @@ function optionsForGrammarPosition(ctx, mode, prefix) {
         keywordOption("reads", "reads field1, field2", 30),
         keywordOption("writes", "writes field1, field2", 30),
         keywordOption("cell", "cell { ... }", 30),
+        keywordOption("edge", "edge n in neighbors { ... }", 30),
       ]);
     }
   }
@@ -342,6 +351,16 @@ function optionsForGrammarPosition(ctx, mode, prefix) {
         keywordOption("region", "region field at ...", 30),
         keywordOption("for", "for each cell { ... }", 30),
         ...(ctx.stack.includes("stamp") ? [keywordOption("on", "on press|drag { ... }", 30)] : []),
+      ]);
+    }
+  }
+
+  if (mode.mode === "edgeBody") {
+    if (/^\s*flux\s+$/.test(line)) return structural(fieldsFromAst(ctx));
+    if (initial || /^\s*[A-Za-z_]*$/.test(trimmed)) {
+      return structural([
+        keywordOption("let", "let name = expr", 30),
+        keywordOption("flux", "flux field = expr", 30),
       ]);
     }
   }

@@ -165,18 +165,31 @@ export async function makeHarness({ recipeDsl, dsl, frequency = 16 } = {}) {
       // History-field passes must not swap mid-tick — rotation
       // happens via rotateHistory at end-of-tick.
       const swapAfter = !historyFieldSet.has(pass.field);
-      runtime.runCellPass({
-        key: pass.key,
-        source: pass.source,
-        field: pass.field,
-        reads: pass.reads,
-        prevReads: pass.prevReads,
-        uniforms,
-        needsNeighbors: pass.needsNeighbors,
-        kernelSpecs: pass.kernelSpecs ?? [],
-        params,
-        swapAfter,
-      });
+      if (pass.kind === "edgeFlux") {
+        runtime.runEdgeFluxPass({
+          key: pass.key,
+          source: pass.source,
+          applySource: pass.applySource,
+          field: pass.field,
+          reads: pass.reads,
+          uniforms,
+          params,
+          swapAfter,
+        });
+      } else {
+        runtime.runCellPass({
+          key: pass.key,
+          source: pass.source,
+          field: pass.field,
+          reads: pass.reads,
+          prevReads: pass.prevReads,
+          uniforms,
+          needsNeighbors: pass.needsNeighbors,
+          kernelSpecs: pass.kernelSpecs ?? [],
+          params,
+          swapAfter,
+        });
+      }
     },
 
     // Run every pass in declared order — equivalent to one tick of

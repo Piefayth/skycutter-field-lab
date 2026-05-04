@@ -669,6 +669,12 @@ export const STAGE_BLOCKS = [
     doc: "Per-cell continuous math. Each cell runs the body in parallel; bare field reads come from the start-of-stage snapshot, while `add` / `set` update the output accumulator for the stage's target field. Use `let` locals for sequencing. Reaction terms, growth, decay, neighbor reductions, coordinate queries, diffusion, and advection all live here in v2. Each stage contains exactly one `cell { }` block.",
     example: "cell {\n  let lap = mean n in neighbors { u@n - u }\n  let damp = damping * (u - u@prev)\n  set u = 2 * u - u@prev + speed*speed*lap - damp\n}",
   },
+  {
+    name: "edge",
+    signature: "edge n in neighbors { flux FIELD = EXPR }",
+    doc: "Conservative scalar transfer over graph edges. For each directed neighbor edge, EXPR computes nonnegative flow out of the current cell into neighbor `n`; `field@n` reads the neighbor endpoint. The runtime applies outgoing and incoming flux in a second pass, scaling outgoing flow so a cell cannot send more of FIELD than it currently has. First version supports f32 fields and the immediate `neighbors` graph only.",
+    example: "edge n in neighbors {\n  flux water = water * max(height - height@n, 0) * runoff * dt\n}",
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -735,6 +741,12 @@ export const ACTION_VERBS = [
     signature: "set FIELD = EXPR | set FIELD at brush.pos, radius=R, value=V",
     doc: "In cell / for-each bodies, overwrites FIELD's output accumulator with EXPR for the current cell. In scenario / stamp bodies, `set FIELD = EXPR` fills the whole field, while `set FIELD at ..., radius=..., value=...` assigns a geodesic brush disk exactly. Use the set-at form to erase or author persistent source layers without additive `spot` falloff.",
     example: "set burning = 1\n// stamp:\nset wall at brush.pos, radius=brush.r, value=0",
+  },
+  {
+    name: "flux",
+    signature: "flux FIELD = EXPR",
+    doc: "Edge-block action. Adds EXPR to directed flow of FIELD from the current cell to the edge's bound neighbor. Negative values clamp to zero; total outgoing flow is scaled to available mass in the runtime apply pass. Only valid inside `edge n in neighbors { ... }`.",
+    example: "flux herbivore = herbivore * max(food@n - food, 0) * mobility * dt",
   },
 ];
 
@@ -816,8 +828,8 @@ export const BLOCK_KEYWORDS = [
   },
   {
     name: "stage",
-    signature: 'stage NAME [\"Label\"] { reads ... writes ... cell { ... } }',
-    doc: "A pipeline stage inside `step { }`. v2 stages contain exactly one `cell { }` block (plus `reads` / `writes` clauses). Each pass reads the current buffers at dispatch; ordinary writes swap into visibility for later stages, but history-field writes wait for tick-end rotation.",
+    signature: 'stage NAME [\"Label\"] { reads ... writes ... cell { ... } | edge n in neighbors { ... } }',
+    doc: "A pipeline stage inside `step { }`. v2 stages contain exactly one compute block: either `cell { }` for per-cell updates or `edge n in neighbors { }` for conservative nearest-neighbor flux. Each pass reads the current buffers at dispatch; ordinary writes swap into visibility for later stages, but history-field writes wait for tick-end rotation.",
     example: 'stage propagate "Wave step" {\n  reads u\n  writes u\n  cell {\n    let lap = sum n in neighbors { u@n - u }\n    set u = 2*u - u@prev + speed*speed*lap\n  }\n}',
   },
   {
@@ -1086,6 +1098,10 @@ const WGSL_RESERVED_WORDS = [
   // hits when recipe authors reach for it as the loop-variable name
   // ("next state" in cyclic CAs, "destination value" in updates, etc.)
   "target",
+  // Future WGSL interpolation / layout words that current validators
+  // reject in shaders even though they are easy names for authors to
+  // choose in recipes.
+  "smooth",
 ];
 
 // Names reserved across the whole DSL — anything a recipe author cannot

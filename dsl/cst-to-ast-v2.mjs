@@ -116,6 +116,7 @@ function validateStrictRecipeCst(cst) {
     else if (block.keyword === "scenario" || block.keyword === "stamp") validateInitBlock(block);
     else if (block.keyword === "on") validateStampPhaseBlock(block);
     else if (block.keyword === "cell" || block.keyword === "for" || block.keyword === "when") validateCellLikeBlock(block);
+    else if (block.keyword === "edge") validateEdgeBlock(block);
     else if (block.keyword === "palette") validatePaletteBlock(block);
     else if (block.keyword === "view") validateViewBlock(block);
   }
@@ -126,7 +127,7 @@ function validateBlockPlacement(block) {
   const ok =
     (["step", "views", "stamps", "scenarios"].includes(block.keyword) && parent === "root")
     || (block.keyword === "stage" && parent === "step")
-    || (block.keyword === "cell" && parent === "stage")
+    || ((block.keyword === "cell" || block.keyword === "edge") && parent === "stage")
     || (block.keyword === "when" && (parent === "cell" || parent === "for" || parent === "when" || parent === "view"))
     || (block.keyword === "for" && (parent === "scenario" || parent === "stamp" || parent === "on"))
     || (block.keyword === "on" && parent === "stamp")
@@ -151,8 +152,9 @@ function validateStepBlock(block) {
 }
 
 function validateStageBlock(block) {
-  const allowed = new Set(["reads", "writes", "cell"]);
+  const allowed = new Set(["reads", "writes", "cell", "edge"]);
   let cellCount = 0;
+  let edgeCount = 0;
   for (const stmt of sorted(block.statements)) {
     if (!allowed.has(stmt.keyword)) {
       if (["advect", "wind", "diffuse", "clamp", "normalize"].includes(stmt.keyword)) {
@@ -161,9 +163,18 @@ function validateStageBlock(block) {
       throw new Error(`v2 parse: stage ${block.id}: unknown clause "${stmt.keyword}"`);
     }
     if (stmt.keyword === "cell") cellCount++;
+    if (stmt.keyword === "edge") {
+      edgeCount++;
+      const words = wordsFrom(stmt.cleanText);
+      if (words[0] !== "edge" || !words[1] || words[2] !== "in" || words[3] !== "neighbors") {
+        throw new Error(`v2 parse: stage ${block.id}: edge block must be \`edge n in neighbors { ... }\``);
+      }
+    }
   }
-  if (cellCount === 0) throw new Error(`v2 parse: stage ${block.id}: missing cell { } block (or legacy primitive)`);
+  if (cellCount + edgeCount === 0) throw new Error(`v2 parse: stage ${block.id}: missing cell { } or edge n in neighbors { } block`);
   if (cellCount > 1) throw new Error(`v2 parse: stage ${block.id}: only one cell { } block per stage`);
+  if (edgeCount > 1) throw new Error(`v2 parse: stage ${block.id}: only one edge n in neighbors { } block per stage`);
+  if (cellCount > 0 && edgeCount > 0) throw new Error(`v2 parse: stage ${block.id}: use either cell { } or edge n in neighbors { }, not both`);
 }
 
 function validateSectionBlock(block, childKeywords, statementKeywords) {
@@ -214,6 +225,13 @@ function validateCellLikeBlock(block) {
   for (const stmt of sorted(block.statements)) {
     if (block.keyword === "for" && stmt.keyword === "for") continue;
     if (!allowed.has(stmt.keyword)) throw new Error(`v2 parse: ${block.keyword} body: unknown action "${stmt.keyword}"`);
+  }
+}
+
+function validateEdgeBlock(block) {
+  const allowed = new Set(["let", "flux"]);
+  for (const stmt of sorted(block.statements)) {
+    if (!allowed.has(stmt.keyword)) throw new Error(`v2 parse: edge body: unknown action "${stmt.keyword}"`);
   }
 }
 
@@ -339,6 +357,34 @@ export function cellActionCstToAst(cst, stmt) {
   throw new Error(`v2 CST projection: unsupported cell action ${stmt.keyword}`);
 }
 
+export function edgeActionsCstToAst(cst, edgeBlock) {
+  const statements = [...(edgeBlock?.statements ?? [])]
+    .filter((stmt) => ["let", "flux"].includes(stmt.keyword))
+    .sort((a, b) => a.from - b.from);
+  return statements.map((stmt) => edgeActionCstToAst(cst, stmt));
+}
+
+export function edgeActionCstToAst(cst, stmt) {
+  if (!stmt || stmt.type !== "Statement") throw new Error("v2 CST projection: missing edge action statement");
+  if (stmt.keyword === "let") {
+    if (!stmt.parts.local?.name) throw new Error("v2 CST projection: incomplete edge let action");
+    return {
+      type: "let",
+      name: stmt.parts.local.name,
+      expr: expressionCstToAst(firstExpression(stmt)),
+    };
+  }
+  if (stmt.keyword === "flux") {
+    if (!stmt.parts.target?.name) throw new Error("v2 CST projection: incomplete flux action");
+    return {
+      type: "flux",
+      field: stmt.parts.target.name,
+      expr: expressionCstToAst(firstExpression(stmt)),
+    };
+  }
+  throw new Error(`v2 CST projection: unsupported edge action ${stmt.keyword}`);
+}
+
 export function stageCstToAst(cst, stageBlock) {
   if (!stageBlock || stageBlock.keyword !== "stage") {
     throw new Error("v2 CST projection: expected stage block");
@@ -360,6 +406,17 @@ export function stageCstToAst(cst, stageBlock) {
   const cellBlock = (stageBlock.children ?? []).find((block) => block.keyword === "cell");
   if (cellBlock) {
     statements.push({ type: "cell", actions: cellActionsCstToAst(cst, cellBlock) });
+  }
+  const edgeBlock = (stageBlock.children ?? []).find((block) => block.keyword === "edge");
+  if (edgeBlock) {
+    const edgeStmt = (stageBlock.statements ?? []).find((stmt) => stmt.keyword === "edge" && stmt.from === edgeBlock.from);
+    const words = wordsFrom(edgeStmt?.cleanText ?? "");
+    statements.push({
+      type: "edge",
+      coord: words[1] ?? edgeBlock.id,
+      source: { kind: "neighbors" },
+      actions: edgeActionsCstToAst(cst, edgeBlock),
+    });
   }
   return {
     id: stageBlock.id,

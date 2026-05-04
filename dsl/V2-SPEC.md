@@ -32,7 +32,9 @@ Compared to v1:
 - Special primitives (`diffuse`, `clamp`, `advect`, `wind`, `normalize`)
   collapse into the universal `cell { ... }` block. Each is now expressible as
   one or two lines of cell expression.
-- Stage shape: exactly one `cell { }` block per stage. Locals do sequencing.
+- Stage shape: exactly one compute block per stage: `cell { }` for per-cell
+  updates or `edge n in neighbors { }` for conservative nearest-neighbor flux.
+  Locals do sequencing.
 - Manual `history N` field declarations are gone — history depth is inferred from
   `@prev` usage.
 - New: `derived` fields (computed-by-stage, not paintable) and `metric`
@@ -581,6 +583,13 @@ step {
     writes abs_u
     cell { set abs_u = abs(u) }
   }
+  stage runoff {
+    reads water, height
+    writes water
+    edge n in neighbors {
+      flux water = water * max(height - height@n, 0) * runoffRate * dt
+    }
+  }
 }
 ```
 
@@ -613,8 +622,8 @@ are the sequencing tool. `add f = expr` updates the output accumulator for
 
 ### Stage rules (validator-enforced)
 
-- Exactly one `cell { }` block per stage. (No multiple `cell` blocks; no `each`
-  block; no `event` block — events fold into `cell` via `when`.)
+- Exactly one compute block per stage: either one `cell { }` block or one
+  `edge n in neighbors { }` block. No mixing cell+edge in the same stage.
 - One `set` per field per `cell` block. Use locals for sequential
   computation.
 - `add f = expr` is sugar for `set f = f + expr` (using stage-input `f`).
@@ -623,6 +632,40 @@ are the sequencing tool. `add f = expr` updates the output accumulator for
 - Multiple stages may write the same field (last write in source order wins).
   EXCEPTION: a field with any `@prev` read anywhere can be written by exactly
   one stage per step.
+
+### Edge flux blocks
+
+```
+stage runoff {
+  reads water, height
+  writes water
+  edge n in neighbors {
+    let drop = max((height + water * 0.1) - (height@n + water@n * 0.1), 0)
+    flux water = water * drop * runoff * dt
+  }
+}
+```
+
+`edge n in neighbors { ... }` is a graph-parallel pattern with a known safe
+GPU lowering:
+
+1. A directed-edge pass evaluates `flux FIELD = EXPR` for every
+   `(cell -> neighbor)` edge.
+2. An apply pass subtracts outgoing flux from each source cell and adds incoming
+   flux from neighboring cells.
+3. Negative flux clamps to zero. If a cell's raw outgoing total exceeds its
+   current FIELD value, outgoing flux is scaled so the cell cannot send more
+   mass than it has.
+
+The first version is intentionally narrow:
+
+- `flux` targets must be `f32` fields.
+- Source is exactly `neighbors`; no `ring`, `disk`, or metric kernel edge flux
+  yet.
+- Edge expressions can read bare fields at the current cell and `field@n` at the
+  neighbor endpoint. Nested stencils (`sum n in neighbors`, `gradient`,
+  `divergence`, `@upstream`, `@prev`) are rejected inside edge flux; compute
+  those into fields in a preceding `cell` stage.
 
 ## Expressions
 
@@ -780,6 +823,11 @@ Inside `cell { ... }`:
 - `when condition { actions }` — predicated actions
 - (no `emit` action; see "Events" below for why)
 
+Inside `edge n in neighbors { ... }`:
+
+- `let name = expr` — local binding, scoped to the edge block
+- `flux field = expr` — directed conservative transfer from this cell to `n`
+
 Inside `for each cell { ... }` (in scenarios only): same actions plus
 geo-helpers.
 
@@ -925,9 +973,15 @@ explicit-previous-reads), and `dsl/typecheck-v2.mjs` (assignment-shape
   recipe shadows the geo `u` projection coord, and the WGSL compiler
   resolves `u` to the field-read first by definition. *(`RESERVED_NAMES`
   in dsl-spec.mjs covers the cannot-shadow set)*
-- Each stage has exactly one `cell { }` block. *(parser)*
+- Each stage has exactly one compute block: `cell { }` or
+  `edge n in neighbors { }`. *(parser)*
 - `add f = expr` requires `f` in `reads`. *(v1)*
 - `set f = expr` requires `f` in `writes`. *(v1)*
+- `flux f = expr` requires `f` in both `reads` and `writes`, and `f` must be
+  an `f32` field. *(v1 + typecheck-v2)*
+- Edge flux expressions only support bare current-cell field reads and
+  `field@n` neighbor endpoint reads; nested stencil/temporal/continuous
+  coordinate queries are rejected. *(v1 structural validator)*
 - Every `reads` and `writes` field must be declared. *(v1)*
 - Every `derived` field must be in `writes` of at least one stage.
   *(v2)*

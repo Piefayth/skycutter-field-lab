@@ -397,6 +397,34 @@ test("compiles a multi-stage v2 pipeline into stage passes", () => {
   assert(compiled.stages.every((stage) => Array.isArray(stage.passes)), "stage passes missing");
 });
 
+test("edge flux stage emits compute and apply WGSL passes", () => {
+  const recipe = compileV2(`
+recipe "Edge"
+substrate geodesic frequency 16
+field water: f32
+field height: f32
+param rate slider 0..1 step 0.01 default 1
+
+step {
+  stage runoff {
+    reads water, height
+    writes water
+    edge n in neighbors {
+      let drop = max(height - height@n, 0)
+      flux water = water * drop * rate
+    }
+  }
+}
+`);
+  const pipe = compileWebGpuGeodesicPipeline(recipe.dsl);
+  const [pass] = pipe.stages[0].passes;
+  assert(pass.kind === "edgeFlux", `expected edgeFlux pass, got ${pass.kind}`);
+  assert(pass.source.includes("var<storage, read_write> edgeFlux"), "edge pass writes edgeFlux scratch");
+  assert(pass.source.includes("let _edge_n_height"), "edge pass binds neighbor endpoint fields");
+  assert(pass.applySource.includes("rawOutgoing"), "apply pass computes outgoing totals");
+  assert(pass.applySource.includes("reverseFlux"), "apply pass gathers incoming reverse-edge flux");
+});
+
 test("validator rejects history field with no writing stage", () => {
   // V2 infers history from `@prev` usage. If a field is referenced
   // with @prev but no stage writes it, the inferred-history rule

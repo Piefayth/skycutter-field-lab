@@ -20,6 +20,7 @@ export const FEATURE_NAMES = [
   "ringReduce",
   "diskReduce",
   "kernelReduce",
+  "edgeFlux",
   "ternary",
   "when",
   "countWhere",
@@ -116,6 +117,9 @@ export function bucketKey(vec) {
 
 function visitStageStatement(stmt, vec) {
   if (stmt?.type === "cell") {
+    for (const action of stmt.actions ?? []) visitCellAction(action, vec);
+  } else if (stmt?.type === "edge") {
+    vec.edgeFlux++;
     for (const action of stmt.actions ?? []) visitCellAction(action, vec);
   }
 }

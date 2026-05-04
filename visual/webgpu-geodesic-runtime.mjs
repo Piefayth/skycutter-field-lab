@@ -72,6 +72,7 @@ export class WebGpuGeodesicRuntime {
     this.bindGroups = new Map();
     this.bindLayouts = new Map();
     this.metricKernels = new Map();
+    this.edgeFluxBuffers = new Map();
 
     this.positionsBuffer = makeStorageBuffer(device, grid.positions, GPUBufferUsage.STORAGE);
     this.neighborsBuffer = makeStorageBuffer(device, grid.neighbors, GPUBufferUsage.STORAGE);
@@ -352,6 +353,84 @@ export class WebGpuGeodesicRuntime {
     if (swapAfter) this.swap(field);
   }
 
+  runEdgeFluxPass({ key, source, applySource, field, reads = [], uniforms = null, params = {}, swapAfter = true }) {
+    this.writeUniforms(uniforms ?? new Float32Array([0, 0, this.cellCount, 0]));
+    const fluxBuffer = this.edgeFluxBuffer(key);
+
+    const computePipeline = this.pipeline(`${key}:compute`, source);
+    const computeEntries = [];
+    const computeTokenParts = [`${key}:compute`];
+    let binding = 0;
+    for (const name of reads) {
+      computeEntries.push({ binding, resource: { buffer: this.currentBuffer(name) } });
+      computeTokenParts.push(`r:${name}:${this.fieldBufferToken(name, "current")}`);
+      binding++;
+    }
+    computeEntries.push({ binding, resource: { buffer: fluxBuffer } });
+    computeTokenParts.push(`flux:${key}`);
+    binding++;
+    computeEntries.push({ binding, resource: { buffer: this.paramsBuffer } });
+    binding++;
+    computeEntries.push({ binding, resource: { buffer: this.positionsBuffer } });
+    binding++;
+    computeEntries.push({ binding, resource: { buffer: this.neighborsBuffer } });
+    binding++;
+    computeEntries.push({ binding, resource: { buffer: this.neighborCountsBuffer } });
+
+    const computeBindGroup = this.cachedBindGroup(
+      computePipeline,
+      computeTokenParts.join("|"),
+      computeEntries,
+    );
+    this.dispatch(computePipeline, computeBindGroup);
+
+    const applyPipeline = this.pipeline(`${key}:apply`, applySource);
+    const applyEntries = [
+      { binding: 0, resource: { buffer: this.currentBuffer(field) } },
+      { binding: 1, resource: { buffer: fluxBuffer } },
+      { binding: 2, resource: { buffer: this.nextBuffer(field) } },
+      { binding: 3, resource: { buffer: this.paramsBuffer } },
+      { binding: 4, resource: { buffer: this.neighborsBuffer } },
+      { binding: 5, resource: { buffer: this.neighborCountsBuffer } },
+    ];
+    const applyBindGroup = this.cachedBindGroup(
+      applyPipeline,
+      [
+        `${key}:apply`,
+        `r:${field}:${this.fieldBufferToken(field, "current")}`,
+        `w:${field}:${this.fieldBufferToken(field, "next")}`,
+        `flux:${key}`,
+      ].join("|"),
+      applyEntries,
+    );
+    this.dispatch(applyPipeline, applyBindGroup);
+    if (swapAfter) this.swap(field);
+  }
+
+  cachedBindGroup(pipeline, key, entries) {
+    let bindGroup = this.bindGroups.get(key);
+    if (!bindGroup) {
+      bindGroup = this.device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(0),
+        entries,
+      });
+      this.bindGroups.set(key, bindGroup);
+    }
+    return bindGroup;
+  }
+
+  edgeFluxBuffer(key) {
+    const existing = this.edgeFluxBuffers.get(key);
+    if (existing) return existing;
+    const bytes = alignTo(this.cellCount * 6 * 4, 4);
+    const buffer = this.device.createBuffer({
+      size: bytes,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
+    this.edgeFluxBuffers.set(key, buffer);
+    return buffer;
+  }
+
   fieldBufferToken(name, role, depth = 1) {
     const field = this.ensureField(name);
     if (field.history) {
@@ -420,6 +499,8 @@ export class WebGpuGeodesicRuntime {
       kernel.offsetsBuffer.destroy();
       kernel.entriesBuffer.destroy();
     }
+    for (const buffer of this.edgeFluxBuffers.values()) buffer.destroy();
+    this.edgeFluxBuffers.clear();
     this.paramsBuffer.destroy();
     this.readbackBuffer.destroy();
     for (const field of this.fields.values()) {

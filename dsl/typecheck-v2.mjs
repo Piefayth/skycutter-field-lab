@@ -104,8 +104,11 @@ function buildContext(schema) {
 function typecheckStage(stage, ctx) {
   const label = `stage "${stage.id}"`;
   for (const statement of stage.body?.statements ?? []) {
-    if (statement.type !== "cell") continue;
-    typecheckActionList(statement.actions ?? [], new Map(), ctx, label);
+    if (statement.type === "cell") {
+      typecheckActionList(statement.actions ?? [], new Map(), ctx, label);
+    } else if (statement.type === "edge") {
+      typecheckEdgeActionList(statement.actions ?? [], new Map(), ctx, `${label} edge`);
+    }
   }
 }
 
@@ -189,6 +192,30 @@ function typecheckActionList(actions, locals, ctx, label) {
       }
       typecheckActionList(action.actions ?? [], new Map(locals), ctx, `${label} when`);
     }
+  }
+}
+
+function typecheckEdgeActionList(actions, locals, ctx, label) {
+  for (const action of actions) {
+    if (action.type === "let") {
+      const t = typeOfExpr(action.expr, locals, ctx, `${label} let ${action.name}`);
+      locals.set(action.name, t);
+    } else if (action.type === "flux") {
+      checkFluxAssignment(action.field, action.expr, ctx, `${label} flux ${action.field}`, locals);
+    }
+  }
+}
+
+function checkFluxAssignment(fieldName, expr, ctx, label, locals = new Map()) {
+  const declaredType = ctx.fieldTypes.get(fieldName);
+  if (!declaredType) return;
+  if (declaredType !== "f32") {
+    throwTypeError(`${label}: edge flux currently supports f32 fields only; "${fieldName}" is ${declaredType}`);
+  }
+  const exprType = typeOfExpr(expr, locals, ctx, label);
+  if (exprType === "unknown") return;
+  if (exprType !== "f32") {
+    throwTypeError(`${label}: edge flux amount must be scalar f32, got ${exprType}`);
   }
 }
 

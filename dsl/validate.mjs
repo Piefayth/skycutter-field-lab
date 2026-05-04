@@ -59,7 +59,7 @@ function collectParamRefs(body, declaredParams) {
 }
 
 function collectParamRefsFromStatement(statement, add) {
-  if (statement.type === "cell" || statement.type === "each") {
+  if (statement.type === "cell" || statement.type === "each" || statement.type === "edge") {
     for (const action of statement.actions ?? []) collectParamRefsFromAction(action, add);
   } else if (statement.type === "event") {
     collectParamRefsFromExpr(statement.condition, add);
@@ -82,7 +82,7 @@ function collectParamRefsFromStatement(statement, add) {
 function collectParamRefsFromAction(action, add) {
   if (action.type === "let") {
     collectParamRefsFromExpr(action.expr, add);
-  } else if (action.type === "add" || action.type === "set") {
+  } else if (action.type === "add" || action.type === "set" || action.type === "flux") {
     collectParamRefsFromExpr(action.expr, add);
   } else if (action.type === "when") {
     collectParamRefsFromExpr(action.condition, add);
@@ -471,10 +471,67 @@ function validatePresetCellActions(actions, declaredFields, declaredParams, decl
 // `normalize` statement shapes are rejected upstream by strict CST projection
 // with redirect messages.
 function validateStatement(statement, stage, reads, writes, declares, visibleFields, declaredParams, declaredConstants, declaredPlanet, imports) {
+  if (statement.type === "edge") {
+    validateEdgeActions(statement.actions, statement.coord, stage, reads, writes, declares, visibleFields, declaredParams, declaredConstants, declaredPlanet, imports);
+    return;
+  }
   if (statement.type !== "cell") {
     throw new Error(`Unknown statement in ${stage.id}: ${statement.type}`);
   }
   validateActions(statement.actions, stage, reads, writes, declares, visibleFields, declaredParams, declaredConstants, declaredPlanet, imports);
+}
+
+function validateEdgeActions(actions, coord, stage, reads, writes, declares, visibleFields, declaredParams, declaredConstants, declaredPlanet, imports, locals = new Set()) {
+  if (!coord) throw new Error(`${stage.id}: edge block requires a neighbor binding name`);
+  for (const action of actions) {
+    if (action.type === "let") {
+      validateLocalName(
+        action.name,
+        `${stage.id} edge let ${action.name}`,
+        new Set([...visibleFields, ...writes, ...declares]),
+        locals,
+      );
+      validateEdgeExpr(action.expr, coord, visibleFields, locals, `${stage.id} edge let ${action.name}`, declaredParams, declaredConstants, declaredPlanet, imports);
+      locals.add(action.name);
+    } else if (action.type === "flux") {
+      requireOutput(action.field, writes, declares, stage.id);
+      requireRead(action.field, reads, stage.id);
+      validateEdgeExpr(action.expr, coord, visibleFields, locals, `${stage.id} flux ${action.field}`, declaredParams, declaredConstants, declaredPlanet, imports);
+    } else {
+      throw new Error(`Unknown edge action in ${stage.id}: ${action.type}`);
+    }
+  }
+}
+
+function validateEdgeExpr(ast, coord, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports) {
+  validateExpr(ast, visibleFields, locals, label, declaredParams, declaredConstants, declaredPlanet, imports, GEO_IDENTIFIERS);
+  rejectUnsupportedEdgeExpr(ast, coord, label);
+}
+
+function rejectUnsupportedEdgeExpr(ast, coord, label) {
+  if (!ast || typeof ast !== "object") return;
+  if (ast.type === "NeighborReduce") {
+    throw new Error(`${label}: edge flux expressions cannot contain neighbor reductions; compute that value in a cell stage first`);
+  }
+  if (ast.type === "CoordRead") {
+    if (ast.coord?.kind !== "neighbor" || ast.coord.binding !== coord) {
+      throw new Error(`${label}: edge flux only supports \`field@${coord}\` coordinate reads`);
+    }
+    return;
+  }
+  if (ast.type === "Call" && ast.callee?.type === "Identifier") {
+    const name = ast.callee.name;
+    if (name === "gradient" || name === "divergence" || name === "prev") {
+      throw new Error(`${label}: ${name}(...) is not supported inside edge flux; compute it in a field first`);
+    }
+  }
+  for (const value of Object.values(ast)) {
+    if (Array.isArray(value)) {
+      for (const child of value) rejectUnsupportedEdgeExpr(child, coord, label);
+    } else if (value && typeof value === "object") {
+      rejectUnsupportedEdgeExpr(value, coord, label);
+    }
+  }
 }
 
 function validateActions(actions, stage, reads, writes, declares, visibleFields, declaredParams, declaredConstants, declaredPlanet, imports, locals = new Set()) {

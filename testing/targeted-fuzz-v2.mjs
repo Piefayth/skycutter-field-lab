@@ -587,7 +587,7 @@ summary "Targeted fuzz: bounded graph-distance ring/disk reductions."
 substrate geodesic frequency 16
 
 field u: f32
-field smooth: f32 derived
+field smoothed: f32 derived
 field shell: f32 derived
 
 param gain slider 0..2 step 0.01 default ${fixed(0.5 + rng())} label "GAIN"
@@ -595,11 +595,11 @@ param gain slider 0..2 step 0.01 default ${fixed(0.5 + rng())} label "GAIN"
 step {
   stage wide {
     reads u
-    writes u, smooth, shell
+    writes u, smoothed, shell
     cell {
       let wideSmooth = mean n in disk(2) { u@n }
       let ringPush = sum n in ring(2) { u@n - u }
-      set smooth = wideSmooth
+      set smoothed = wideSmooth
       set shell = ringPush
       add u = (wideSmooth - u + ringPush * 0.05) * gain * dt
     }
@@ -607,7 +607,7 @@ step {
 }
 
 metric shellEnergy = sum cells { abs(sum n in ring(3) { u@n - u }) }
-metric smoothPeak = max cells { mean n in disk(2) { smooth@n } }
+metric smoothPeak = max cells { mean n in disk(2) { smoothed@n } }
 
 views {
   palette TOPO {

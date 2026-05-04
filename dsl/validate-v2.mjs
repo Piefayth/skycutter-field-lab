@@ -685,9 +685,9 @@ function validateImportsOnSchema(schema) {
   }
   for (const stage of schema.stages ?? []) {
     for (const stmt of stage.body?.statements ?? []) {
-      if (stmt.type === "cell") {
+      if (stmt.type === "cell" || stmt.type === "edge") {
         for (const action of stmt.actions ?? []) {
-          walkActionForImports(action, ctx, `stage "${stage.id}" cell`);
+          walkActionForImports(action, ctx, `stage "${stage.id}" ${stmt.type}`);
         }
         continue;
       }

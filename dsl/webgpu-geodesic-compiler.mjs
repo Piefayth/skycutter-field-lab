@@ -1,11 +1,11 @@
 // =============================================================================
 // WebGPU geodesic DSL compiler slice.
 //
-// V2 has exactly one stage shape: `cell { … }`. Every kernel operation
-// (diffusion, advection, gradient/divergence, reductions, history reads)
-// is expressed as a per-cell expression body — the parser rejects v1's
-// `wind`/`advect`/`diffuse`/`clamp`/`normalize` statement forms and the
-// `each`/`event` stage shapes with redirect messages.
+// V2 has two GPU stage shapes: `cell { … }` for per-cell updates and
+// `edge n in neighbors { flux ... }` for conservative nearest-neighbor
+// transfer. Diffusion/advection/gradient/divergence/reductions/history
+// reads live in cell expressions; edge flux gets a dedicated two-pass
+// lowering because it writes across graph edges without atomics.
 //
 // Math-fn dispatch routes through the unified MATH_FUNCTIONS registry
 // in dsl-spec.mjs — adding a new math fn means adding one entry there;
@@ -24,9 +24,10 @@ export function compileWebGpuGeodesicPipeline(dsl = {}) {
 }
 
 export function compileWebGpuGeodesicStage(stage, dsl = {}) {
-  // Thin wrapper over compileWebGpuGeodesicCellStage. Kept as a separate
-  // export so callers can stay agnostic of the stage shape — historically
-  // this dispatched between cell / each / event; v2 only has `cell`.
+  const statements = stage?.body?.statements ?? [];
+  if (statements.length === 1 && statements[0].type === "edge") {
+    return compileWebGpuGeodesicEdgeStage(stage, dsl);
+  }
   return compileWebGpuGeodesicCellStage(stage, dsl);
 }
 
@@ -49,6 +50,52 @@ export function compileWebGpuGeodesicCellStage(stage, dsl = {}) {
       key: `${stage.id}:${field}`,
     }),
   }));
+}
+
+export function compileWebGpuGeodesicEdgeStage(stage, dsl = {}) {
+  const statements = stage?.body?.statements ?? [];
+  if (statements.length !== 1 || statements[0].type !== "edge") {
+    throw new Error(`${stage?.id ?? "stage"}: WebGPU geodesic compiler currently supports a single edge block`);
+  }
+  const edge = statements[0];
+  const layout = uniformLayout(dsl);
+  const targets = [...new Set((edge.actions ?? [])
+    .filter((action) => action.type === "flux")
+    .map((action) => action.field)
+    .filter(Boolean))];
+  return targets.map((field) => compileEdgeFluxPass({
+    stage,
+    field,
+    edge,
+    reads: stage.reads ?? [],
+    layout,
+    key: `${stage.id}:edge:${field}`,
+  }));
+}
+
+function compileEdgeFluxPass({ stage, field, edge, reads, layout, key }) {
+  const targetActions = filterEdgeActionsForTarget(edge.actions ?? [], field);
+  return {
+    kind: "edgeFlux",
+    stageId: stage.id,
+    key,
+    field,
+    reads,
+    layout,
+    source: compileEdgeFluxShader({
+      stage,
+      field,
+      coord: edge.coord,
+      reads,
+      actions: targetActions,
+      layout,
+    }),
+    applySource: compileEdgeFluxApplyShader({ field, layout }),
+  };
+}
+
+function filterEdgeActionsForTarget(actions, target) {
+  return (actions ?? []).filter((action) => action.type === "let" || (action.type === "flux" && action.field === target));
 }
 
 function compileActionPass({ stage, field, reads, actions, layout, key }) {
@@ -557,6 +604,194 @@ ${indent(body, 2)}
   ${wgslWriteOutput(fieldType, "outValue")}
 }
 `.trim();
+}
+
+function compileEdgeFluxShader({ stage, field, coord, reads, actions, layout }) {
+  const fieldTypes = layout.fieldTypes ?? {};
+  const typeOf = (name) => fieldTypes[name] ?? "f32";
+  const readBindings = reads.map((name, index) =>
+    `@group(0) @binding(${index}) var<storage, read> f_${name}: array<${wgslElemType(typeOf(name))}>;`,
+  );
+  const fluxBinding = reads.length;
+  const paramsBinding = fluxBinding + 1;
+  const positionsBinding = fluxBinding + 2;
+  const neighborsBinding = fluxBinding + 3;
+  const neighborCountsBinding = fluxBinding + 4;
+  const neighborFields = collectNeighborFieldsFromActions(actions, coord);
+  const body = compileEdgeFluxActions(actions, {
+    reads: new Set(reads),
+    target: field,
+    coord,
+    locals: new Set(),
+    layout,
+    fieldReadOverride: (name) => wgslReadAt(name, typeOf(name), "cell"),
+    coordReadResolver: makeCoordReadResolver({
+      neighborCoord: coord,
+      bindingByField: new Map(neighborFields.map((name) => [name, `_edge_${coord}_${name}`])),
+    }),
+  });
+
+  return `
+struct Params {
+  dt: f32,
+  frame: f32,
+  cellCount: f32,
+  pad0: f32,
+${layout.parameters.map((decl) => `  p_${decl.name}: f32,`).join("\n")}
+${layout.constants.map((decl) => `  c_${decl.name}: f32,`).join("\n")}
+${layout.planet.map((name) => `  planet_${name}: f32,`).join("\n")}
+};
+
+${readBindings.join("\n")}
+@group(0) @binding(${fluxBinding}) var<storage, read_write> edgeFlux: array<f32>;
+@group(0) @binding(${paramsBinding}) var<uniform> params: Params;
+@group(0) @binding(${positionsBinding}) var<storage, read> positions: array<f32>;
+@group(0) @binding(${neighborsBinding}) var<storage, read> neighbors: array<i32>;
+@group(0) @binding(${neighborCountsBinding}) var<storage, read> neighborCounts: array<u32>;
+
+const PI: f32 = 3.141592653589793;
+const TAU: f32 = 6.283185307179586;
+
+fn hashNoise(i: f32, seed: f32) -> f32 {
+  var x = u32(i32(i) + 1) ^ ((u32(i32(floor(seed))) + 1013904223u) * 1664525u);
+  x = x ^ (x >> 16u);
+  x = x * 2246822519u;
+  x = x ^ (x >> 13u);
+  x = x * 3266489917u;
+  x = x ^ (x >> 16u);
+  return (f32(x) / 4294967295.0) * 2.0 - 1.0;
+}
+
+@compute @workgroup_size(128)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let cell = id.x;
+  if (cell >= u32(params.cellCount)) {
+    return;
+  }
+  let posOffset = cell * 3u;
+  let sx = positions[posOffset + 0u];
+  let sy = positions[posOffset + 1u];
+  let sz = positions[posOffset + 2u];
+  let lon = atan2(sz, sx);
+  let lat = asin(clamp(sy, -1.0, 1.0));
+  let x = (lon + PI) / TAU;
+  let y = lat / PI + 0.5;
+  let u = x;
+  let v = y;
+  let px = sx;
+  let py = sy;
+  let pz = sz;
+  let i = f32(cell);
+  let N = params.cellCount;
+  let count = neighborCounts[cell];
+  for (var slot: u32 = 0u; slot < 6u; slot = slot + 1u) {
+    edgeFlux[cell * 6u + slot] = 0.0;
+  }
+  for (var slot: u32 = 0u; slot < count; slot = slot + 1u) {
+    let edgeNeighbor = u32(neighbors[cell * 6u + slot]);
+${indent(neighborFields.map((name) => `let _edge_${coord}_${name} = ${wgslReadAt(name, typeOf(name), "edgeNeighbor")};`).join("\n"), 4)}
+    var edgeValue = 0.0;
+${indent(body, 4)}
+    edgeFlux[cell * 6u + slot] = max(0.0, edgeValue);
+  }
+}
+`.trim();
+}
+
+function compileEdgeFluxActions(actions, ctx) {
+  const out = [];
+  for (const action of actions) {
+    if (action.type === "let") {
+      out.push(`let ${action.name} = ${compileExpr(action.expr, ctx)};`);
+      ctx.locals.add(action.name);
+    } else if (action.type === "flux") {
+      if (action.field === ctx.target) {
+        out.push(`edgeValue = edgeValue + ${compileExpr(action.expr, ctx)};`);
+      }
+    } else {
+      throw new Error(`Unsupported WebGPU geodesic edge action: ${action.type}`);
+    }
+  }
+  return out.join("\n");
+}
+
+function compileEdgeFluxApplyShader({ field, layout }) {
+  const fieldType = layout.fieldTypes?.[field] ?? "f32";
+  if (fieldType !== "f32") throw new Error(`edge flux currently supports f32 fields only; got ${fieldType} for ${field}`);
+  return `
+struct Params {
+  dt: f32,
+  frame: f32,
+  cellCount: f32,
+  pad0: f32,
+${layout.parameters.map((decl) => `  p_${decl.name}: f32,`).join("\n")}
+${layout.constants.map((decl) => `  c_${decl.name}: f32,`).join("\n")}
+${layout.planet.map((name) => `  planet_${name}: f32,`).join("\n")}
+};
+
+@group(0) @binding(0) var<storage, read> f_${field}: array<f32>;
+@group(0) @binding(1) var<storage, read> edgeFlux: array<f32>;
+@group(0) @binding(2) var<storage, read_write> outputField: array<f32>;
+@group(0) @binding(3) var<uniform> params: Params;
+@group(0) @binding(4) var<storage, read> neighbors: array<i32>;
+@group(0) @binding(5) var<storage, read> neighborCounts: array<u32>;
+
+fn rawOutgoing(cell: u32) -> f32 {
+  let count = neighborCounts[cell];
+  var out = 0.0;
+  for (var slot: u32 = 0u; slot < count; slot = slot + 1u) {
+    out = out + edgeFlux[cell * 6u + slot];
+  }
+  return out;
+}
+
+fn outgoingScale(cell: u32) -> f32 {
+  let out = rawOutgoing(cell);
+  let available = max(0.0, f_${field}[cell]);
+  return select(1.0, min(1.0, available / max(out, 0.000001)), out > 0.0);
+}
+
+fn reverseFlux(fromCell: u32, toCell: u32) -> f32 {
+  let count = neighborCounts[fromCell];
+  for (var slot: u32 = 0u; slot < count; slot = slot + 1u) {
+    if (neighbors[fromCell * 6u + slot] == i32(toCell)) {
+      return edgeFlux[fromCell * 6u + slot];
+    }
+  }
+  return 0.0;
+}
+
+@compute @workgroup_size(128)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let cell = id.x;
+  if (cell >= u32(params.cellCount)) {
+    return;
+  }
+  let ownRaw = rawOutgoing(cell);
+  let ownOutgoing = ownRaw * outgoingScale(cell);
+  var incoming = 0.0;
+  let count = neighborCounts[cell];
+  for (var slot: u32 = 0u; slot < count; slot = slot + 1u) {
+    let n = u32(neighbors[cell * 6u + slot]);
+    incoming = incoming + reverseFlux(n, cell) * outgoingScale(n);
+  }
+  outputField[cell] = max(0.0, f_${field}[cell] - ownOutgoing + incoming);
+}
+`.trim();
+}
+
+function collectNeighborFieldsFromActions(actions, coord) {
+  const seen = new Set();
+  const out = [];
+  for (const action of actions ?? []) {
+    for (const field of collectNeighborFields(action.expr, coord)) {
+      if (!seen.has(field)) {
+        seen.add(field);
+        out.push(field);
+      }
+    }
+  }
+  return out;
 }
 
 function uniformLayout(dsl) {

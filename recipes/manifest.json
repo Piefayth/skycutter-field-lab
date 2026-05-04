@@ -6,8 +6,10 @@
     "wave-equation",
     "shallow-water",
     "weather-cycle",
+    "runoff-erosion",
     "smoothlife",
     "nonlocal-ecology",
+    "forager-migration",
     "chemotaxis-colony",
     "kuramoto-chimera",
     "ising-model",
@@ -52,6 +54,7 @@
         "wave-equation",
         "shallow-water",
         "weather-cycle",
+        "runoff-erosion",
         "schrodinger",
         "burgers",
         "ice-albedo",
@@ -63,6 +66,7 @@
       "label": "Ecology / Populations",
       "recipes": [
         "klausmeier",
+        "forager-migration",
         "predator-prey",
         "chemotaxis-colony",
         "sir-epidemic"
@@ -147,6 +151,12 @@
       "summary": "A population actively steers up food gradients and away from toxin gradients. Paint food, bugs, and repellent to create clustering, chase fronts, avoidance corridors, and collapsing trails."
     },
     {
+      "id": "forager-migration",
+      "name": "Forager migration (edge flux example)",
+      "path": "recipes/forager-migration.mjs",
+      "summary": "A conserved herd moves through first-class edge flux toward richer neighboring food and away from crowding. Grazing depletes food, regrowth creates fronts, and migration paths form without ordinary diffusion."
+    },
+    {
       "id": "wave-equation",
       "name": "Wave equation (example)",
       "path": "recipes/wave-equation.mjs",
@@ -163,6 +173,12 @@
       "name": "Weather cycle (example)",
       "path": "recipes/weather-cycle.mjs",
       "summary": "Toy planetary weather loop. Land/ocean mask, water, vapor, temperature, clouds, rain, wind, and tides interact: evaporation feeds vapor, wind advects it, condensation rains it back out, and a tide field shoves ocean pressure."
+    },
+    {
+      "id": "runoff-erosion",
+      "name": "Runoff erosion (edge flux example)",
+      "path": "recipes/runoff-erosion.mjs",
+      "summary": "Rain collects on terrain and moves downhill through conservative edge flux. The resulting wet channels erode height, carving drainage basins and ridges on the sphere."
     },
     {
       "id": "vicsek-flock",

@@ -102,7 +102,25 @@ step {
     @@
   }
 }`;
-  assertEq(labels(source, "@@").filter((label) => ["reads", "writes", "cell"].includes(label)), ["reads", "writes", "cell"]);
+  assertEq(labels(source, "@@").filter((label) => ["reads", "writes", "cell", "edge"].includes(label)), ["reads", "writes", "cell", "edge"]);
+});
+
+test("edge body offers edge actions", () => {
+  const source = `
+recipe "S"
+substrate geodesic frequency 16
+field water: f32
+field height: f32
+step {
+  stage runoff {
+    reads water, height
+    writes water
+    edge n in neighbors {
+      @@
+    }
+  }
+}`;
+  assertEq(labels(source, "@@").filter((label) => ["let", "flux", "set", "add"].includes(label)), ["let", "flux"]);
 });
 
 test("source declarations and source references participate in completion", () => {

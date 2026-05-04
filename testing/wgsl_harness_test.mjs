@@ -155,6 +155,48 @@ scenarios { scenario blank "Blank" { set u = 0 } }
     }
   });
 
+  await t.test("edge flux conservatively moves mass to lower neighbors", async () => {
+    const recipe = `
+recipe "Edge Flux"
+substrate geodesic frequency 8
+field water: f32
+field height: f32
+param rate slider 0..1 step 0.01 default 1 label "RATE"
+step {
+  stage runoff {
+    reads water, height
+    writes water
+    edge n in neighbors {
+      flux water = water * max(height - height@n, 0) * rate
+    }
+  }
+}
+`;
+    const h = await makeHarness({ recipeDsl: recipe, frequency: FREQUENCY });
+    try {
+      const water = new Float32Array(h.cellCount);
+      const height = new Float32Array(h.cellCount);
+      water[0] = 1.0;
+      height[0] = 1.0;
+      h.uploadField("water", water);
+      h.uploadField("height", height);
+
+      await h.tick({ params: { rate: 1 } });
+      const out = await h.readField("water");
+      const degree = h.grid.neighborCounts[0];
+      let neighborSum = 0;
+      for (let slot = 0; slot < degree; slot++) {
+        const n = h.grid.neighbors[slot];
+        neighborSum += out[n];
+        assert.ok(closeTo(out[n], 1 / degree, 1e-4), `neighbor ${n}: got ${out[n]}, want ${1 / degree}`);
+      }
+      assert.ok(closeTo(out[0], 0, 1e-4), `source cell: got ${out[0]}, want 0`);
+      assert.ok(closeTo(neighborSum, 1, 1e-4), `neighbor mass: got ${neighborSum}, want 1`);
+    } finally {
+      h.dispose();
+    }
+  });
+
   // -- Test 3: param-driven kinetics ----------------------------------------
   await t.test("param sliders flow through to WGSL uniforms", async () => {
     const recipe = `

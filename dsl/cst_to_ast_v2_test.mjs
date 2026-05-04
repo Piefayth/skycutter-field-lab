@@ -208,6 +208,29 @@ step {
   assertEq(actual, expected);
 });
 
+test("CST stage projection handles edge flux blocks", () => {
+  const source = `
+recipe "Projection"
+substrate geodesic frequency 16
+field water: f32
+field height: f32
+step {
+  stage runoff {
+    reads water, height
+    writes water
+    edge n in neighbors {
+      let drop = max(height - height@n, 0)
+      flux water = water * drop
+    }
+  }
+}`;
+  const cst = parseDslCst(source);
+  const actual = stageCstToAst(cst, cst.blocks.find((block) => block.keyword === "stage"));
+  assertEq(actual.body.statements[0].type, "edge");
+  assertEq(actual.body.statements[0].coord, "n");
+  assertEq(actual.body.statements[0].actions.map((a) => a.type), ["let", "flux"]);
+});
+
 test("CST metric projection handles body and predicate", () => {
   const source = `
 recipe "Projection"

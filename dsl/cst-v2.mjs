@@ -8,7 +8,7 @@
 const BLOCK_KEYWORDS = new Set([
   "views", "stamps", "scenarios",
   "palette", "view", "stamp", "scenario",
-  "step", "stage", "cell", "when", "for", "on",
+  "step", "stage", "cell", "edge", "when", "for", "on",
 ]);
 
 const NAME_DECL_KEYWORDS = new Set([
@@ -273,6 +273,12 @@ function readBlockHeader(sanitized, openBrace) {
   for (let i = matches.length - 1; i >= 0; i--) {
     const word = matches[i][0];
     if (BLOCK_KEYWORDS.has(word)) {
+      if (word === "edge") {
+        const binder = matches[i + 1]?.[0] ?? null;
+        const inTok = matches[i + 2]?.[0] ?? null;
+        const sourceTok = matches[i + 3]?.[0] ?? null;
+        if (!binder || inTok !== "in" || sourceTok !== "neighbors") continue;
+      }
       keyword = word;
       from = headerStart + matches[i].index;
       const next = matches[i + 1]?.[0] ?? null;
@@ -406,8 +412,8 @@ function annotateStatement(stmt) {
     return;
   }
 
-  if (stmt.keyword === "set" || stmt.keyword === "add") {
-    const target = /^\s*(set|add)\s+([A-Za-z_][A-Za-z0-9_]*)?/.exec(line);
+  if (stmt.keyword === "set" || stmt.keyword === "add" || stmt.keyword === "flux") {
+    const target = /^\s*(set|add|flux)\s+([A-Za-z_][A-Za-z0-9_]*)?/.exec(line);
     const targetFrom = line.indexOf(stmt.keyword) + stmt.keyword.length;
     const eq = line.indexOf("=");
     const at = line.indexOf(" at ", afterKeyword);
@@ -429,12 +435,12 @@ function annotateStatement(stmt) {
       annotateNamedArgExpressions(stmt, line, base, addExpr);
       return;
     }
-    addZone(targetFrom, eq >= 0 ? eq : line.length, "fieldName", "assignmentTarget");
+    addZone(targetFrom, eq >= 0 ? eq : line.length, "fieldName", stmt.keyword === "flux" ? "fluxTarget" : "assignmentTarget");
     if (target?.[2]) {
       const rel = line.indexOf(target[2], target.index + target[1].length);
       stmt.parts.target = { name: target[2], from: base + rel, to: base + rel + target[2].length };
     }
-    if (eq >= 0) addExpr(eq + 1, line.length, "assignmentExpr");
+    if (eq >= 0) addExpr(eq + 1, line.length, stmt.keyword === "flux" ? "fluxExpr" : "assignmentExpr");
     return;
   }
 
@@ -1135,7 +1141,7 @@ function innermostBlockForLine(root, blocks, lineStart) {
 function classifyStatement(keyword, blockKeyword) {
   if (NAME_DECL_KEYWORDS.has(keyword)) return "declaration";
   if (keyword === "reads" || keyword === "writes") return "stageIo";
-  if (keyword === "set" || keyword === "add" || keyword === "let") return "cellAction";
+  if (keyword === "set" || keyword === "add" || keyword === "let" || keyword === "flux") return "cellAction";
   if (keyword === "spot" || keyword === "ellipse" || keyword === "region") return "initAction";
   if (keyword === "color" || keyword === "stop" || keyword === "overlay") return "render";
   if (keyword === "for" || keyword === "when") return "control";

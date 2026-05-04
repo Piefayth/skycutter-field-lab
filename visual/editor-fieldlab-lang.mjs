@@ -51,7 +51,7 @@ const DECLARATION_KEYWORDS = new Set([
 // `step { }` blocks still highlight cleanly, just with modifier
 // styling rather than control-keyword styling.
 const CONTROL_KEYWORDS = new Set([
-  "cell", "for", "when", "if", "else", "on",
+  "cell", "edge", "for", "when", "if", "else", "on",
   "neighbors", "neighbor", "ring", "disk", "kernel", "bell",
   "views", "stamps", "scenarios",
 ]);
@@ -61,7 +61,7 @@ const CONTROL_KEYWORDS = new Set([
 //   spot/ellipse/region — scenario/stamp action verbs
 //   sum/max/min/mean/count — neighbor reduction ops + metric ops
 const ACTION_KEYWORDS = new Set([
-  "add", "set", "let",
+  "add", "set", "let", "flux",
   "spot", "ellipse", "region",
   "sum", "max", "min", "mean", "count",
 ]);

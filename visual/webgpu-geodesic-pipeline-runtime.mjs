@@ -10,12 +10,9 @@ import { MetricRuntime } from "./webgpu-metric-runtime.mjs";
 // =============================================================================
 // Recipe-shaped WebGPU geodesic runner.
 //
-// V2 stages are exclusively `cell { ... }` bodies — every kernel
-// operation (diffusion, advection, gradient/divergence, neighbor
-// reductions, history reads) is expressed as a per-cell expression and
-// compiled by the cell-shader emitter. This file is a thin orchestrator:
-// allocate the runtime, dispatch each compiled cell pass per tick, run
-// metric reductions, rotate history buffers.
+// V2 stages compile to cell passes or conservative edge-flux passes.
+// This file is a thin orchestrator: allocate the runtime, dispatch
+// compiled passes per tick, run metric reductions, rotate history buffers.
 // =============================================================================
 
 export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGrid = null, getParams, getFrame } = {}) {
@@ -102,25 +99,39 @@ export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGri
           // history field's `next` is written within a tick.
           const isHistoryWrite = historyFieldSet.has(pass.field);
           const swapAfter = isHistoryWrite ? false : !delayedCellSwaps;
-          runtime.runCellPass({
-            key: pass.key,
-            source: pass.source,
-            field: pass.field,
-            reads: pass.reads,
-            prevReads: pass.prevReads ?? [],
-            needsNeighbors: pass.needsNeighbors,
-            kernelSpecs: pass.kernelSpecs ?? [],
+          const uniforms = buildWebGpuGeodesicUniforms(pass.layout, {
+            dt,
+            frame,
+            cellCount: grid.cellCount,
             params,
-            swapAfter,
-            uniforms: buildWebGpuGeodesicUniforms(pass.layout, {
-              dt,
-              frame,
-              cellCount: grid.cellCount,
-              params,
-              consts,
-              planet,
-            }),
+            consts,
+            planet,
           });
+          if (pass.kind === "edgeFlux") {
+            runtime.runEdgeFluxPass({
+              key: pass.key,
+              source: pass.source,
+              applySource: pass.applySource,
+              field: pass.field,
+              reads: pass.reads,
+              params,
+              swapAfter,
+              uniforms,
+            });
+          } else {
+            runtime.runCellPass({
+              key: pass.key,
+              source: pass.source,
+              field: pass.field,
+              reads: pass.reads,
+              prevReads: pass.prevReads ?? [],
+              needsNeighbors: pass.needsNeighbors,
+              kernelSpecs: pass.kernelSpecs ?? [],
+              params,
+              swapAfter,
+              uniforms,
+            });
+          }
           if (delayedCellSwaps && !isHistoryWrite) fieldsToSwap.push(pass.field);
         }
         if (delayedCellSwaps) runtime.swapFields([...new Set(fieldsToSwap)]);
