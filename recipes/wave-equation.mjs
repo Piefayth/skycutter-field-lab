@@ -37,7 +37,7 @@ export const regime = {
 
 export const pipelineDsl = `
 recipe "Wave equation"
-summary "Hyperbolic wave on the sphere — displacement plus velocity first-order integration. The ripple stamp uses stroke phases: a one-shot surface drop on press, then velocity-only injection while held."
+summary "Hyperbolic wave on the sphere — displacement plus velocity first-order integration. The ripple stamp is press-only: it drops a small visible bump plus impulse, then lets the wave travel instead of continuously forcing a blob."
 recommendedPreset droplet
 
 substrate geodesic frequency 64
@@ -105,14 +105,11 @@ views {
 stamps {
   stamp ripple "Drop ripple" {
     on press {
-      // One-shot visible surface bump, matching the preset's "drop a
-      // stone" moment without pinning u for the whole held stroke.
-      spot u at brush.pos, radius=brush.r, amount=0.8
-    }
-    on drag {
-      // Continuous impulse while held. This keeps adding wave energy
-      // without fighting the displacement field's phase.
-      spot v at brush.pos, radius=brush.r, amount=16
+      // One-shot drop. Scale the UI brush radius down so the default
+      // radius produces a compact source close to the preset droplet,
+      // not a broad forced blob.
+      spot u at brush.pos, radius=brush.r * 0.35, amount=1
+      spot v at brush.pos, radius=brush.r * 0.35, amount=5
     }
   }
 

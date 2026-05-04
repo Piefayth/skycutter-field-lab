@@ -148,7 +148,7 @@
       "id": "wave-equation",
       "name": "Wave equation (example)",
       "path": "recipes/wave-equation.mjs",
-      "summary": "Hyperbolic wave on a sphere — explicit displacement plus velocity. The default brush uses stroke phases: a visible surface bump on press, then velocity-only injection while held."
+      "summary": "Hyperbolic wave on a sphere — explicit displacement plus velocity. The default brush is press-only: it drops a compact surface bump plus impulse, then lets the ripple travel."
     },
     {
       "id": "shallow-water",
