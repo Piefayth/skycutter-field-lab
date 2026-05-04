@@ -1,4 +1,10 @@
 import * as THREE from "three";
+import {
+  MeshBasicNodeMaterial,
+  attribute,
+  uv,
+  wgslFn,
+} from "three/addons/nodes/Nodes.js";
 
 import { createGeodesicGrid } from "../kernel/geodesic-grid.mjs";
 
@@ -373,34 +379,26 @@ function populateGlyphMesh(slot, { grid, tileGeometry, fields = {}, viewSpec }) 
 // triangles.
 // =============================================================================
 
-const PARTICLE_VERTEX_SHADER = `
-  varying vec2 vUv;
-  varying vec3 vColor;
-
-  void main() {
-    vUv = uv;
-    vColor = color;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+const particleGlowColor = wgslFn(`
+  fn particleGlowColor(localUv: vec2<f32>, tint: vec3<f32>) -> vec3<f32> {
+    let p = localUv * 2.0 - vec2<f32>(1.0, 1.0);
+    let r2 = dot(p, p);
+    let core = exp(-r2 * 18.0);
+    let halo = exp(-r2 * 3.2);
+    return tint * (0.42 * halo + 1.35 * core);
   }
-`;
+`);
 
-const PARTICLE_FRAGMENT_SHADER = `
-  varying vec2 vUv;
-  varying vec3 vColor;
-
-  void main() {
-    vec2 p = vUv * 2.0 - 1.0;
-    float r2 = dot(p, p);
-    if (r2 > 1.0) discard;
-
-    float core = exp(-r2 * 18.0);
-    float halo = exp(-r2 * 3.2);
-    float rim = smoothstep(0.92, 0.25, sqrt(r2));
-    float alpha = clamp(0.16 * halo + 0.92 * core, 0.0, 1.0) * rim;
-    vec3 glow = vColor * (0.42 * halo + 1.35 * core);
-    gl_FragColor = vec4(glow, alpha);
+const particleGlowAlpha = wgslFn(`
+  fn particleGlowAlpha(localUv: vec2<f32>) -> f32 {
+    let p = localUv * 2.0 - vec2<f32>(1.0, 1.0);
+    let r2 = dot(p, p);
+    let core = exp(-r2 * 18.0);
+    let halo = exp(-r2 * 3.2);
+    let rim = smoothstep(0.92, 0.25, sqrt(r2));
+    return clamp(0.16 * halo + 0.92 * core, 0.0, 1.0) * rim;
   }
-`;
+`);
 
 function createParticleLayer(scene, grid) {
   let geometry = null;
@@ -452,16 +450,14 @@ function createParticleLayer(scene, grid) {
     geometry.setIndex(new THREE.BufferAttribute(indices, 1));
     geometry.setDrawRange(0, pointCount * 6);
 
-    material = new THREE.ShaderMaterial({
-      vertexShader: PARTICLE_VERTEX_SHADER,
-      fragmentShader: PARTICLE_FRAGMENT_SHADER,
-      vertexColors: true,
-      transparent: true,
-      depthTest: true,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-      blending: THREE.AdditiveBlending,
-    });
+    material = new MeshBasicNodeMaterial();
+    material.colorNode = particleGlowColor({ localUv: uv(), tint: attribute("color", "vec3") });
+    material.opacityNode = particleGlowAlpha({ localUv: uv() });
+    material.transparent = true;
+    material.depthTest = true;
+    material.depthWrite = false;
+    material.side = THREE.DoubleSide;
+    material.blending = THREE.AdditiveBlending;
     mesh = new THREE.Mesh(geometry, material);
     mesh.frustumCulled = false;
     mesh.renderOrder = 4;
