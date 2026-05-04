@@ -39,21 +39,21 @@ field plume: f32 derived
 
 param simRateHz slider 0..240 step 1 default 60 label "SIM RATE"
 param rate      slider 1..60  step 1 default 24 label "RATE"
-param emission  slider 0..5   step 0.01 default 1.35 label "EMISSION"
-param transport slider 0..12  step 0.01 default 4.80 label "TRANSPORT"
-param windBias  slider 0..4   step 0.01 default 2.10 label "WIND BIAS"
-param crossMix  slider 0..0.4 step 0.005 default 0.045 label "CROSS MIX"
-param decay     slider 0..2   step 0.01 default 0.42 label "DECAY"
+param emission  slider 0..5   step 0.01 default 1.40 label "EMISSION"
+param transport slider 0..0.5 step 0.005 default 0.160 label "TRANSPORT"
+param windBias  slider 0..4   step 0.01 default 2.80 label "WIND BIAS"
+param crossMix  slider 0..0.4 step 0.005 default 0.010 label "CROSS MIX"
+param decay     slider 0..2   step 0.01 default 0.035 label "DECAY"
 
 step {
   stage windField "Planetary wind field" {
     reads factory
     writes wind, windSpeed
     cell {
-      let jet = 0.55 + 0.35 * cos(lat * 3.0)
-      let meander = 0.26 * sin(lon * 1.7 + frame / 260)
-      let sourceLift = 0.10 * factory * sin(lon * 2.0 + lat)
-      let raw = vec2(jet, meander - 0.18 * sin(lat * 2.0) + sourceLift)
+      let jet = 0.62 + 0.30 * cos(lat * 2.5)
+      let meander = 0.20 * sin(lon * 1.4 + frame / 420) + 0.08 * sin(lat * 5.0 + frame / 300)
+      let sourceLift = 0.08 * factory * sin(lon * 2.0 + lat)
+      let raw = vec2(jet, meander - 0.12 * sin(lat * 2.0) + sourceLift)
       let speed = max(length(raw), 0.001)
       set wind = raw / speed
       set windSpeed = speed
@@ -74,9 +74,9 @@ step {
     writes pollutant
     edge n in neighbors {
       let downwind = max(dot(wind, direction(n)), 0)
-      let distWeight = clamp(0.045 / max(distance(n), 0.001), 0.45, 1.2)
+      let distWeight = clamp(0.050 / max(distance(n), 0.001), 0.55, 1.3)
       let push = crossMix + windBias * downwind
-      flux pollutant = pollutant * clamp(push * distWeight * transport * dt * rate, 0, 0.16)
+      flux pollutant = pollutant * clamp(push * distWeight * transport * dt * rate, 0, 0.22)
     }
   }
 
@@ -85,9 +85,9 @@ step {
     writes pollutant, plume
     cell {
       let nextPollution = clamp(pollutant * (1 - decay * dt * rate), 0, 2.2)
-      let halo = mean n in disk(2) { pollutant@n }
+      let halo = mean n in disk(3) { pollutant@n }
       set pollutant = nextPollution
-      set plume = nextPollution * 0.55 + halo * 0.75 + factory * 0.35
+      set plume = nextPollution * 0.95 + halo * 1.55 + factory * 0.12
     }
   }
 }
@@ -112,12 +112,12 @@ views {
   }
 
   view plume "Pollution plume" {
-    color ramp plume range [0, 1] palette PLUME
+    color ramp plume range [0, 0.55] palette PLUME
     particles advect=wind count=1800 length=14 speed=0.65 fade=0.90 size=2 color [230, 244, 255]
   }
 
   view pollutant "Pollutant" {
-    color ramp pollutant range [0, 1.7] palette PLUME
+    color ramp pollutant range [0, 0.55] palette PLUME
   }
 
   view wind "Wind speed" {
