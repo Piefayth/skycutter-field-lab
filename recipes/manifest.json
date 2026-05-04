@@ -5,6 +5,7 @@
     "blank",
     "wave-equation",
     "shallow-water",
+    "weather-cycle",
     "smoothlife",
     "nonlocal-ecology",
     "chemotaxis-colony",
@@ -50,6 +51,7 @@
       "recipes": [
         "wave-equation",
         "shallow-water",
+        "weather-cycle",
         "schrodinger",
         "burgers",
         "ice-albedo",
@@ -155,6 +157,12 @@
       "name": "Shallow water (example)",
       "path": "recipes/shallow-water.mjs",
       "summary": "Depth-averaged fluid on a sphere. gradient(h) drives momentum, divergence(m) drives continuity, dye rides @upstream of the velocity. Drop a height bulge and watch the wave race around the planet, hit the antipode, refocus. Paint dye to see the otherwise-invisible currents."
+    },
+    {
+      "id": "weather-cycle",
+      "name": "Weather cycle (example)",
+      "path": "recipes/weather-cycle.mjs",
+      "summary": "Toy planetary weather loop. Land/ocean mask, water, vapor, temperature, clouds, rain, wind, and tides interact: evaporation feeds vapor, wind advects it, condensation rains it back out, and a tide field shoves ocean pressure."
     },
     {
       "id": "vicsek-flock",

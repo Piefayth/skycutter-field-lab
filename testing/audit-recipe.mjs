@@ -54,7 +54,7 @@ if (!scenario) {
 }
 
 const params = paramDefaults(dsl);
-const fieldDecls = (dsl.fields ?? []).map((f) => ({ name: f.name, type: f.type ?? "f32" }));
+const fieldDecls = (dsl.fields ?? []).map((f) => ({ name: f.name, type: f.type ?? "f32", kind: f.kind ?? "field" }));
 const fieldNames = fieldDecls.map((f) => f.name);
 
 // Strobe detection samples |Δfield| every tick during a probe window.
@@ -295,7 +295,7 @@ function checkClampPinning(baseline, findings) {
   // clamp. u32 fields are skipped — their discrete values are by design.
   const final = baseline.samples[baseline.samples.length - 1];
   for (const f of fieldDecls) {
-    if (f.type === "u32" || f.type === "bool") continue;
+    if (f.kind === "source" || f.type === "u32" || f.type === "bool") continue;
     const x = final[f.name];
     if (!x || x.n === 0) continue;
     const rounded = Math.round(x.max);
