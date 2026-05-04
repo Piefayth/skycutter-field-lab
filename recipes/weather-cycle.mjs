@@ -52,6 +52,7 @@ field cloud: f32 derived      // condensed vapor
 field rain: f32 derived       // precipitation intensity
 field tide: f32 derived       // oscillating ocean tide anomaly
 field speed: f32 derived      // wind speed for rendering
+field lift: f32 derived       // coastal / terrain lifting for cloud bands
 
 param simRateHz  slider 0..360    step 1      default 60    label "SIM RATE"
 param rate       slider 1..80     step 1      default 18    label "RATE"
@@ -80,7 +81,7 @@ step {
   }
 
   stage windStep "Pressure + thermal wind" {
-    reads water, tide, T, wind, land
+    reads water, tide, T, wind
     writes wind, speed
     cell {
       let pressureGrad = gradient(water + tide)
@@ -105,49 +106,56 @@ step {
   }
 
   stage cloudsAndRain "Condensation + rainout" {
-    reads vapor, T
-    writes vapor, cloud, rain
+    reads vapor, T, wind, land
+    writes vapor, cloud, rain, lift
     cell {
       let warm = clamp((T + 0.6) / 1.8, 0, 1)
-      let saturation = 0.18 + 0.18 * warm
-      let excess = max(vapor - saturation, 0)
+      let coast = length(gradient(land))
+      let landLift = land * 0.05
+      let shoreLift = clamp(coast * length(wind) * 0.035, 0, 0.18)
+      let stormLift = landLift + shoreLift
+      let saturation = 0.20 + 0.20 * warm + land * 0.05
+      let excess = max(vapor + stormLift - saturation, 0)
       let cloudNow = excess * condense
       let rainNow = cloudNow * rainRate * 0.16
       let nextVapor = vapor + (-rainNow * 0.18) * dt * rate
       set vapor = clamp(nextVapor, 0, 2.5)
       set cloud = clamp(cloudNow, 0, 1)
       set rain = clamp(rainNow, 0, 2)
+      set lift = clamp(stormLift * 4, 0, 1)
     }
   }
 
   stage surfaceCycle "Evaporation, rain, heating" {
-    reads water, vapor, rain, cloud, T, land
+    reads water, vapor, rain, T, land
     writes water, vapor, T
     cell {
       let ocean = 1 - land
       let warm = clamp((T + 0.4) / 1.6, 0, 1)
       let surfaceWet = clamp(water, 0, 1)
-      let evaporation = evap * surfaceWet * (0.18 + 0.55 * warm) * (1 - 0.45 * land)
+      let evaporation = evap * surfaceWet * (0.16 + 0.52 * warm) * (1 - 0.58 * land)
       let runoff = land * max(water - 0.8, 0) * 0.65
-      let oceanRestore = ocean * (1 - water) * 0.8
+      let oceanRestore = ocean * (1 - water) * 0.95
       let nextWater = water + (rain * 0.16 - evaporation - runoff + oceanRestore) * dt * rate
       set water = clamp(nextWater, 0, 1.2)
       add vapor = evaporation * 0.22 * dt * rate
 
-      let insolation = sun * max(0, cos(lat)) * (1 - 0.35 * cloud)
-      let cooling = 0.65 * (T + 0.15) + evaporation * 0.25
+      let insolation = sun * max(0, cos(lat)) * (1 - 0.18 * rain)
+      let cooling = 0.78 * (T + 0.15) + evaporation * 0.22 + rain * 0.08
       let oceanBuffer = ocean * (0.15 - T) * 0.25
-      let nextT = T + (insolation - cooling + oceanBuffer) * dt * rate
+      let landHeat = land * (0.08 * max(0, cos(lat)) - 0.08 * water)
+      let nextT = T + (insolation - cooling + oceanBuffer + landHeat) * dt * rate
       set T = clamp(nextT, -0.9, 1.4)
     }
   }
 
   stage mix "Horizontal mixing" {
-    reads water, vapor, T
+    reads water, vapor, T, land
     writes water, vapor, T
     cell {
       let k = clamp(diffusion * dt * rate, 0, 0.18)
-      add water = (mean n in neighbors { water@n } - water) * k
+      let landMix = k * (1 - 0.6 * land)
+      add water = (mean n in neighbors { water@n } - water) * landMix
       add vapor = (mean n in neighbors { vapor@n } - vapor) * k
       add T = (mean n in neighbors { T@n } - T) * k
     }
@@ -158,6 +166,7 @@ metric cloudCover = mean cells { cloud }
 metric rainMean   = mean cells { rain }
 metric waterMean  = mean cells { water }
 metric maxWind    = max cells { speed }
+metric liftMean   = mean cells { lift }
 
 views {
   palette TEMP {
@@ -193,7 +202,7 @@ views {
     color expr {
       let l = clamp(land, 0, 1)
       let w = clamp(water, 0, 1)
-      let c = clamp(cloud * 3.5, 0, 1)
+      let c = clamp(cloud * 2.2 + lift * 0.2, 0, 1)
       let p = clamp(rain * 2.0, 0, 1)
       let warm = clamp((T + 0.4) / 1.6, 0, 1)
       let oceanR = 20 + tide * 35
