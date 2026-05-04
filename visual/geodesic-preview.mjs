@@ -53,7 +53,7 @@ export async function createGeodesicPreview({ scene, globe, frequency = 48, grid
       const g = viewSpec?.glyph;
       const p = viewSpec?.particles;
       const glyphKey = g ? `${g.kind}:${g.rotate ?? "_"}:${g.size ?? "_"}:${g.length}:${g.stride}` : "";
-      const particleKey = p ? `${p.advect}:${p.count}:${p.length}:${p.speed}:${p.fade}:${p.color?.join(",")}` : "";
+      const particleKey = p ? `${p.advect}:${p.count}:${p.length}:${p.speed}:${p.fade}:${p.size}:${p.color?.join(",")}` : "";
       const key = `${frame}:${viewSpec?.id ?? ""}:${glyphKey}:${particleKey}`;
       if (!force && key === lastRefreshKey) return;
       lastRefreshKey = key;
@@ -368,10 +368,32 @@ function populateGlyphMesh(slot, { grid, tileGeometry, fields = {}, viewSpec }) 
 //
 // A `particles advect=wind ...` view clause renders sparse tracers that move
 // through a vec2 tangent field. This is render-only: particles never write back
-// into recipe state. We keep the implementation deterministic and CPU-side for
-// the first pass, using one dynamic THREE.Points geometry whose vertices are the
-// stored particle trail samples.
+// into recipe state. Browser/GPU point-size caps make THREE.Points unreliable
+// for readable tracers, so each trail sample is a small textured quad made from
+// triangles.
 // =============================================================================
+
+const PARTICLE_TEXTURE_SIZE = 64;
+
+function rasterizeParticleTexture() {
+  if (typeof document === "undefined") return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = PARTICLE_TEXTURE_SIZE;
+  canvas.height = PARTICLE_TEXTURE_SIZE;
+  const ctx = canvas.getContext("2d");
+  const c = PARTICLE_TEXTURE_SIZE / 2;
+  const gradient = ctx.createRadialGradient(c, c, 0, c, c, c);
+  gradient.addColorStop(0.0, "rgba(255,255,255,1)");
+  gradient.addColorStop(0.45, "rgba(255,255,255,0.9)");
+  gradient.addColorStop(1.0, "rgba(255,255,255,0)");
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, PARTICLE_TEXTURE_SIZE, PARTICLE_TEXTURE_SIZE);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.needsUpdate = true;
+  return tex;
+}
 
 function createParticleLayer(scene, grid) {
   let geometry = null;
@@ -394,8 +416,20 @@ function createParticleLayer(scene, grid) {
     disposeMesh();
 
     const pointCount = count * trailLength;
-    positions = new Float32Array(pointCount * 3);
-    colors = new Float32Array(pointCount * 3);
+    positions = new Float32Array(pointCount * 4 * 3);
+    colors = new Float32Array(pointCount * 4 * 3);
+    const uvs = new Float32Array(pointCount * 4 * 2);
+    const indices = new Uint32Array(pointCount * 6);
+    for (let i = 0; i < pointCount; i++) {
+      const v = i * 4;
+      uvs[v * 2 + 0] = 0; uvs[v * 2 + 1] = 0;
+      uvs[v * 2 + 2] = 1; uvs[v * 2 + 3] = 0;
+      uvs[v * 2 + 4] = 1; uvs[v * 2 + 5] = 1;
+      uvs[v * 2 + 6] = 0; uvs[v * 2 + 7] = 1;
+      const idx = i * 6;
+      indices[idx + 0] = v + 0; indices[idx + 1] = v + 1; indices[idx + 2] = v + 2;
+      indices[idx + 3] = v + 0; indices[idx + 4] = v + 2; indices[idx + 5] = v + 3;
+    }
     cells = new Uint32Array(count);
     history = new Float32Array(count * trailLength * 3);
     ages = new Uint16Array(count);
@@ -407,19 +441,21 @@ function createParticleLayer(scene, grid) {
     colorAttr.setUsage(THREE.DynamicDrawUsage);
     geometry.setAttribute("position", positionAttr);
     geometry.setAttribute("color", colorAttr);
-    geometry.setDrawRange(0, pointCount);
+    geometry.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
+    geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+    geometry.setDrawRange(0, pointCount * 6);
 
-    material = new THREE.PointsMaterial({
-      size,
-      sizeAttenuation: false,
+    material = new THREE.MeshBasicMaterial({
+      map: rasterizeParticleTexture(),
       vertexColors: true,
       transparent: true,
       opacity: 1,
       depthTest: true,
       depthWrite: false,
+      side: THREE.DoubleSide,
       blending: THREE.AdditiveBlending,
     });
-    mesh = new THREE.Points(geometry, material);
+    mesh = new THREE.Mesh(geometry, material);
     mesh.frustumCulled = false;
     mesh.renderOrder = 4;
     mesh.name = "geodesic-particles";
@@ -456,6 +492,7 @@ function createParticleLayer(scene, grid) {
   function disposeMesh() {
     if (mesh) scene.remove(mesh);
     geometry?.dispose?.();
+    material?.map?.dispose?.();
     material?.dispose?.();
     geometry = null;
     material = null;
@@ -538,20 +575,34 @@ function createParticleLayer(scene, grid) {
     const cg = (spec.color[1] ?? 245) / 255;
     const cb = (spec.color[2] ?? 255) / 255;
     const fade = Math.max(0, Math.min(1, spec.fade));
-    let vertex = 0;
+    const sizeWorld = Math.max(0.006, Math.min(0.22, (Number.isFinite(spec.size) ? spec.size : 6) * 0.005));
+    let quad = 0;
     for (let i = 0; i < count; i++) {
       const base = i * trailLength * 3;
       for (let t = 0; t < trailLength; t++) {
         const intensity = t === 0 ? 1.8 : Math.pow(fade, t) * 1.1;
         const src = base + t * 3;
-        const dst = vertex * 3;
-        positions[dst + 0] = history[src + 0] * sphereR;
-        positions[dst + 1] = history[src + 1] * sphereR;
-        positions[dst + 2] = history[src + 2] * sphereR;
-        colors[dst + 0] = cr * intensity;
-        colors[dst + 1] = cg * intensity;
-        colors[dst + 2] = cb * intensity;
-        vertex++;
+        const px = history[src + 0];
+        const py = history[src + 1];
+        const pz = history[src + 2];
+        const basis = tangentBasis(px, py, pz);
+        const half = sizeWorld * (t === 0 ? 0.68 : 0.5);
+        const cx = px * sphereR;
+        const cy = py * sphereR;
+        const cz = pz * sphereR;
+        const vBase = quad * 4 * 3;
+        for (let corner = 0; corner < 4; corner++) {
+          const cornerX = (corner === 1 || corner === 2) ? half : -half;
+          const cornerY = (corner === 2 || corner === 3) ? half : -half;
+          const dst = vBase + corner * 3;
+          positions[dst + 0] = cx + cornerX * basis.ex + cornerY * basis.nx;
+          positions[dst + 1] = cy + cornerX * basis.ey + cornerY * basis.ny;
+          positions[dst + 2] = cz + cornerX * basis.ez + cornerY * basis.nz;
+          colors[dst + 0] = cr * intensity;
+          colors[dst + 1] = cg * intensity;
+          colors[dst + 2] = cb * intensity;
+        }
+        quad++;
       }
     }
     geometry.attributes.position.needsUpdate = true;

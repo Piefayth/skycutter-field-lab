@@ -548,7 +548,8 @@ particles advect=VEC2_FIELD [count=N] [length=N] [speed=N] [fade=N] [size=N] [co
 - `speed=N` (default `0.8`) — visual multiplier. This changes only
   tracer motion, not the simulation.
 - `fade=N` (default `0.9`) — trail intensity falloff in [0, 1].
-- `size=N` (default `6`) — screen-space point size in pixels.
+- `size=N` (default `6`) — visual particle size. Larger values
+  make each tracer sample occupy more of the globe surface.
 - `color [R, G, B]` (default `[235, 245, 255]`) — trail color.
 
 ### Overlay
