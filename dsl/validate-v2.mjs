@@ -258,6 +258,9 @@ function validateRenderDecls(schema) {
       if (!(p.fade >= 0 && p.fade <= 1)) {
         throw new Error(`view "${v.id}": particles fade must be in [0, 1] — got ${p.fade}`);
       }
+      if (!(p.size > 0 && p.size <= 32)) {
+        throw new Error(`view "${v.id}": particles size must be in (0, 32] — got ${p.size}`);
+      }
       if (!Array.isArray(p.color) || p.color.length !== 3 || p.color.some((c) => !(c >= 0 && c <= 255))) {
         throw new Error(`view "${v.id}": particles color must be [r, g, b] with channels in [0, 255]`);
       }

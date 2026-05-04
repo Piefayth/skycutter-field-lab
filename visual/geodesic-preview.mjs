@@ -369,8 +369,8 @@ function populateGlyphMesh(slot, { grid, tileGeometry, fields = {}, viewSpec }) 
 // A `particles advect=wind ...` view clause renders sparse tracers that move
 // through a vec2 tangent field. This is render-only: particles never write back
 // into recipe state. We keep the implementation deterministic and CPU-side for
-// the first pass, using one dynamic LineSegments geometry whose vertices are the
-// particle trail segments.
+// the first pass, using one dynamic THREE.Points geometry whose vertices are the
+// stored particle trail samples.
 // =============================================================================
 
 function createParticleLayer(scene, grid) {
@@ -388,13 +388,14 @@ function createParticleLayer(scene, grid) {
   function ensure(spec) {
     const count = Math.max(1, Math.min(20000, spec.count | 0));
     const trailLength = Math.max(2, Math.min(128, spec.length | 0));
-    const key = `${count}:${trailLength}:${spec.color.join(",")}`;
+    const size = Number.isFinite(spec.size) ? Math.max(0.5, Math.min(32, spec.size)) : 3;
+    const key = `${count}:${trailLength}:${size}:${spec.color.join(",")}`;
     if (key === activeKey && geometry) return { count, trailLength };
     disposeMesh();
 
-    const segmentCount = count * (trailLength - 1);
-    positions = new Float32Array(segmentCount * 2 * 3);
-    colors = new Float32Array(segmentCount * 2 * 3);
+    const pointCount = count * trailLength;
+    positions = new Float32Array(pointCount * 3);
+    colors = new Float32Array(pointCount * 3);
     cells = new Uint32Array(count);
     history = new Float32Array(count * trailLength * 3);
     ages = new Uint16Array(count);
@@ -406,20 +407,22 @@ function createParticleLayer(scene, grid) {
     colorAttr.setUsage(THREE.DynamicDrawUsage);
     geometry.setAttribute("position", positionAttr);
     geometry.setAttribute("color", colorAttr);
-    geometry.setDrawRange(0, segmentCount * 2);
+    geometry.setDrawRange(0, pointCount);
 
-    material = new THREE.LineBasicMaterial({
+    material = new THREE.PointsMaterial({
+      size,
+      sizeAttenuation: false,
       vertexColors: true,
       transparent: true,
-      opacity: 0.82,
+      opacity: 0.9,
       depthTest: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
     });
-    mesh = new THREE.LineSegments(geometry, material);
+    mesh = new THREE.Points(geometry, material);
     mesh.frustumCulled = false;
     mesh.renderOrder = 4;
-    mesh.name = "geodesic-particle-trails";
+    mesh.name = "geodesic-particles";
     scene.add(mesh);
 
     activeKey = key;
@@ -538,20 +541,17 @@ function createParticleLayer(scene, grid) {
     let vertex = 0;
     for (let i = 0; i < count; i++) {
       const base = i * trailLength * 3;
-      for (let t = 0; t < trailLength - 1; t++) {
-        const intensity = Math.pow(fade, t);
-        const a = base + t * 3;
-        const b = a + 3;
-        for (const src of [a, b]) {
-          const dst = vertex * 3;
-          positions[dst + 0] = history[src + 0] * sphereR;
-          positions[dst + 1] = history[src + 1] * sphereR;
-          positions[dst + 2] = history[src + 2] * sphereR;
-          colors[dst + 0] = cr * intensity;
-          colors[dst + 1] = cg * intensity;
-          colors[dst + 2] = cb * intensity;
-          vertex++;
-        }
+      for (let t = 0; t < trailLength; t++) {
+        const intensity = t === 0 ? 1.25 : Math.pow(fade, t) * 0.9;
+        const src = base + t * 3;
+        const dst = vertex * 3;
+        positions[dst + 0] = history[src + 0] * sphereR;
+        positions[dst + 1] = history[src + 1] * sphereR;
+        positions[dst + 2] = history[src + 2] * sphereR;
+        colors[dst + 0] = cr * intensity;
+        colors[dst + 1] = cg * intensity;
+        colors[dst + 2] = cb * intensity;
+        vertex++;
       }
     }
     geometry.attributes.position.needsUpdate = true;

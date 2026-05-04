@@ -216,6 +216,9 @@ step { stage hold { reads u, wind; writes u, wind; cell { set u = u; set wind = 
   assertEq(labels(afterParticles, "@@", "a"), ["advect"]);
   const afterAdvect = source.replace("@@", "particles advect=@@");
   assertEq(labels(afterAdvect, "@@", "w"), ["wind"]);
+  const afterField = source.replace("@@", "particles advect=wind @@");
+  const particleKnobs = labels(afterField, "@@", "s");
+  if (!particleKnobs.includes("size")) throw new Error(`expected particle knobs to include size; got ${JSON.stringify(particleKnobs)}`);
 });
 
 test("palette reference offers declared palettes", () => {

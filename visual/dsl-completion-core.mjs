@@ -315,6 +315,7 @@ function optionsForGrammarPosition(ctx, mode, prefix) {
         keywordOption("length", "length=16"),
         keywordOption("speed", "speed=0.8"),
         keywordOption("fade", "fade=0.9"),
+        keywordOption("size", "size=3"),
         keywordOption("color", "color [235, 245, 255]"),
       ]);
     }

@@ -90,10 +90,10 @@ const MODIFIER_KEYWORDS = new Set([
   //   `color ramp FIELD range [a, b] palette NAME` / `stops { … }`
   //   `color wheel FIELD range [a, b]`
   //   `color expr { … }`
-  //   `particles advect=FIELD count=N length=N speed=N fade=N color [r,g,b]`
+  //   `particles advect=FIELD count=N length=N speed=N fade=N size=N color [r,g,b]`
   //   palette / inline-stops body: `stop T color [r, g, b]`
   "color", "ramp", "wheel", "expr",
-  "particles", "advect", "fade",
+  "particles", "advect", "fade", "size",
   "range", "stops", "stop",
   // `step` lands here too — see the comment on CONTROL_KEYWORDS above.
 ]);

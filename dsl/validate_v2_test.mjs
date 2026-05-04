@@ -144,7 +144,7 @@ views {
   }
   view flow "Flow" {
     color ramp h range [0, 1] palette MONO
-    particles advect=wind count=1200 length=18 speed=0.7 fade=0.88 color [220, 240, 255]
+    particles advect=wind count=1200 length=18 speed=0.7 fade=0.88 size=4 color [220, 240, 255]
   }
 }
 scenarios { scenario blank "Blank" { set h = 0  set wind = vec2(0, 0) } }
@@ -155,6 +155,7 @@ scenarios { scenario blank "Blank" { set h = 0  set wind = vec2(0, 0) } }
   assert(p.length === 18);
   assert(p.speed === 0.7);
   assert(p.fade === 0.88);
+  assert(p.size === 4);
   assert(p.color[2] === 255);
 });
 

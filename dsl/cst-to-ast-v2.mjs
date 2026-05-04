@@ -722,7 +722,7 @@ function glyphFromViewBlock(block) {
 
 // Optional sibling clause inside a `view` block:
 //
-//   particles advect=wind count=3500 length=18 speed=0.8 fade=0.92 color [235, 245, 255]
+//   particles advect=wind count=3500 length=18 speed=0.8 fade=0.92 size=3 color [235, 245, 255]
 //
 // `advect=FIELD` is required and must reference a vec2 field at
 // validation time. Other args are render-only knobs with conservative
@@ -733,7 +733,7 @@ function particlesFromViewBlock(block) {
   const text = stmt.cleanText;
   const advect = /\badvect\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\b/.exec(text)?.[1] ?? null;
   const numericArgs = {};
-  for (const m of text.matchAll(/\b(count|length|speed|fade)\s*=\s*(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)/g)) {
+  for (const m of text.matchAll(/\b(count|length|speed|fade|size)\s*=\s*(-?(?:\d+\.\d*|\.\d+|\d+)(?:e[+-]?\d+)?)/g)) {
     numericArgs[m[1]] = Number(m[2]);
   }
   const colorMatch = /\bcolor\s*\[\s*([+-]?(?:\d+\.\d*|\.\d+|\d+))\s*,\s*([+-]?(?:\d+\.\d*|\.\d+|\d+))\s*,\s*([+-]?(?:\d+\.\d*|\.\d+|\d+))\s*\]/.exec(text);
@@ -743,6 +743,7 @@ function particlesFromViewBlock(block) {
     length: Number.isFinite(numericArgs.length) ? Math.round(numericArgs.length) : 16,
     speed: Number.isFinite(numericArgs.speed) ? numericArgs.speed : 0.8,
     fade: Number.isFinite(numericArgs.fade) ? numericArgs.fade : 0.9,
+    size: Number.isFinite(numericArgs.size) ? numericArgs.size : 3,
     color: colorMatch
       ? [Number(colorMatch[1]), Number(colorMatch[2]), Number(colorMatch[3])]
       : [235, 245, 255],

@@ -530,14 +530,14 @@ view weather "Weather" {
     set green = ...
     set blue = ...
   }
-  particles advect=wind count=3500 length=18 speed=0.8 fade=0.9 color [235, 245, 255]
+  particles advect=wind count=3500 length=18 speed=0.8 fade=0.9 size=3 color [235, 245, 255]
 }
 ```
 
 Surface:
 
 ```
-particles advect=VEC2_FIELD [count=N] [length=N] [speed=N] [fade=N] [color [R, G, B]]
+particles advect=VEC2_FIELD [count=N] [length=N] [speed=N] [fade=N] [size=N] [color [R, G, B]]
 ```
 
 - `advect=FIELD` — required vec2 field, interpreted in the cell's
@@ -548,6 +548,7 @@ particles advect=VEC2_FIELD [count=N] [length=N] [speed=N] [fade=N] [color [R, G
 - `speed=N` (default `0.8`) — visual multiplier. This changes only
   tracer motion, not the simulation.
 - `fade=N` (default `0.9`) — trail intensity falloff in [0, 1].
+- `size=N` (default `3`) — screen-space point size in pixels.
 - `color [R, G, B]` (default `[235, 245, 255]`) — trail color.
 
 ### Overlay
