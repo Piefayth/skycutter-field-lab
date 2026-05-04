@@ -656,7 +656,7 @@ function createParticleLayer(scene, grid, camera = null) {
     }
     const activeVertices = quad * 4;
     geometry.setDrawRange(0, activeVertices > 0 ? quad * 6 : 0);
-    markAttributeNeedsUpdate(geometry.attributes.position);
+    markAttributeNeedsUpdate(geometry.attributes.position, activeVertices * 3);
     mesh.visible = activeVertices > 0;
   }
 
@@ -794,8 +794,18 @@ function setTangentBasis(out, x, y, z) {
   return out;
 }
 
-function markAttributeNeedsUpdate(attr) {
+function markAttributeNeedsUpdate(attr, componentCount = -1) {
   if (!attr) return;
+  if (componentCount === 0) return;
+  if (componentCount > 0) {
+    if (typeof attr.clearUpdateRanges === "function" && typeof attr.addUpdateRange === "function") {
+      attr.clearUpdateRanges();
+      attr.addUpdateRange(0, componentCount);
+    } else if (attr.updateRange) {
+      attr.updateRange.offset = 0;
+      attr.updateRange.count = componentCount;
+    }
+  }
   attr.needsUpdate = true;
 }
 
