@@ -113,6 +113,15 @@ stamps {
     }
   }
 
+  stamp trough "Blue ripple" {
+    on press {
+      // Phase-opposite drop: negative displacement + negative impulse.
+      // Renders blue in the signed amplitude palette.
+      spot u at brush.pos, radius=brush.r * 0.35, amount=-1
+      spot v at brush.pos, radius=brush.r * 0.35, amount=-5
+    }
+  }
+
   stamp lift "Lift surface" {
     // Direct displacement edit. Useful for sculpting a raised surface;
     // unlike RIPPLE, holding this brush intentionally pins/lifts u.
