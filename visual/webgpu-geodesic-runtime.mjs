@@ -253,12 +253,15 @@ export class WebGpuGeodesicRuntime {
     for (const name of names) {
       const field = this.fields.get(name);
       if (!field?.history) continue;
-      encoder.copyBufferToBuffer(
-        field.buffers[field.currentIdx], 0,
-        field.buffers[field.prevIdx], 0,
-        field.bytes,
-      );
-      didCopy = true;
+      const current = this.currentBuffer(name);
+      for (let depth = 1; depth <= field.history; depth++) {
+        encoder.copyBufferToBuffer(
+          current, 0,
+          this.historyBuffer(name, depth), 0,
+          field.bytes,
+        );
+        didCopy = true;
+      }
     }
     if (didCopy) this.device.queue.submit([encoder.finish()]);
   }

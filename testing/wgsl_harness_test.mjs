@@ -55,7 +55,50 @@ scenarios { scenario blank "Blank" { set u = 0 } }
     }
   });
 
-  // -- Test 2: diffusion smooths a hot cell ---------------------------------
+  // -- Test 2: history init seeds previous from current ----------------------
+  await t.test("history init seeds @prev from current", async () => {
+    const recipe = `
+recipe "History Init"
+substrate geodesic frequency 8
+field u: f32
+step {
+  stage restore_prev {
+    reads u previous
+    writes u
+    cell { set u = u@prev }
+  }
+}
+metric m = mean cells { u }
+views {
+  palette MONO {
+    stop 0 color [0, 0, 0]
+    stop 1 color [255, 255, 255]
+  }
+  view u "U" {
+    color ramp u range [0, 1] palette MONO
+  }
+}
+scenarios { scenario blank "Blank" { set u = 0 } }
+`;
+    const h = await makeHarness({ recipeDsl: recipe, frequency: FREQUENCY });
+    try {
+      const initial = new Float32Array(h.cellCount);
+      for (let i = 0; i < initial.length; i++) initial[i] = i / initial.length;
+      h.uploadField("u", initial);
+      h.runtime.initHistory(["u"]);
+
+      await h.tick();
+
+      const out = await h.readField("u");
+      for (let i = 0; i < out.length; i++) {
+        assert.ok(closeTo(out[i], initial[i], 1e-5), `cell ${i}: got ${out[i]}, want ${initial[i]}`);
+      }
+    } finally {
+      h.dispose();
+    }
+  });
+
+  // -- Test 3: diffusion smooths a hot cell ---------------------------------
   await t.test("diffusion bleeds hot cell into neighbors", async () => {
     const recipe = `
 recipe "Diffuse"
