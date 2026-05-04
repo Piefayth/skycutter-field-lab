@@ -78,12 +78,16 @@ export class MetricRuntime {
       lengths.push(n);
       n = Math.ceil(n / WORKGROUP_SIZE);
     }
-    // Uniform buffer per reduce pass — each pass takes a different
-    // input length and we don't want write/dispatch ordering hazards.
+    // Uniform buffer per reduce pass. The input lengths are fixed by
+    // cellCount, so write them once at allocation instead of every
+    // metric dispatch.
     const uniformBuffers = lengths.map(() => device.createBuffer({
       size: 16,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     }));
+    for (let i = 0; i < lengths.length; i++) {
+      device.queue.writeBuffer(uniformBuffers[i], 0, new Uint32Array([lengths[i], 0, 0, 0]));
+    }
     // Readback buffer for the final scalar (4 bytes f32).
     const readbackBuffer = device.createBuffer({
       size: 4,
@@ -98,6 +102,22 @@ export class MetricRuntime {
       layout: "auto",
       compute: { module: device.createShaderModule({ code: metricReduceShader(primitive.primOp) }), entryPoint: "main" },
     });
+    const reduceBindGroups = [];
+    let inputBuf = scratchA;
+    let outputBuf = scratchB;
+    for (let i = 0; i < lengths.length; i++) {
+      reduceBindGroups.push(device.createBindGroup({
+        layout: reducePipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: inputBuf } },
+          { binding: 1, resource: { buffer: outputBuf } },
+          { binding: 2, resource: { buffer: uniformBuffers[i] } },
+        ],
+      }));
+      [inputBuf, outputBuf] = [outputBuf, inputBuf];
+    }
+    const reduceDispatchCounts = lengths.map((length) => Math.ceil(length / WORKGROUP_SIZE));
+    const finalBuffer = lengths.length % 2 === 0 ? scratchA : scratchB;
     return {
       primOp: primitive.primOp,
       reads: primitive.reads,
@@ -111,6 +131,9 @@ export class MetricRuntime {
       readbackBuffer,
       perCellPipeline,
       reducePipeline,
+      reduceBindGroups,
+      reduceDispatchCounts,
+      finalBuffer,
     };
   }
 
@@ -178,35 +201,16 @@ export class MetricRuntime {
         // Reduce passes: ping-pong between scratchA / scratchB until
         // length is 1. The final value lands in whichever buffer was
         // last written.
-        let inputBuf = prim.scratchA;
-        let outputBuf = prim.scratchB;
-        let finalBuf = prim.scratchA;
         for (let i = 0; i < prim.lengths.length; i++) {
-          const length = prim.lengths[i];
-          const uniformBuf = prim.uniformBuffers[i];
-          // Write the input length for THIS pass.
-          device.queue.writeBuffer(uniformBuf, 0, new Uint32Array([length, 0, 0, 0]));
-          const reduceEntries = [
-            { binding: 0, resource: { buffer: inputBuf } },
-            { binding: 1, resource: { buffer: outputBuf } },
-            { binding: 2, resource: { buffer: uniformBuf } },
-          ];
-          const reduceBindGroup = device.createBindGroup({
-            layout: prim.reducePipeline.getBindGroupLayout(0),
-            entries: reduceEntries,
-          });
           const reducePass = encoder.beginComputePass();
           reducePass.setPipeline(prim.reducePipeline);
-          reducePass.setBindGroup(0, reduceBindGroup);
-          reducePass.dispatchWorkgroups(Math.ceil(length / WORKGROUP_SIZE));
+          reducePass.setBindGroup(0, prim.reduceBindGroups[i]);
+          reducePass.dispatchWorkgroups(prim.reduceDispatchCounts[i]);
           reducePass.end();
-          finalBuf = outputBuf;
-          // Swap for next pass.
-          [inputBuf, outputBuf] = [outputBuf, inputBuf];
         }
         // Copy the final scalar (output[0]) into the readback buffer.
-        encoder.copyBufferToBuffer(finalBuf, 0, prim.readbackBuffer, 0, 4);
-        prim.lastFinalBuf = finalBuf;
+        encoder.copyBufferToBuffer(prim.finalBuffer, 0, prim.readbackBuffer, 0, 4);
+        prim.lastFinalBuf = prim.finalBuffer;
       }
     }
     device.queue.submit([encoder.finish()]);

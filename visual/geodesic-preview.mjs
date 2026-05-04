@@ -413,6 +413,8 @@ function createParticleLayer(scene, grid) {
   let ages = null;
   let rng = seededRng(0x9e3779b9);
   let activeKey = "";
+  const sampleScratch = { x: 0, y: 0 };
+  const basisScratch = { ex: 1, ey: 0, ez: 0, nx: 0, ny: 1, nz: 0 };
 
   function ensure(spec) {
     const count = Math.max(1, Math.min(20000, spec.count | 0));
@@ -552,9 +554,9 @@ function createParticleLayer(scene, grid) {
       const px = history[base + 0];
       const py = history[base + 1];
       const pz = history[base + 2];
-      const sample = sampleVectorField(vectorField, cell, px, py, pz);
-      let vx = sample.x;
-      let vy = sample.y;
+      sampleVectorField(sampleScratch, vectorField, cell, px, py, pz);
+      let vx = sampleScratch.x;
+      let vy = sampleScratch.y;
       let mag = Math.hypot(vx, vy);
       if (!Number.isFinite(mag) || mag < 1e-6) {
         if (rng() < 0.02) respawnParticle(i, trailLength);
@@ -582,16 +584,19 @@ function createParticleLayer(scene, grid) {
       vx = oldVx - oldVy * invMag * jitter;
       vy = oldVy + oldVx * invMag * jitter;
       mag = Math.hypot(vx, vy);
-      const basis = tangentBasis(px, py, pz);
+      const basis = setTangentBasis(basisScratch, px, py, pz);
       const move = Math.min(baseScale * 1.6, mag * stepScale);
       const nx = px + (basis.ex * vx + basis.nx * vy) * move;
       const ny = py + (basis.ey * vx + basis.ny * vy) * move;
       const nz = pz + (basis.ez * vx + basis.nz * vy) * move;
-      const next = normalize([nx, ny, nz]);
-      history[base + 0] = next[0];
-      history[base + 1] = next[1];
-      history[base + 2] = next[2];
-      cells[i] = nearestNeighborCell(cells[i], next);
+      const len = Math.hypot(nx, ny, nz) || 1;
+      const nextX = nx / len;
+      const nextY = ny / len;
+      const nextZ = nz / len;
+      history[base + 0] = nextX;
+      history[base + 1] = nextY;
+      history[base + 2] = nextZ;
+      cells[i] = nearestNeighborCell(cells[i], nextX, nextY, nextZ);
       const dropRate = 0.0015 + 0.0045 * speedNorm;
       if (rng() < dropRate) {
         respawnParticle(i, trailLength);
@@ -606,6 +611,7 @@ function createParticleLayer(scene, grid) {
     const cg = (spec.color[1] ?? 245) / 255;
     const cb = (spec.color[2] ?? 255) / 255;
     const fade = Math.max(0, Math.min(1, spec.fade));
+    const trailFade = 0.50 + fade * 0.50;
     const sizeWorld = Math.max(0.004, Math.min(0.12, (Number.isFinite(spec.size) ? spec.size : 4) * 0.0027));
     let quad = 0;
     for (let i = 0; i < count; i++) {
@@ -614,8 +620,8 @@ function createParticleLayer(scene, grid) {
       let ageT = 1;
       for (let t = 0; t < trailLength; t++) {
         const speedT = Math.max(0, Math.min(1, speedHistory[speedBase + t] ?? 0));
-        const intensity = (t === 0 ? 1.75 : 1.02) * ageT * (0.62 + 0.72 * speedT);
-        const alpha = Math.max(0.03, Math.min(1, (t === 0 ? 0.95 : 0.62) * ageT * (0.42 + 0.74 * speedT)));
+        const intensity = (t === 0 ? 1.28 : 1.04) * ageT * (0.64 + 0.66 * speedT);
+        const alpha = Math.max(0.04, Math.min(1, (t === 0 ? 0.78 : 0.64) * ageT * (0.48 + 0.66 * speedT)));
         const hot = 0.20 * speedT;
         const tr = cr * (1 - hot) + hot;
         const tg = cg * (1 - hot) + hot;
@@ -624,8 +630,8 @@ function createParticleLayer(scene, grid) {
         const px = history[src + 0];
         const py = history[src + 1];
         const pz = history[src + 2];
-        const basis = tangentBasis(px, py, pz);
-        const half = sizeWorld * (t === 0 ? 0.68 : 0.5);
+        const basis = setTangentBasis(basisScratch, px, py, pz);
+        const half = sizeWorld * (t === 0 ? 0.58 : 0.52);
         const cx = px * sphereR;
         const cy = py * sphereR;
         const cz = pz * sphereR;
@@ -643,7 +649,7 @@ function createParticleLayer(scene, grid) {
           alphas[quad * 4 + corner] = alpha;
         }
         quad++;
-        ageT *= fade;
+        ageT *= trailFade;
       }
     }
     geometry.attributes.position.needsUpdate = true;
@@ -651,7 +657,7 @@ function createParticleLayer(scene, grid) {
     geometry.attributes.particleAlpha.needsUpdate = true;
   }
 
-  function sampleVectorField(vectorField, cell, px, py, pz) {
+  function sampleVectorField(out, vectorField, cell, px, py, pz) {
     let sx = 0;
     let sy = 0;
     let sw = 0;
@@ -668,18 +674,25 @@ function createParticleLayer(scene, grid) {
     const count = grid.neighborCounts[cell] ?? 0;
     const start = cell * grid.maxNeighbors;
     for (let k = 0; k < count; k++) addCell(grid.neighbors[start + k]);
-    return sw > 0 ? { x: sx / sw, y: sy / sw } : { x: 0, y: 0 };
+    if (sw > 0) {
+      out.x = sx / sw;
+      out.y = sy / sw;
+    } else {
+      out.x = 0;
+      out.y = 0;
+    }
+    return out;
   }
 
-  function nearestNeighborCell(cell, p) {
+  function nearestNeighborCell(cell, px, py, pz) {
     let best = cell;
-    let bestDot = cellDot(cell, p);
+    let bestDot = cellDot(cell, px, py, pz);
     const count = grid.neighborCounts[cell] ?? 0;
     const start = cell * grid.maxNeighbors;
     for (let k = 0; k < count; k++) {
       const n = grid.neighbors[start + k];
       if (n < 0) continue;
-      const d = cellDot(n, p);
+      const d = cellDot(n, px, py, pz);
       if (d > bestDot) {
         best = n;
         bestDot = d;
@@ -688,25 +701,26 @@ function createParticleLayer(scene, grid) {
     return best;
   }
 
-  function cellDot(cell, p) {
+  function cellDot(cell, px, py, pz) {
     const off = cell * 3;
-    return grid.positions[off + 0] * p[0]
-      + grid.positions[off + 1] * p[1]
-      + grid.positions[off + 2] * p[2];
+    return grid.positions[off + 0] * px
+      + grid.positions[off + 1] * py
+      + grid.positions[off + 2] * pz;
   }
 }
 
-function tangentBasis(x, y, z) {
+function setTangentBasis(out, x, y, z) {
   let ex = -z, ey = 0, ez = x;
   let elen = Math.hypot(ex, ey, ez);
   if (elen < 1e-6) { ex = 1; ey = 0; ez = 0; elen = 1; }
   ex /= elen; ey /= elen; ez /= elen;
-  return {
-    ex, ey, ez,
-    nx: ey * z - ez * y,
-    ny: ez * x - ex * z,
-    nz: ex * y - ey * x,
-  };
+  out.ex = ex;
+  out.ey = ey;
+  out.ez = ez;
+  out.nx = ey * z - ez * y;
+  out.ny = ez * x - ex * z;
+  out.nz = ex * y - ey * x;
+  return out;
 }
 
 function seededRng(seed) {

@@ -69,6 +69,7 @@ export class WebGpuGeodesicRuntime {
     this.fieldTypes = fieldTypes;
     this.fields = new Map();
     this.pipelines = new Map();
+    this.bindGroups = new Map();
     this.bindLayouts = new Map();
     this.metricKernels = new Map();
 
@@ -301,9 +302,11 @@ export class WebGpuGeodesicRuntime {
     const pipeline = this.pipeline(key, source);
     this.writeUniforms(uniforms ?? new Float32Array([0, 0, this.cellCount, 0]));
     const entries = [];
+    const tokenParts = [key];
     let binding = 0;
     for (const name of reads) {
       entries.push({ binding, resource: { buffer: this.currentBuffer(name) } });
+      tokenParts.push(`r:${name}:${this.fieldBufferToken(name, "current")}`);
       binding++;
     }
     // Prev-bindings sit between regular reads and the output binding —
@@ -312,9 +315,11 @@ export class WebGpuGeodesicRuntime {
     // same field get distinct bind slots.
     for (const entry of prevReads) {
       entries.push({ binding, resource: { buffer: this.historyBuffer(entry.field, entry.depth) } });
+      tokenParts.push(`p:${entry.field}:${entry.depth}:${this.fieldBufferToken(entry.field, "prev", entry.depth)}`);
       binding++;
     }
     entries.push({ binding, resource: { buffer: this.nextBuffer(field) } });
+    tokenParts.push(`w:${field}:${this.fieldBufferToken(field, "next")}`);
     binding++;
     entries.push({ binding, resource: { buffer: this.paramsBuffer } });
     binding++;
@@ -328,17 +333,34 @@ export class WebGpuGeodesicRuntime {
     }
     for (const spec of kernelSpecs ?? []) {
       const table = this.metricKernelBuffers(spec, params);
+      tokenParts.push(`k:${table.key}`);
       entries.push({ binding, resource: { buffer: table.offsetsBuffer } });
       binding++;
       entries.push({ binding, resource: { buffer: table.entriesBuffer } });
       binding++;
     }
-    const bindGroup = this.device.createBindGroup({
-      layout: pipeline.getBindGroupLayout(0),
-      entries,
-    });
+    const bindGroupKey = tokenParts.join("|");
+    let bindGroup = this.bindGroups.get(bindGroupKey);
+    if (!bindGroup) {
+      bindGroup = this.device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(0),
+        entries,
+      });
+      this.bindGroups.set(bindGroupKey, bindGroup);
+    }
     this.dispatch(pipeline, bindGroup);
     if (swapAfter) this.swap(field);
+  }
+
+  fieldBufferToken(name, role, depth = 1) {
+    const field = this.ensureField(name);
+    if (field.history) {
+      if (role === "next") return `h:${field.bufferIdx[0]}`;
+      if (role === "current") return `h:${field.bufferIdx[1]}`;
+      return `h:${field.bufferIdx[1 + depth]}`;
+    }
+    if (role === "next") return `p:${1 - field.index}`;
+    return `p:${field.index}`;
   }
 
   metricKernelBuffers(spec, params = {}) {
@@ -349,6 +371,7 @@ export class WebGpuGeodesicRuntime {
     const table = buildMetricKernelTable(this.grid, resolved);
     const entries = packMetricKernelEntries(table);
     cached = {
+      key,
       offsetsBuffer: makeStorageBuffer(this.device, table.offsets, GPUBufferUsage.STORAGE),
       entriesBuffer: makeStorageBuffer(this.device, entries, GPUBufferUsage.STORAGE),
       entryCount: table.indices.length,
@@ -392,6 +415,7 @@ export class WebGpuGeodesicRuntime {
     this.positionsBuffer.destroy();
     this.neighborsBuffer.destroy();
     this.neighborCountsBuffer.destroy();
+    this.bindGroups.clear();
     for (const kernel of this.metricKernels.values()) {
       kernel.offsetsBuffer.destroy();
       kernel.entriesBuffer.destroy();
