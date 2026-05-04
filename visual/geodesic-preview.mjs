@@ -373,27 +373,34 @@ function populateGlyphMesh(slot, { grid, tileGeometry, fields = {}, viewSpec }) 
 // triangles.
 // =============================================================================
 
-const PARTICLE_TEXTURE_SIZE = 64;
+const PARTICLE_VERTEX_SHADER = `
+  varying vec2 vUv;
+  varying vec3 vColor;
 
-function rasterizeParticleTexture() {
-  if (typeof document === "undefined") return null;
-  const canvas = document.createElement("canvas");
-  canvas.width = PARTICLE_TEXTURE_SIZE;
-  canvas.height = PARTICLE_TEXTURE_SIZE;
-  const ctx = canvas.getContext("2d");
-  const c = PARTICLE_TEXTURE_SIZE / 2;
-  const gradient = ctx.createRadialGradient(c, c, 0, c, c, c);
-  gradient.addColorStop(0.0, "rgba(255,255,255,1)");
-  gradient.addColorStop(0.45, "rgba(255,255,255,0.9)");
-  gradient.addColorStop(1.0, "rgba(255,255,255,0)");
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, PARTICLE_TEXTURE_SIZE, PARTICLE_TEXTURE_SIZE);
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.minFilter = THREE.LinearFilter;
-  tex.magFilter = THREE.LinearFilter;
-  tex.needsUpdate = true;
-  return tex;
-}
+  void main() {
+    vUv = uv;
+    vColor = color;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const PARTICLE_FRAGMENT_SHADER = `
+  varying vec2 vUv;
+  varying vec3 vColor;
+
+  void main() {
+    vec2 p = vUv * 2.0 - 1.0;
+    float r2 = dot(p, p);
+    if (r2 > 1.0) discard;
+
+    float core = exp(-r2 * 18.0);
+    float halo = exp(-r2 * 3.2);
+    float rim = smoothstep(0.92, 0.25, sqrt(r2));
+    float alpha = clamp(0.16 * halo + 0.92 * core, 0.0, 1.0) * rim;
+    vec3 glow = vColor * (0.42 * halo + 1.35 * core);
+    gl_FragColor = vec4(glow, alpha);
+  }
+`;
 
 function createParticleLayer(scene, grid) {
   let geometry = null;
@@ -445,11 +452,11 @@ function createParticleLayer(scene, grid) {
     geometry.setIndex(new THREE.BufferAttribute(indices, 1));
     geometry.setDrawRange(0, pointCount * 6);
 
-    material = new THREE.MeshBasicMaterial({
-      map: rasterizeParticleTexture(),
+    material = new THREE.ShaderMaterial({
+      vertexShader: PARTICLE_VERTEX_SHADER,
+      fragmentShader: PARTICLE_FRAGMENT_SHADER,
       vertexColors: true,
       transparent: true,
-      opacity: 1,
       depthTest: true,
       depthWrite: false,
       side: THREE.DoubleSide,
@@ -492,7 +499,6 @@ function createParticleLayer(scene, grid) {
   function disposeMesh() {
     if (mesh) scene.remove(mesh);
     geometry?.dispose?.();
-    material?.map?.dispose?.();
     material?.dispose?.();
     geometry = null;
     material = null;
