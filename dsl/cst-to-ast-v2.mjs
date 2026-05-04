@@ -222,7 +222,7 @@ function validatePaletteBlock(block) {
 }
 
 function validateViewBlock(block) {
-  const allowed = new Set(["color", "glyph", "let", "set", "when", "stop"]);
+  const allowed = new Set(["color", "glyph", "particles", "let", "set", "when", "stop"]);
   for (const stmt of sorted(block.statements)) {
     if (!allowed.has(stmt.keyword)) throw new Error(`v2 parse: view ${block.id}: unknown declaration "${stmt.keyword}"`);
   }
@@ -625,7 +625,8 @@ function viewCstToAst(cst, block) {
   const words = wordsFrom(colorStmt.cleanText);
   const kind = words[1] ?? null;
   const glyph = glyphFromViewBlock(block);
-  const base = { id: block.id, label: blockLabel(cst, block) ?? block.id, glyph };
+  const particles = particlesFromViewBlock(block);
+  const base = { id: block.id, label: blockLabel(cst, block) ?? block.id, glyph, particles };
   if (kind === "ramp") {
     const range = rangeFromColorStatement(colorStmt) ?? [0, 1];
     const paletteName = /\bpalette\s+([A-Za-z_][A-Za-z0-9_]*)\b/.exec(colorStmt.cleanText)?.[1] ?? null;
@@ -716,6 +717,35 @@ function glyphFromViewBlock(block) {
     size:   fieldArgs.size   ?? null,
     length: Number.isFinite(numericArgs.length) ? numericArgs.length : 0.5,
     stride: Number.isFinite(numericArgs.stride) ? Math.max(1, Math.round(numericArgs.stride)) : 1,
+  };
+}
+
+// Optional sibling clause inside a `view` block:
+//
+//   particles advect=wind count=3500 length=18 speed=0.8 fade=0.92 color [235, 245, 255]
+//
+// `advect=FIELD` is required and must reference a vec2 field at
+// validation time. Other args are render-only knobs with conservative
+// defaults.
+function particlesFromViewBlock(block) {
+  const stmt = sorted(block.statements).find((s) => s.keyword === "particles");
+  if (!stmt) return null;
+  const text = stmt.cleanText;
+  const advect = /\badvect\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\b/.exec(text)?.[1] ?? null;
+  const numericArgs = {};
+  for (const m of text.matchAll(/\b(count|length|speed|fade)\s*=\s*(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)/g)) {
+    numericArgs[m[1]] = Number(m[2]);
+  }
+  const colorMatch = /\bcolor\s*\[\s*([+-]?(?:\d+\.\d*|\.\d+|\d+))\s*,\s*([+-]?(?:\d+\.\d*|\.\d+|\d+))\s*,\s*([+-]?(?:\d+\.\d*|\.\d+|\d+))\s*\]/.exec(text);
+  return {
+    advect,
+    count: Number.isFinite(numericArgs.count) ? Math.round(numericArgs.count) : 2400,
+    length: Number.isFinite(numericArgs.length) ? Math.round(numericArgs.length) : 16,
+    speed: Number.isFinite(numericArgs.speed) ? numericArgs.speed : 0.8,
+    fade: Number.isFinite(numericArgs.fade) ? numericArgs.fade : 0.9,
+    color: colorMatch
+      ? [Number(colorMatch[1]), Number(colorMatch[2]), Number(colorMatch[3])]
+      : [235, 245, 255],
   };
 }
 

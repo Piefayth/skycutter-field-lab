@@ -221,7 +221,7 @@ views {
       set green = baseG * (1 - c) + cloudG * c
       set blue = baseB * (1 - c) + cloudB * c
     }
-    glyph "→" rotate=wind length=0.45 stride=4
+    particles advect=wind count=3600 length=20 speed=0.75 fade=0.9 color [225, 245, 255]
   }
 
   view water "Surface water" {
@@ -242,7 +242,7 @@ views {
 
   view wind "Wind" {
     color ramp speed range [0, 1.5] palette WIND
-    glyph "→" rotate=wind length=0.6 stride=3
+    particles advect=wind count=4200 length=22 speed=0.9 fade=0.9 color [255, 220, 120]
   }
 }
 

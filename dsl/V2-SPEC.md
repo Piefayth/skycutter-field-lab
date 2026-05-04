@@ -516,6 +516,40 @@ The `color` clause and the `glyph` clause are independent — common
 pattern: color the magnitude scalar, glyph the direction vector or
 mark cells of interest.
 
+### Particle trail overlay
+
+A view block may also carry an optional `particles` clause alongside
+its `color` clause. Particle trails are render-only tracers: they
+sample a vec2 field as a tangent velocity, move over the sphere, and
+leave short fading trails. They do not write simulation state.
+
+```
+view weather "Weather" {
+  color expr {
+    set red = ...
+    set green = ...
+    set blue = ...
+  }
+  particles advect=wind count=3500 length=18 speed=0.8 fade=0.9 color [235, 245, 255]
+}
+```
+
+Surface:
+
+```
+particles advect=VEC2_FIELD [count=N] [length=N] [speed=N] [fade=N] [color [R, G, B]]
+```
+
+- `advect=FIELD` — required vec2 field, interpreted in the cell's
+  east/north tangent frame.
+- `count=N` (default `2400`) — number of tracer particles.
+- `length=N` (default `16`) — number of stored trail points per
+  particle. Must be at least 2.
+- `speed=N` (default `0.8`) — visual multiplier. This changes only
+  tracer motion, not the simulation.
+- `fade=N` (default `0.9`) — trail intensity falloff in [0, 1].
+- `color [R, G, B]` (default `[235, 245, 255]`) — trail color.
+
 ### Overlay
 
 ```

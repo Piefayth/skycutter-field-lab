@@ -130,6 +130,54 @@ scenarios { scenario blank "Blank" { set h = 0  set wind = vec2(0, 0) } }
 `), "size must reference a scalar field");
 });
 
+test("view: particles clause parses + validates vec2 advect field", () => {
+  const out = compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field h: f32
+field wind: vec2
+step { stage s { reads h, wind; writes h, wind; cell { set h = h; set wind = wind } } }
+views {
+  palette MONO {
+    stop 0 color [0, 0, 0]
+    stop 1 color [255, 255, 255]
+  }
+  view flow "Flow" {
+    color ramp h range [0, 1] palette MONO
+    particles advect=wind count=1200 length=18 speed=0.7 fade=0.88 color [220, 240, 255]
+  }
+}
+scenarios { scenario blank "Blank" { set h = 0  set wind = vec2(0, 0) } }
+`);
+  const p = out.dsl.views[0].particles;
+  assert(p.advect === "wind");
+  assert(p.count === 1200);
+  assert(p.length === 18);
+  assert(p.speed === 0.7);
+  assert(p.fade === 0.88);
+  assert(p.color[2] === 255);
+});
+
+test("view: particles advect must be vec2", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field h: f32
+step { stage s { reads h; writes h; cell { set h = h } } }
+views {
+  palette MONO {
+    stop 0 color [0, 0, 0]
+    stop 1 color [255, 255, 255]
+  }
+  view bad "Bad" {
+    color ramp h range [0, 1] palette MONO
+    particles advect=h
+  }
+}
+scenarios { scenario blank "Blank" { set h = 0 } }
+`), "particles advect must reference a vec2 field");
+});
+
 test("duplicate field declaration is rejected", () => {
   // Surfaced by negative-fuzz-v2.mjs: the v1-shape name-uniqueness
   // check only fired on prior-kind != current-kind, so two `field`

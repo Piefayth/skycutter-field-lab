@@ -296,6 +296,7 @@ export function materializeView(view, palettes, fieldDecls = [], paramDecls = []
   // populating the per-cell glyph mesh; absence means the view has
   // no glyph overlay.
   const glyph = view.glyph ?? null;
+  const particles = view.particles ?? null;
   if (view.kind === "ramp") {
     let stops;
     if (view.paletteName) {
@@ -312,6 +313,7 @@ export function materializeView(view, palettes, fieldDecls = [], paramDecls = []
       label: view.label,
       color: rampFromStops(view.field, stops, view.range),
       glyph,
+      particles,
     };
   }
   if (view.kind === "wheel") {
@@ -320,6 +322,7 @@ export function materializeView(view, palettes, fieldDecls = [], paramDecls = []
       label: view.label,
       color: wheelFromRange(view.field, view.range),
       glyph,
+      particles,
     };
   }
   if (view.kind === "expr") {
@@ -328,8 +331,8 @@ export function materializeView(view, palettes, fieldDecls = [], paramDecls = []
       label: view.label,
       color: exprColorer(view.actions, fieldDecls, paramDecls, constDecls),
       glyph,
+      particles,
     };
   }
   throw new Error(`view "${view.id}": unknown kind "${view.kind}"`);
 }
-

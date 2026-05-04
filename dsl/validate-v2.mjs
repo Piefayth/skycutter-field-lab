@@ -235,6 +235,33 @@ function validateRenderDecls(schema) {
         throw new Error(`view "${v.id}": glyph stride must be a positive integer — got ${g.stride}`);
       }
     }
+    if (v.particles) {
+      const p = v.particles;
+      if (!p.advect) {
+        throw new Error(`view "${v.id}": particles clause requires advect=VEC2_FIELD`);
+      }
+      if (!fieldNames.has(p.advect)) {
+        throw new Error(`view "${v.id}": particles advect=${p.advect} references unknown field`);
+      }
+      if (fieldTypes.get(p.advect) !== "vec2") {
+        throw new Error(`view "${v.id}": particles advect must reference a vec2 field — "${p.advect}" is ${fieldTypes.get(p.advect) ?? "?"}`);
+      }
+      if (!Number.isInteger(p.count) || p.count < 1 || p.count > 20000) {
+        throw new Error(`view "${v.id}": particles count must be an integer in [1, 20000] — got ${p.count}`);
+      }
+      if (!Number.isInteger(p.length) || p.length < 2 || p.length > 128) {
+        throw new Error(`view "${v.id}": particles length must be an integer in [2, 128] — got ${p.length}`);
+      }
+      if (!(p.speed >= 0 && p.speed <= 20)) {
+        throw new Error(`view "${v.id}": particles speed must be in [0, 20] — got ${p.speed}`);
+      }
+      if (!(p.fade >= 0 && p.fade <= 1)) {
+        throw new Error(`view "${v.id}": particles fade must be in [0, 1] — got ${p.fade}`);
+      }
+      if (!Array.isArray(p.color) || p.color.length !== 3 || p.color.some((c) => !(c >= 0 && c <= 255))) {
+        throw new Error(`view "${v.id}": particles color must be [r, g, b] with channels in [0, 255]`);
+      }
+    }
   }
 
   // Overlays — registered names only.

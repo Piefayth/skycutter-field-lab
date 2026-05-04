@@ -34,6 +34,7 @@ export async function createGeodesicPreview({ scene, globe, frequency = 48, grid
   // Lines aren't an option (WebGL clamps line widths to 1px on Chrome
   // and Safari) so even "ring" and "plus" are built from triangles.
   const glyphLayer = createGlyphLayer(scene, grid);
+  const particleLayer = createParticleLayer(scene, grid);
 
   const globeMaterialSnapshot = muteGlobeMaterial(globe);
 
@@ -46,15 +47,19 @@ export async function createGeodesicPreview({ scene, globe, frequency = 48, grid
     grid,
     mesh,
     glyphLayer,
+    particleLayer,
     refresh({ fields, viewSpec, frame = 0, force = false } = {}) {
       if (disposed) return;
       const g = viewSpec?.glyph;
+      const p = viewSpec?.particles;
       const glyphKey = g ? `${g.kind}:${g.rotate ?? "_"}:${g.size ?? "_"}:${g.length}:${g.stride}` : "";
-      const key = `${frame}:${viewSpec?.id ?? ""}:${glyphKey}`;
+      const particleKey = p ? `${p.advect}:${p.count}:${p.length}:${p.speed}:${p.fade}:${p.color?.join(",")}` : "";
+      const key = `${frame}:${viewSpec?.id ?? ""}:${glyphKey}:${particleKey}`;
       if (!force && key === lastRefreshKey) return;
       lastRefreshKey = key;
       refreshColors({ grid, geometry, fields, viewSpec });
       glyphLayer.populate({ grid, tileGeometry: geometry, fields, viewSpec });
+      particleLayer.populate({ fields, viewSpec, frame });
     },
     update() {},
     dispose() {
@@ -62,6 +67,7 @@ export async function createGeodesicPreview({ scene, globe, frequency = 48, grid
       restoreGlobeMaterial(globeMaterialSnapshot);
       scene.remove(mesh);
       glyphLayer.dispose();
+      particleLayer.dispose();
       geometry.dispose();
       material.dispose();
     },
@@ -355,6 +361,256 @@ function populateGlyphMesh(slot, { grid, tileGeometry, fields = {}, viewSpec }) 
     sub.geometry.setDrawRange(0, activeCount * 6);
     sub.mesh.visible = activeCount > 0;
   }
+}
+
+// =============================================================================
+// Particle trail overlay layer.
+//
+// A `particles advect=wind ...` view clause renders sparse tracers that move
+// through a vec2 tangent field. This is render-only: particles never write back
+// into recipe state. We keep the implementation deterministic and CPU-side for
+// the first pass, using one dynamic LineSegments geometry whose vertices are the
+// particle trail segments.
+// =============================================================================
+
+function createParticleLayer(scene, grid) {
+  let geometry = null;
+  let material = null;
+  let mesh = null;
+  let positions = null;
+  let colors = null;
+  let cells = null;
+  let history = null;
+  let ages = null;
+  let rng = seededRng(0x9e3779b9);
+  let activeKey = "";
+
+  function ensure(spec) {
+    const count = Math.max(1, Math.min(20000, spec.count | 0));
+    const trailLength = Math.max(2, Math.min(128, spec.length | 0));
+    const key = `${count}:${trailLength}:${spec.color.join(",")}`;
+    if (key === activeKey && geometry) return { count, trailLength };
+    disposeMesh();
+
+    const segmentCount = count * (trailLength - 1);
+    positions = new Float32Array(segmentCount * 2 * 3);
+    colors = new Float32Array(segmentCount * 2 * 3);
+    cells = new Uint32Array(count);
+    history = new Float32Array(count * trailLength * 3);
+    ages = new Uint16Array(count);
+
+    geometry = new THREE.BufferGeometry();
+    const positionAttr = new THREE.BufferAttribute(positions, 3);
+    const colorAttr = new THREE.BufferAttribute(colors, 3);
+    positionAttr.setUsage(THREE.DynamicDrawUsage);
+    colorAttr.setUsage(THREE.DynamicDrawUsage);
+    geometry.setAttribute("position", positionAttr);
+    geometry.setAttribute("color", colorAttr);
+    geometry.setDrawRange(0, segmentCount * 2);
+
+    material = new THREE.LineBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.82,
+      depthTest: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    mesh = new THREE.LineSegments(geometry, material);
+    mesh.frustumCulled = false;
+    mesh.renderOrder = 4;
+    mesh.name = "geodesic-particle-trails";
+    scene.add(mesh);
+
+    activeKey = key;
+    rng = seededRng(hashString(key));
+    resetParticles({ count, trailLength });
+    return { count, trailLength };
+  }
+
+  function resetParticles({ count, trailLength }) {
+    for (let i = 0; i < count; i++) {
+      respawnParticle(i, trailLength);
+      ages[i] = 90 + Math.floor(rng() * 240);
+    }
+  }
+
+  function respawnParticle(i, trailLength) {
+    const cell = Math.floor(rng() * grid.cellCount) % grid.cellCount;
+    cells[i] = cell;
+    const px = grid.positions[cell * 3 + 0];
+    const py = grid.positions[cell * 3 + 1];
+    const pz = grid.positions[cell * 3 + 2];
+    const base = i * trailLength * 3;
+    for (let t = 0; t < trailLength; t++) {
+      const off = base + t * 3;
+      history[off + 0] = px;
+      history[off + 1] = py;
+      history[off + 2] = pz;
+    }
+  }
+
+  function disposeMesh() {
+    if (mesh) scene.remove(mesh);
+    geometry?.dispose?.();
+    material?.dispose?.();
+    geometry = null;
+    material = null;
+    mesh = null;
+    positions = null;
+    colors = null;
+    cells = null;
+    history = null;
+    ages = null;
+    activeKey = "";
+  }
+
+  return {
+    populate({ fields = {}, viewSpec = null } = {}) {
+      const spec = viewSpec?.particles;
+      if (!spec) {
+        if (mesh) mesh.visible = false;
+        return;
+      }
+      const vectorField = fields[spec.advect];
+      if (!vectorField) {
+        if (mesh) mesh.visible = false;
+        return;
+      }
+      const layout = ensure(spec);
+      mesh.visible = true;
+      stepParticles({ spec, vectorField, count: layout.count, trailLength: layout.trailLength });
+      writeParticleGeometry({ spec, count: layout.count, trailLength: layout.trailLength });
+    },
+    dispose() {
+      disposeMesh();
+    },
+  };
+
+  function stepParticles({ spec, vectorField, count, trailLength }) {
+    const baseScale = (2 * Math.PI) / (5.5 * Math.max(1, grid.frequency ?? 32));
+    const stepScale = baseScale * spec.speed * 0.22;
+    for (let i = 0; i < count; i++) {
+      if (ages[i]-- === 0) {
+        respawnParticle(i, trailLength);
+        ages[i] = 90 + Math.floor(rng() * 240);
+      }
+      const cell = cells[i];
+      const vx = vectorField[cell * 2 + 0];
+      const vy = vectorField[cell * 2 + 1];
+      const mag = Math.hypot(vx, vy);
+      if (!Number.isFinite(mag) || mag < 1e-6) {
+        if (rng() < 0.02) respawnParticle(i, trailLength);
+        continue;
+      }
+
+      const base = i * trailLength * 3;
+      for (let t = trailLength - 1; t > 0; t--) {
+        const dst = base + t * 3;
+        const src = dst - 3;
+        history[dst + 0] = history[src + 0];
+        history[dst + 1] = history[src + 1];
+        history[dst + 2] = history[src + 2];
+      }
+
+      const px = history[base + 0];
+      const py = history[base + 1];
+      const pz = history[base + 2];
+      const basis = tangentBasis(px, py, pz);
+      const move = Math.min(baseScale * 1.6, mag * stepScale);
+      const nx = px + (basis.ex * vx + basis.nx * vy) * move;
+      const ny = py + (basis.ey * vx + basis.ny * vy) * move;
+      const nz = pz + (basis.ez * vx + basis.nz * vy) * move;
+      const next = normalize([nx, ny, nz]);
+      history[base + 0] = next[0];
+      history[base + 1] = next[1];
+      history[base + 2] = next[2];
+      cells[i] = nearestNeighborCell(cells[i], next);
+    }
+  }
+
+  function writeParticleGeometry({ spec, count, trailLength }) {
+    const sphereR = 1.032;
+    const cr = (spec.color[0] ?? 235) / 255;
+    const cg = (spec.color[1] ?? 245) / 255;
+    const cb = (spec.color[2] ?? 255) / 255;
+    const fade = Math.max(0, Math.min(1, spec.fade));
+    let vertex = 0;
+    for (let i = 0; i < count; i++) {
+      const base = i * trailLength * 3;
+      for (let t = 0; t < trailLength - 1; t++) {
+        const intensity = Math.pow(fade, t);
+        const a = base + t * 3;
+        const b = a + 3;
+        for (const src of [a, b]) {
+          const dst = vertex * 3;
+          positions[dst + 0] = history[src + 0] * sphereR;
+          positions[dst + 1] = history[src + 1] * sphereR;
+          positions[dst + 2] = history[src + 2] * sphereR;
+          colors[dst + 0] = cr * intensity;
+          colors[dst + 1] = cg * intensity;
+          colors[dst + 2] = cb * intensity;
+          vertex++;
+        }
+      }
+    }
+    geometry.attributes.position.needsUpdate = true;
+    geometry.attributes.color.needsUpdate = true;
+  }
+
+  function nearestNeighborCell(cell, p) {
+    let best = cell;
+    let bestDot = cellDot(cell, p);
+    const count = grid.neighborCounts[cell] ?? 0;
+    const start = cell * grid.maxNeighbors;
+    for (let k = 0; k < count; k++) {
+      const n = grid.neighbors[start + k];
+      if (n < 0) continue;
+      const d = cellDot(n, p);
+      if (d > bestDot) {
+        best = n;
+        bestDot = d;
+      }
+    }
+    return best;
+  }
+
+  function cellDot(cell, p) {
+    const off = cell * 3;
+    return grid.positions[off + 0] * p[0]
+      + grid.positions[off + 1] * p[1]
+      + grid.positions[off + 2] * p[2];
+  }
+}
+
+function tangentBasis(x, y, z) {
+  let ex = -z, ey = 0, ez = x;
+  let elen = Math.hypot(ex, ey, ez);
+  if (elen < 1e-6) { ex = 1; ey = 0; ez = 0; elen = 1; }
+  ex /= elen; ey /= elen; ez /= elen;
+  return {
+    ex, ey, ez,
+    nx: ey * z - ez * y,
+    ny: ez * x - ex * z,
+    nz: ex * y - ey * x,
+  };
+}
+
+function seededRng(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state / 4294967296;
+  };
+}
+
+function hashString(value) {
+  let h = 2166136261;
+  for (let i = 0; i < value.length; i++) {
+    h ^= value.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
 }
 
 function muteGlobeMaterial(globe) {

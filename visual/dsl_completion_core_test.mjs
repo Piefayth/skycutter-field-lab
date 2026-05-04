@@ -193,6 +193,31 @@ step { stage hold { reads u; writes u; cell { set u = u } } }
   assertEq(labels(source, "@@", "r"), ["red"]);
 });
 
+test("view body offers particle trail clauses", () => {
+  const source = `
+recipe "V"
+substrate geodesic frequency 16
+field u: f32
+field wind: vec2
+views {
+  palette MONO {
+    stop 0 color [0, 0, 0]
+    stop 1 color [255, 255, 255]
+  }
+  view flow {
+    color ramp u palette MONO
+    @@
+  }
+}
+step { stage hold { reads u, wind; writes u, wind; cell { set u = u; set wind = wind } } }
+`;
+  assertEq(labels(source, "@@", "p"), ["particles"]);
+  const afterParticles = source.replace("@@", "particles @@");
+  assertEq(labels(afterParticles, "@@", "a"), ["advect"]);
+  const afterAdvect = source.replace("@@", "particles advect=@@");
+  assertEq(labels(afterAdvect, "@@", "w"), ["wind"]);
+});
+
 test("palette reference offers declared palettes", () => {
   const source = SOURCE.replace("color ramp u range [0, 1] palette MONO", "color ramp u range [0, 1] palette @@");
   assertEq(labels(source, "@@", "M"), ["MONO"]);

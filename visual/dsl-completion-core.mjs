@@ -307,8 +307,22 @@ function optionsForGrammarPosition(ctx, mode, prefix) {
     if (/^\s*color\s+wheel\s+[A-Za-z_][A-Za-z0-9_]*\s+$/.test(line)) return structural([keywordOption("range", "range [lo, hi]")]);
     if (/\bpalette\s+$/.test(line)) return structural(palettesFromAst(ctx));
     if (/\brange\s+\[\s*$/.test(line) || /\brange\s+\[[^,\]]*,\s*$/.test(line)) return structural(constantsFromAst(ctx));
+    if (/^\s*particles\s+$/.test(line)) return structural([keywordOption("advect", "advect=vec2Field", 30)]);
+    if (/^\s*particles\s+advect\s*=\s*$/.test(line)) return structural(storageNamesFromAst(ctx));
+    if (/^\s*particles\s+advect\s*=\s*[A-Za-z_][A-Za-z0-9_]*\s+$/.test(line)) {
+      return structural([
+        keywordOption("count", "count=2400"),
+        keywordOption("length", "length=16"),
+        keywordOption("speed", "speed=0.8"),
+        keywordOption("fade", "fade=0.9"),
+        keywordOption("color", "color [235, 245, 255]"),
+      ]);
+    }
     if (/^\s*set\s+$/.test(line)) return structural([declaredOption("red", "declared"), declaredOption("green", "declared"), declaredOption("blue", "declared")]);
-    if (/^\s*[A-Za-z_]*$/.test(trimmed)) return structural([keywordOption("color", "color ramp|wheel|expr", 30)]);
+    if (/^\s*[A-Za-z_]*$/.test(trimmed)) return structural([
+      keywordOption("color", "color ramp|wheel|expr", 30),
+      keywordOption("particles", "particles advect=field", 30),
+    ]);
   }
 
   if (mode.mode === "presetBody") {
