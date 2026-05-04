@@ -480,7 +480,6 @@ function coordOptionsFromContext(ctx) {
   return [
     ...binders,
     keywordOption("prev", "previous tick", 30),
-    keywordOption("upstream", "upstream(velX, velY, dt)", 30),
   ];
 }
 

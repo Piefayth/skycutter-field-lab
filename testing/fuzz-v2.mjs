@@ -30,7 +30,7 @@
 //   - Scope is intentionally narrower than the full grammar — `@prev`
 //     is still narrower than the full grammar, but it deliberately
 //     touches the v2-heavy surfaces that have had bugs historically:
-//     `@prev`, `@upstream`, vec2 stencil helpers, derived fields,
+//     `@prev`, upstream coord sampling, vec2 stencil helpers, derived fields,
 //     stamps, and expr views.
 // =============================================================================
 
@@ -130,6 +130,7 @@ class FuzzCtx {
 //   .scalarReads   — f32 field names in the enclosing stage's `reads`
 //   .vec2Reads     — vec2 field names in the same `reads` clause
 //   .locals        — `let`-bound names declared earlier in the body
+//   .coordLocals   — coord-valued `let` names declared earlier in the body
 //   .neighborBound — name of the neighbor coord if inside a reduction,
 //                    else null (controls whether `f@n` is in scope)
 //   .allowPrev     — true if the enclosing stage may use `field@prev`
@@ -203,14 +204,12 @@ function genCellExpr(ctx, scope, depth = 0) {
   if (choice < 0.85 && scope.allowPrev && scope.prevAllowedFields.length > 0) {
     return pick(r, scope.prevAllowedFields) + "@prev";
   }
-  // Semi-Lagrangian upstream sample. Keep it out of predicate-only
-  // contexts so failures point at @upstream lowering, not at "stencil
+  // Semi-Lagrangian coordinate sample. Keep it out of predicate-only
+  // contexts so failures point at coord lowering, not at "stencil
   // expression used where only a simple predicate was expected".
-  if (choice < 0.89 && !scope.disallowReductions && scope.scalarReads.length > 0) {
+  if (choice < 0.89 && !scope.disallowReductions && scope.scalarReads.length > 0 && (scope.coordLocals?.length ?? 0) > 0) {
     const field = pick(r, scope.scalarReads);
-    const vx = scope.vec2Reads.length > 0 ? `${pick(r, scope.vec2Reads)}.x` : genSimpleScalarLeaf(ctx, scope);
-    const vy = scope.vec2Reads.length > 0 ? `${pick(r, scope.vec2Reads)}.y` : genSimpleScalarLeaf(ctx, scope);
-    return `${field}@upstream(${vx}, ${vy}, dt)`;
+    return `${field}@${pick(r, scope.coordLocals)}`;
   }
   // f@n — only inside a neighbor reduction; the validator rejects
   // @n as out of scope outside one.
@@ -246,7 +245,7 @@ function genCellExpr(ctx, scope, depth = 0) {
 function genBoolExpr(ctx, scope, depth = 0) {
   const r = ctx.rng;
   // Predicates use a stricter expression grammar than cell bodies —
-  // neighbor reductions, @prev / @upstream / @n, etc. don't parse
+  // neighbor reductions, @prev / @p / @n, upstream(...), etc. don't parse
   // in `when` or `where` contexts. Force a predicate-flavoured
   // sub-scope so the leaf generator avoids those branches.
   scope = { ...scope, disallowReductions: true };
@@ -386,6 +385,7 @@ function genStage(ctx, name, { allowPrev = false } = {}) {
     scalarReads,
     vec2Reads,
     locals: [],
+    coordLocals: [],
     neighborBound: null,
     allowPrev,
     prevAllowedFields: [...prevAllowedSet],
@@ -395,6 +395,11 @@ function genStage(ctx, name, { allowPrev = false } = {}) {
   if (useStatefulRng) {
     body.push(`let draw = rand01(${ctx.rngField.name})`);
     scope.locals.push("draw");
+  }
+  if (vec2Reads.length > 0 && scalarReads.length > 0 && maybe(r, 0.45)) {
+    const coordName = "coord0";
+    body.push(`let ${coordName} = upstream(${pick(r, vec2Reads)}, dt)`);
+    scope.coordLocals.push(coordName);
   }
   for (let i = 0; i < numLets; i++) {
     const lname = `t${i}`;

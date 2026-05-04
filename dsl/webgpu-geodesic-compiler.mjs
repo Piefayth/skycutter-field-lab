@@ -469,7 +469,6 @@ function compileCellShader({ stage, field, reads, prevReads = [], actions, layou
     layout,
     usedGradients: new Set(),
     usedDivergences: new Set(),
-    usedUpstreams: new Set(),
     usedCoordSamples: new Set(),
     usedCoordFns: new Set(),
     kernelSpecs,
@@ -934,15 +933,6 @@ function visitExpr(expr, onIdentifier) {
       // surrounding stage / metric needs to know the field is read, so
       // we surface it as an Identifier hit.
       onIdentifier(expr.field);
-      // Continuous-position coords (`@upstream`) carry expressions for
-      // the velocity components and dt; their identifiers must be
-      // walked so the pass's read set picks up vector fields like the
-      // klausmeier `slope` referenced via `slope.x` / `slope.y`.
-      if (expr.coord?.kind === "upstream") {
-        visitExpr(expr.coord.velX, onIdentifier);
-        visitExpr(expr.coord.velY, onIdentifier);
-        visitExpr(expr.coord.dt, onIdentifier);
-      }
       if (expr.coord?.kind === "coord") {
         onIdentifier(expr.coord.name);
       }
@@ -1033,10 +1023,8 @@ function exprUsesNeighborReduce(expr, coordBindings = new Set()) {
       && (expr.callee.name === "gradient" || expr.callee.name === "divergence")) {
     return true;
   }
-  // Continuous-position CoordRead (`field@upstream(...)` or `field@p`
-  // where p is a coord local) gathers from self + neighbors via
-  // inverse-distance weighting.
-  if (expr.type === "CoordRead" && expr.coord?.kind === "upstream") return true;
+  // Continuous-position CoordRead (`field@p` where p is a coord local)
+  // gathers from self + neighbors via inverse-distance weighting.
   if (expr.type === "CoordRead" && expr.coord?.kind === "coord") return !coordBindings.has(expr.coord.name);
   if (expr.type === "Member") return exprUsesNeighborReduce(expr.object, coordBindings);
   if (expr.type === "Unary") return exprUsesNeighborReduce(expr.expr, coordBindings);
@@ -1071,11 +1059,6 @@ function collectKernelSpecsFromActions(actions, layout) {
     else if (expr.type === "Call") {
       walkExpr(expr.callee);
       for (const arg of expr.args ?? []) walkExpr(arg);
-    }
-    else if (expr.type === "CoordRead" && expr.coord?.kind === "upstream") {
-      walkExpr(expr.coord.velX);
-      walkExpr(expr.coord.velY);
-      walkExpr(expr.coord.dt);
     }
   }
   for (const action of actions ?? []) walkAction(action);
@@ -1119,7 +1102,6 @@ function kernelArgKey(arg) {
 function emitStencilHelpers(ctx, typeOf) {
   const grads = [...(ctx.usedGradients ?? [])];
   const divs = [...(ctx.usedDivergences ?? [])];
-  const upstreams = [...(ctx.usedUpstreams ?? [])];
   const coordSamples = [...(ctx.usedCoordSamples ?? [])];
   const usesCoordFns = (ctx.usedCoordFns instanceof Set ? ctx.usedCoordFns.size > 0 : ctx.usedCoordFns === true)
     || coordSamples.length > 0;
@@ -1128,7 +1110,7 @@ function emitStencilHelpers(ctx, typeOf) {
   // emit them whenever the inline lift was used even if no per-(
   // field) helpers fire.
   const inlineUsed = ctx.usedStencilInline === true;
-  if (grads.length === 0 && divs.length === 0 && upstreams.length === 0 && !inlineUsed && !usesCoordFns) return "";
+  if (grads.length === 0 && divs.length === 0 && !inlineUsed && !usesCoordFns) return "";
   const blocks = [];
   // Shared helpers — emitted once per shader.
   blocks.push(`
@@ -1222,47 +1204,6 @@ fn _gradient_${fieldName}(cell: u32) -> vec2<f32> {
   }
   acc = acc / f32(count);
   return vec2<f32>(dot(acc, east), dot(acc, north));
-}
-`.trim());
-  }
-  // Per-(field) upstream-sample helper — semi-Lagrangian backwards
-  // walk along the cell's tangent velocity. Input field must be f32
-  // for now (vec2 sampling is a future extension).
-  for (const fieldName of upstreams) {
-    const t = typeOf(fieldName);
-    if (t !== "f32") {
-      throw new Error(`${fieldName}@upstream(...) requires a scalar (f32) field; got ${t}`);
-    }
-    blocks.push(`
-fn _upstream_${fieldName}(cell: u32, velX: f32, velY: f32, dt: f32) -> f32 {
-  let p = _stencil_position(cell);
-  let east = _stencil_eastBasis(p);
-  let north = normalize(cross(p, east));
-  let velocity = east * velX + north * velY;
-  // Walk backward along velocity, project back to the unit sphere.
-  // \`velocity * dt\` is the walk distance in sphere-radians: with
-  // velocity in (sphere-radians per simulation second) and dt in
-  // simulation seconds, one tick of unit-magnitude velocity moves
-  // the sample point one sphere-radian along the tangent direction.
-  let back = normalize(p - velocity * dt);
-  // Inverse-distance² weighting over self + neighbors. Same shape
-  // as the legacy ADVECT_WGSL kernel.
-  var weightSum = 0.0;
-  var valueSum = 0.0;
-  let selfD2 = max(0.000001, 2.0 * (1.0 - dot(back, p)));
-  let selfWeight = 1.0 / (selfD2 * selfD2);
-  weightSum = weightSum + selfWeight;
-  valueSum = valueSum + f_${fieldName}[cell] * selfWeight;
-  let count = neighborCounts[cell];
-  for (var slot: u32 = 0u; slot < count; slot = slot + 1u) {
-    let n = u32(neighbors[cell * 6u + slot]);
-    let q = _stencil_position(n);
-    let d2 = max(0.000001, 2.0 * (1.0 - dot(back, q)));
-    let weight = 1.0 / (d2 * d2);
-    weightSum = weightSum + weight;
-    valueSum = valueSum + f_${fieldName}[n] * weight;
-  }
-  return valueSum / weightSum;
 }
 `.trim());
   }
@@ -1865,18 +1806,6 @@ function compileCoordRead(ast, ctx) {
       ctx.usedCoordSamples ??= new Set();
       ctx.usedCoordSamples.add(ast.field);
       return `_sample_${ast.field}_at_coord(${ctx.currentCell ?? "cell"}, ${compileIdentifier(coord.name, ctx)})`;
-    }
-    case "upstream": {
-      // Continuous-position semi-Lagrangian sample. The compiler emits
-      // a per-(field) helper function in the prelude (see
-      // emitStencilHelpers); the call site passes the back-walk
-      // parameters (east-velocity, north-velocity, dt).
-      ctx.usedUpstreams ??= new Set();
-      ctx.usedUpstreams.add(ast.field);
-      const vx = compileExpr(coord.velX, ctx);
-      const vy = compileExpr(coord.velY, ctx);
-      const dt = compileExpr(coord.dt, ctx);
-      return `_upstream_${ast.field}(cell, ${vx}, ${vy}, ${dt})`;
     }
     default:
       throw new Error(`compileCoordRead: unsupported coord kind "${coord.kind}"`);

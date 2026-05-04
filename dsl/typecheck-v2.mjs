@@ -311,20 +311,6 @@ function typeOfExpr(ast, locals, ctx, label) {
       // recipe load, not WGSL emit time.
       return typeOfNeighborReduce(ast, locals, ctx, label);
     case "CoordRead": {
-      // Walk coord-arg expressions so vec2/scalar mismatches inside
-      // `field@upstream(velX, velY, dt)` are caught at recipe load.
-      // Without this, `set u = u@upstream(some_vec2, 0, dt)` would
-      // compile clean and only fail at WGSL emit time.
-      if (ast.coord?.kind === "upstream") {
-        const argLabel = `${label} (${ast.field}@upstream args)`;
-        const tx = typeOfExpr(ast.coord.velX, locals, ctx, argLabel);
-        const ty = typeOfExpr(ast.coord.velY, locals, ctx, argLabel);
-        const tdt = typeOfExpr(ast.coord.dt, locals, ctx, argLabel);
-        for (const [t, name] of [[tx, "velX"], [ty, "velY"], [tdt, "dt"]]) {
-          if (t === "vec2") throwTypeError(`${argLabel}: ${name} must be a scalar, got vec2`);
-          if (t === "bool") throwTypeError(`${argLabel}: ${name} must be a scalar, got bool`);
-        }
-      }
       if (ast.coord?.kind === "coord") {
         const coordType = typeOfIdentifier(ast.coord.name, locals, ctx);
         if (!isCoordType(coordType) && coordType !== "unknown") {

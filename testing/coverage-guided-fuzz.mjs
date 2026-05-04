@@ -7,7 +7,7 @@
 // this layer uses a structural-feature proxy extracted from the v2
 // compiler AST: a feature vector per generated recipe summarises
 // which surface-level constructs it uses (vec2 fields, gradient /
-// divergence, @prev / @upstream, neighbor reductions, ternary, when,
+// divergence, @prev / upstream coord sampling, neighbor reductions, ternary, when,
 // derived fields, expr views, etc.). Recipes with previously-unseen
 // feature vectors are kept as "seeds" — programs that exercise a
 // structurally-novel slice of the pipeline.

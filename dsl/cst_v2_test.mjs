@@ -123,7 +123,7 @@ test("CST expression spans record identifiers, coord reads, and reduction binder
 });
 
 test("CST parses expression nodes for calls members coord reads and ternaries", () => {
-  const source = `field u: f32\nfield wind: vec2\nstep { stage s { reads u, wind; writes u; cell { set u = wind.x > 0 ? clamp(u@prev, 0, 1) : u@upstream(wind.x, wind.y, dt) } } }`;
+  const source = `field u: f32\nfield wind: vec2\nstep { stage s { reads u, wind; writes u; cell { let p = upstream(wind, dt); set u = wind.x > 0 ? clamp(u@prev, 0, 1) : u@p } } }`;
   const cst = parseDslCst(source);
   const stmt = statementAt(cst, source.indexOf("set u ="));
   const node = stmt.expressions[0].node;
@@ -132,8 +132,8 @@ test("CST parses expression nodes for calls members coord reads and ternaries", 
   assertEq(node.consequent.type, "ExprCall");
   assertEq(node.consequent.args[0].type, "ExprCoordRead");
   assertEq(node.alternate.type, "ExprCoordRead");
-  assertEq(node.alternate.coord, "upstream");
-  assertEq(node.alternate.args.length, 3);
+  assertEq(node.alternate.coord, "p");
+  assertEq(node.alternate.args.length, 0);
 });
 
 test("CST expression parser tolerates missing right-hand side", () => {

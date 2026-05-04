@@ -72,11 +72,10 @@ function validateUpstreamCoordArgs(schema) {
 
 function walkUpstreamExpr(ast, label) {
   if (!ast || typeof ast !== "object") return;
-  if (ast.type === "CoordRead" && ast.coord?.kind === "upstream") {
-    const coordLabel = `${label}: ${ast.field}@upstream`;
-    rejectStencilInUpstreamArg(ast.coord.velX, coordLabel, "velX");
-    rejectStencilInUpstreamArg(ast.coord.velY, coordLabel, "velY");
-    rejectStencilInUpstreamArg(ast.coord.dt, coordLabel, "dt");
+  if (ast.type === "Call" && ast.callee?.type === "Identifier" && ast.callee.name === "upstream") {
+    const coordLabel = `${label}: upstream`;
+    rejectStencilInUpstreamArg(ast.args?.[0], coordLabel, "velocity");
+    rejectStencilInUpstreamArg(ast.args?.[1], coordLabel, "dt");
   }
   for (const value of Object.values(ast)) {
     if (Array.isArray(value)) {
@@ -129,8 +128,8 @@ function rejectStencilInUpstreamArg(ast, label, argName) {
 //     since wheel hue-rotates by t = (v - a) / (b - a) — works for
 //     any scalar source even if it isn't strictly an "angle".)
 //   - expr views: body uses the cell-grammar subset usable at render
-//     time — no field writes, no @prev / @n / @upstream, no neighbor
-//     reductions, no gradient/divergence. Must `set red`, `set green`,
+  //     time — no field writes, no @prev / @n / @p coord reads, no coord
+  //     helpers, no neighbor reductions, no gradient/divergence. Must `set red`, `set green`,
 //     `set blue` on every code path. No other targets allowed.
 //   - overlay names are in the registered set (`grid` for now).
 const REGISTERED_OVERLAYS = new Set(["grid"]);
@@ -338,8 +337,8 @@ function validateRange(range, label) {
 //     declared const, declared `let` local, or PI / TAU / true / false
 //   - calls are restricted to the runtime's whitelist (math fns +
 //     length); gradient/divergence/cellNoise/etc. are stage-only
-//   - no @prev / @n / @upstream coord reads, no neighbor reductions,
-//     no field writes
+  //   - no @prev / @n / @p coord reads, no coord helpers, no neighbor
+  //     reductions, no field writes
 //   - only `set red`, `set green`, `set blue` (no `add`, no other
 //     targets); reading a channel is illegal too
 //   - red, green, AND blue must each be assigned at the body's root
@@ -531,8 +530,8 @@ function describeAstSource(ast) {
 // implements only the cell-local subset of the cell-stage grammar:
 // scalar / vec2 reads of a cell's own field values, math functions,
 // vec2 / length / cellNoise / cellRand / rand01 / rngNext. It does NOT implement
-// neighbor reductions, coordinate queries (`@prev` / `@n` /
-// `@upstream`), or the tangent-frame stencil builtins
+// neighbor reductions, coordinate queries (`@prev` / `@n` / `@p`),
+// coordinate helpers like `upstream(...)`, or the tangent-frame stencil builtins
 // (`gradient` / `divergence`) — those need GPU-side neighbor topology.
 //
 // Without this pass, a recipe like `scenario init { for each cell {
@@ -613,8 +612,6 @@ function walkExprForInitSubset(ast, label) {
       hint = "Scenarios run once at start-of-simulation; there's no `previous tick` to read from.";
     } else if (kind === "neighbor") {
       hint = "Use bare `${ast.field}` (current cell's value); neighbor reads only work in stage cells, where the GPU has the neighbor topology bound.";
-    } else if (kind === "upstream") {
-      hint = "Continuous-position sampling needs the GPU stencil; express the seeding pattern with bare-field reads + math, or move the logic into a stage cell.";
     } else {
       hint = "This coordinate query is GPU-only.";
     }
@@ -1164,17 +1161,6 @@ function validateMetricIdentifiers(metric, schema) {
         // when imports are explicit (mirrors the cell-stage rule).
         if (ast.coord?.kind === "prev" && importedNames && !importedNames.includes("prev")) {
           throw new Error(`${label}: clock.prev is not imported (required for \`field@prev\`)`);
-        }
-        // `field@upstream(velX, velY, dt)` carries arbitrary expressions
-        // for the velocity components and dt. Walk them through the same
-        // identifier visitor so unknown identifiers + missing imports
-        // surface at recipe load. Without this, `metric m = max cells {
-        // u@upstream(undeclared, 0, dt) }` compiled clean and emitted
-        // invalid WGSL referencing `undeclared`.
-        if (ast.coord?.kind === "upstream") {
-          visitExpr(ast.coord.velX, locals);
-          visitExpr(ast.coord.velY, locals);
-          visitExpr(ast.coord.dt, locals);
         }
         return;
       }

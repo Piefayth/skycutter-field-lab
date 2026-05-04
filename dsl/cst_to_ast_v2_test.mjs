@@ -140,25 +140,16 @@ test("CST expression projection handles metric kernel reductions", () => {
   });
 });
 
-test("CST expression projection handles upstream coord reads", () => {
-  assertExpressionProjection("u@upstream(wind.x, wind.y, dt)", {
-    type: "CoordRead",
-    field: "u",
-    coord: {
-      kind: "upstream",
-      velX: {
-        type: "Member",
-        object: { type: "Identifier", name: "wind" },
-        prop: "x",
-      },
-      velY: {
-        type: "Member",
-        object: { type: "Identifier", name: "wind" },
-        prop: "y",
-      },
-      dt: { type: "Identifier", name: "dt" },
-    },
-  });
+test("CST expression projection rejects legacy upstream coord reads", () => {
+  let threw = null;
+  try {
+    assertExpressionProjection("u@upstream(wind.x, wind.y, dt)", {});
+  } catch (error) {
+    threw = error.message;
+  }
+  if (!threw || !threw.includes("is no longer supported")) {
+    throw new Error(`expected legacy @upstream rejection, got: ${threw}`);
+  }
 });
 
 test("CST cell-action projection handles let/set/add/when", () => {

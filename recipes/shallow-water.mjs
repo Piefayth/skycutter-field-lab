@@ -3,7 +3,7 @@
 // The flagship v2 recipe: uses every new primitive in one place.
 //   - `gradient(h)`         pressure-gradient force in the momentum stage
 //   - `divergence(m)`       mass flux in the continuity stage
-//   - `field@upstream(...)` semi-Lagrangian advection of the dye tracer
+//   - `let p = upstream(...); field@p` semi-Lagrangian advection of the dye tracer
 //   - `vec2` field type     m carries momentum as a single 2D vector
 //   - `metric ... cells`    live mass / max-speed / kinetic-energy
 //
@@ -59,7 +59,7 @@ export const regime = {
 
 export const pipelineDsl = `
 recipe "Shallow water (sphere)"
-summary "Depth-averaged fluid on a rotating sphere. gradient(h) drives momentum, divergence(m) drives continuity, dye rides @upstream of the velocity, and Coriolis rotates the flow with a latitude-dependent twist. Try the CYCLONES scenario — three identical bulges on a north-south line release as ring waves at the equator and tight spirals near the poles. Set ROTATION to 0 to compare against the non-rotating Earth: the polar spiral collapses to a symmetric ring."
+summary "Depth-averaged fluid on a rotating sphere. gradient(h) drives momentum, divergence(m) drives continuity, dye rides an upstream coordinate sample of the velocity, and Coriolis rotates the flow with a latitude-dependent twist. Try the CYCLONES scenario — three identical bulges on a north-south line release as ring waves at the equator and tight spirals near the poles. Set ROTATION to 0 to compare against the non-rotating Earth: the polar spiral collapses to a symmetric ring."
 recommendedPreset cyclones
 
 // Frequency 32 (~6k cells) is the sweet spot: visibly resolved
@@ -106,7 +106,7 @@ field divM: f32 derived       // divergence(m) — diagnostic only
 // the default 0.3, the wave-front velocity ~0.09 produces walks of
 // ~0.005 sphere-radians per tick (≈0.25 cells), which reads as
 // dye visibly streaming along the wave fronts. Push it to ~1.0 for
-// dramatic streaks at the cost of @upstream sampling accuracy
+// dramatic streaks at the cost of upstream sampling accuracy
 // (walks > 1 cell start sampling from cells that aren't really
 // upstream).
 param gravity   slider 0..0.02    step 0.0002  default 0.002  label "GRAVITY g"
@@ -213,11 +213,11 @@ step {
   //
   // Semi-Lagrangian: instead of differencing the gradient of dye, we
   // walk backward along the velocity for one timestep and sample the
-  // dye field at the upstream position. The CoordRead @upstream
-  // operator does exactly this, with inverse-distance interpolation
-  // over the cell's neighbors so the result varies smoothly between
-  // grid points. Shock-stable and free of the dispersion errors that
-  // plague centered-difference advection.
+  // dye field at the upstream position. upstream(...) returns that
+  // coordinate; dye@p samples it with inverse-distance interpolation over
+  // the cell's neighbors so the result varies smoothly between grid points.
+  // Shock-stable and free of the dispersion errors that plague
+  // centered-difference advection.
   //
   // Dye fade keeps long-running scenarios from saturating into a
   // uniform color — set to 0 to turn off.
@@ -234,7 +234,8 @@ step {
       let invH = 1.0 / max(h, hMin)
       let vx = m.x * invH
       let vy = m.y * invH
-      set dye = dye@upstream(vx, vy, dt * rate * flowScale) * (1 - dyeFade * dt * rate)
+      let p = upstream(vec2(vx, vy), dt * rate * flowScale)
+      set dye = dye@p * (1 - dyeFade * dt * rate)
     }
   }
 

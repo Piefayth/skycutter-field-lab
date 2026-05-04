@@ -938,19 +938,10 @@ function projectCoordRead(node) {
     return { type: "CoordRead", field: node.field, coord: { kind: "prev", depth } };
   }
   if (node.coord === "upstream") {
-    if (node.args.length !== 3) {
-      throw new Error(`v2 CST projection: ${node.field}@upstream takes exactly 3 args; got ${node.args.length}`);
-    }
-    return {
-      type: "CoordRead",
-      field: node.field,
-      coord: {
-        kind: "upstream",
-        velX: expressionCstToAst(node.args[0]),
-        velY: expressionCstToAst(node.args[1]),
-        dt: expressionCstToAst(node.args[2]),
-      },
-    };
+    throw new Error(
+      `v2 CST projection: ${node.field}@upstream(...) is no longer supported; ` +
+      `bind a coord first, e.g. \`let p = upstream(vec2(velX, velY), dt)\` then read \`${node.field}@p\``,
+    );
   }
   return { type: "CoordRead", field: node.field, coord: { kind: "coord", name: node.coord } };
 }

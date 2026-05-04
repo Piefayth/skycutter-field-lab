@@ -20,7 +20,7 @@ import { bucketKey, featureVectorFromAst } from "./fuzz-features-v2.mjs";
 const TARGET_FAMILIES = [
   {
     name: "metric-history-upstream",
-    doc: "metric bodies with @prev + @upstream; history field has a real writer",
+    doc: "history reads plus upstream coord sampling; history field has a real writer",
     generate: recipeMetricHistoryUpstream,
   },
   {
@@ -187,7 +187,7 @@ function recipeMetricHistoryUpstream(seed) {
   const speed = fixed(0.08 + rng() * 0.18);
   const damping = fixed(0.01 + rng() * 0.08);
   return `recipe "Target metric history upstream ${seed}"
-summary "Targeted fuzz: metrics read history and upstream samples."
+summary "Targeted fuzz: history metrics plus upstream coordinate sampling."
 
 substrate geodesic frequency 16
 
@@ -202,11 +202,12 @@ step {
   stage advectWave {
     reads u previous, wind
     writes u
-    cell {
-      let lap = mean n in neighbors { u@n - u }
-      let adv = u@upstream(wind.x * speed, wind.y * speed, dt)
-      set u = clamp(1.4 * u - 0.4 * u@prev + speed * lap + damping * (adv - u), -4, 4)
-    }
+      cell {
+        let lap = mean n in neighbors { u@n - u }
+        let p = upstream(wind * speed, dt)
+        let adv = u@p
+        set u = clamp(1.4 * u - 0.4 * u@prev + speed * lap + damping * (adv - u), -4, 4)
+      }
   }
 
   stage deriveSpeed {
@@ -219,7 +220,7 @@ step {
 }
 
 metric previousEnergy = mean cells { abs(u - u@prev) }
-metric upstreamPeak = max cells { abs(u@upstream(wind.x, wind.y, dt)) + speedField }
+metric speedPeak = max cells { speedField }
 
 views {
   palette U {

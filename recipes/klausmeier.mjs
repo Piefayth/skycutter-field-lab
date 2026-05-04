@@ -65,17 +65,15 @@ param diffusion slider 0..4     step 0.01  default 0.50 label "DIFFUSION D"
 param rate      slider 1..100   step 1     default 30   label "RATE"
 
 step {
-  // Water flows downhill along the slope vec2. \`@upstream(velX, velY, dt)\`
-  // is a continuous-position coordinate query — it samples the field
-  // at the cell's position walked backward \`dt\` along the tangent
-  // velocity. Replaces the v1-era \`advect\` stage primitive entirely;
-  // the kernel that primitive owned is now a per-(field) WGSL helper
-  // emitted on demand.
+  // Water flows downhill along the slope vec2. upstream(...) computes the
+  // continuous coordinate reached by walking backward along the tangent
+  // velocity; w@p samples water at that coordinate.
   stage waterFlow "Water advects downhill" {
     reads w, slope
     writes w
     cell {
-      set w = w@upstream(slope.x, slope.y, flowSpeed * dt * rate * 0.015)
+      let p = upstream(slope, flowSpeed * dt * rate * 0.015)
+      set w = w@p
     }
   }
 

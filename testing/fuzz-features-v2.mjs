@@ -167,6 +167,7 @@ function visitExpr(node, vec) {
     if (name === "vec2") vec.vec2Construct++;
     if (name === "length") vec.lengthCall++;
     if (name === "rand01" || name === "rngNext") vec.statefulRng++;
+    if (name === "upstream") vec.upstreamRead++;
   }
 
   if (node.type === "Member" && (node.prop === "x" || node.prop === "y")) {
@@ -175,7 +176,6 @@ function visitExpr(node, vec) {
 
   if (node.type === "CoordRead") {
     if (node.coord?.kind === "prev") vec.prevRead++;
-    if (node.coord?.kind === "upstream") vec.upstreamRead++;
     if (node.coord?.kind === "neighbor") vec.neighborRed++;
   }
 

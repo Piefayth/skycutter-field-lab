@@ -23,14 +23,14 @@
 //   - bare identifiers resolve to fields, params, consts, locals, builtins
 //   - `field@prev` reads the previous-tick value (CoordRead)
 //   - `field@n` (inside `<op> n in neighbors/ring/disk { ... }`) reads at neighbor n
-//   - `field@upstream(velX, velY, dt)` continuous-position semi-Lagrangian
+//   - `let p = upstream(wind, dt); field@p` continuous-position semi-Lagrangian
 //   - math fns, neighbor reductions, position helpers (lon/lat/x/y/...)
 //   - `vec2`, `length`, `gradient`, `divergence` for vec2 fields
 //
 // V2 has no stage primitives — every kernel operation is a cell stage.
 // The parser rejects v1's `wind`/`advect`/`diffuse`/`clamp`/`normalize`
 // statement forms with redirect messages pointing at the cell-stage
-// equivalents (`gradient(...)`, `field@upstream(...)`, etc.).
+// equivalents (`gradient(...)`, `upstream(...)`, etc.).
 //
 // Doc strings are user-facing — what they read in the in-app docs
 // window. Treat as API documentation.
@@ -457,7 +457,7 @@ export const MATH_FUNCTIONS = [
     js: null,
     importNamespace: "core",
     signature: "upstream(velocity, dt)",
-    doc: "Returns the coordinate reached by walking backward from the current cell along a tangent vec2 velocity for dt. Prefer binding a coordinate with `let p = upstream(wind, dt); set field = field@p`; legacy `field@upstream(velX, velY, dt)` remains accepted.",
+    doc: "Returns the coordinate reached by walking backward from the current cell along a tangent vec2 velocity for dt. Bind the coordinate first, then sample a field at it: `let p = upstream(wind, dt); set field = field@p`.",
     example: "let p = upstream(wind, dt)\nset dye = dye@p",
   },
   // Tangent-frame differential operators on the geodesic substrate.
@@ -702,9 +702,9 @@ export const STAMP_EXTRAS = [
 //   clamp    → `set field = clamp(field, <lo>, <hi>)` inside cell { }
 //   wind     → `gradient(pressure)` + vec2 wind field. See dsl-spec
 //              MATH_FUNCTIONS for `gradient` / `divergence`.
-//   advect   → `set u = u@upstream(velX, velY, dt)` continuous-position
-//              CoordRead. See "Coordinate queries" in dsl-spec for
-//              the @-coord family.
+//   advect   → `let p = upstream(wind, dt); set u = u@p`
+//              continuous-position sampling. See "Coordinate queries"
+//              in dsl-spec for the coord family.
 //   normalize → no v2 equivalent yet (needs scalar reduction + broadcast)
 export const PIPELINE_PRIMITIVES = [];
 
@@ -766,7 +766,7 @@ export const INIT_VERBS = [
   {
     name: "for",
     signature: "for each cell { ... per-cell init math ... }",
-    doc: "Per-cell programmable init (scenario/stamp bodies). Has access to position coords (lon, lat, x, y, ...) for spatially-varying initialization. Inside the body use `let`, `set`, `add`, `when`. The body uses the cell-local subset of the cell-stage grammar — neighbor reductions, `gradient`/`divergence`, and coordinate queries (`@prev` / `@n` / `@upstream`) all need GPU-side stencil topology and aren't available here. Compute those in a stage cell and read the result in this scenario.",
+    doc: "Per-cell programmable init (scenario/stamp bodies). Has access to position coords (lon, lat, x, y, ...) for spatially-varying initialization. Inside the body use `let`, `set`, `add`, `when`. The body uses the cell-local subset of the cell-stage grammar — neighbor reductions, `gradient`/`divergence`, coordinate queries (`@prev` / `@n` / `@p`), and coordinate helpers like `upstream(...)` all need GPU-side stencil topology and aren't available here. Compute those in a stage cell and read the result in this scenario.",
     example: "scenario standing {\n  for each cell {\n    set u = cos(lon * 2) * 0.6\n  }\n}",
   },
 ];
@@ -1017,7 +1017,7 @@ export const MODIFIERS = [
   { name: "color",    signature: "color KIND ...",                                doc: "Introduces the color clause inside a view. Followed by a `ramp` / `wheel` / `expr` kind plus its arguments." },
   { name: "ramp",     signature: "color ramp FIELD range [a, b] palette NAME",   doc: "Color a scalar field by remapping `range [a, b]` into a palette lookup. Range bounds accept numbers, consts, or PI / TAU. Palette is either a named `palette NAME` or an inline `stops { ... }` block." },
   { name: "wheel",    signature: "color wheel FIELD [range [a, b]]",             doc: "Color a scalar field by treating it as an angle and rotating through HSV. Range defaults to `[0, 2π]`. Use for phase / orientation / cyclic-state fields." },
-  { name: "expr",     signature: "color expr { ... set red ... set green ... set blue ... }", doc: "Programmable per-cell RGB. Body uses the cell-expression grammar minus stage-only ops (no @prev/@n/@upstream, no neighbor reductions, no gradient/divergence). Must assign red, green, AND blue at the body's root level — `when`-conditional assignments aren't enough on their own." },
+  { name: "expr",     signature: "color expr { ... set red ... set green ... set blue ... }", doc: "Programmable per-cell RGB. Body uses the cell-expression grammar minus stage-only ops (no @prev/@n/@p coord reads, no coord helpers like upstream/direction/distance, no neighbor reductions, no gradient/divergence). Must assign red, green, AND blue at the body's root level — `when`-conditional assignments aren't enough on their own." },
   { name: "range",    signature: "range [LO, HI]",                                doc: "Inclusive range for ramp/wheel mapping. Bounds accept numeric literals, declared consts, or PI / TAU. LO must differ from HI." },
   { name: "stops",    signature: "stops { stop T color [R, G, B] ... }",         doc: "Inline stop list — alternative to a named palette inside a `color ramp ... stops { ... }` clause. Same shape rules as a top-level `palette` block." },
   { name: "stop",     signature: "stop T color [R, G, B]",                       doc: "A single palette stop. T is in [0, 1] (ascending across the palette); colors are in 0..255." },

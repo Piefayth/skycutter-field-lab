@@ -505,7 +505,7 @@ step {
 `);
 });
 
-test("`advect` as a stage primitive is rejected (use @upstream cell stage)", () => {
+test("`advect` as a stage primitive is rejected (use upstream coord cell stage)", () => {
   expectThrow(() => compileV2(`
 recipe "X"
 substrate geodesic frequency 16
@@ -522,7 +522,7 @@ step {
 `), "no longer a stage primitive in v2");
 });
 
-test("@upstream coord query compiles and emits the per-field sample helper", () => {
+test("upstream coord local compiles and emits the field sample helper", () => {
   // Replacement for the advect primitive: cell stage that samples a
   // field at the back-position computed from velocity*dt.
   compileV2(`
@@ -535,7 +535,8 @@ step {
     reads u, slope
     writes u
     cell {
-      set u = u@upstream(slope.x, slope.y, 0.1)
+      let p = upstream(slope, 0.1)
+      set u = u@p
     }
   }
 }
@@ -1449,7 +1450,7 @@ scenarios {
 step { stage s { reads u; writes u; cell { set u = u } } }`), "neighbor reductions");
 });
 
-test("scenario for-each-cell rejects @upstream", () => {
+test("scenario for-each-cell rejects upstream coord helpers", () => {
   expectThrow(() => compileV2(`recipe "X"
 substrate geodesic frequency 16
 field u: f32
@@ -1458,12 +1459,13 @@ field slope: vec2
 scenarios {
   scenario init "init" {
     for each cell {
-      set u = u@upstream(slope.x, slope.y, dt)
+      let p = upstream(slope, dt)
+      set u = u
     }
   }
 }
 
-step { stage s { reads u; writes u; cell { set u = u } } }`), "u@upstream");
+step { stage s { reads u; writes u; cell { set u = u } } }`), "upstream");
 });
 
 test("scenario for-each-cell rejects @prev (no previous tick at start)", () => {
@@ -1566,34 +1568,31 @@ stamps {
 step { stage s { reads u; writes u; cell { set u = u } } }`), "assigning vec2 to f32 field");
 });
 
-test("metric body @upstream rejects unknown identifier in coord args", () => {
-  // Reviewer-flagged: validateMetricIdentifiers' CoordRead branch used
-  // to check the sampled field but skip velX/velY/dt, so a typo in a
-  // metric body emitted invalid WGSL.
+test("legacy @upstream coord query is rejected", () => {
   expectThrow(() => compileV2(`
 recipe "X"
 substrate geodesic frequency 16
 field u: f32
 step { stage s { reads u; writes u; cell { set u = u } } }
 metric bad = max cells { u@upstream(nope, 0, dt) }
-`), "nope");
+`), "is no longer supported");
 });
 
-test("metric body @upstream rejects vec2 in coord args (type check)", () => {
+test("upstream(...) rejects non-vec2 velocity", () => {
   expectThrow(() => compileV2(`
 recipe "X"
 substrate geodesic frequency 16
 field u: f32
-field slope: vec2
-step { stage s { reads u; writes u; cell { set u = u } } }
-metric bad = max cells { u@upstream(slope, 0, dt) }
-`), "must be a scalar, got vec2");
+step {
+  stage s { reads u; writes u; cell {
+    let p = upstream(u, dt)
+    set u = u
+  } }
+}
+`), "argument 1 must be vec2");
 });
 
-test("type-check accepts @upstream coord-arg expressions on vec2 fields", () => {
-  // Regression: the reviewer-flagged @upstream bug already covered the
-  // dependency / validator paths; this confirms the new type checker
-  // doesn't false-fire on the legitimate vec2-component coord-args.
+test("type-check accepts upstream coord locals on vec2 fields", () => {
   compileV2(`
 recipe "X"
 substrate geodesic frequency 16
@@ -1601,23 +1600,25 @@ field w: f32
 field slope: vec2
 step {
   stage flow { reads w, slope; writes w; cell {
-    set w = w@upstream(slope.x, slope.y, dt)
+    let p = upstream(slope, dt)
+    set w = w@p
   } }
 }
 `);
 });
 
-test("@upstream coord args reject nested stencil expressions", () => {
+test("upstream coord args reject nested stencil expressions", () => {
   expectThrow(() => compileV2(`
 recipe "X"
 substrate geodesic frequency 16
 field u: f32
 step {
   stage flow { reads u; writes u; cell {
-    set u = u@upstream(mean n in neighbors { u@n - u }, 0, dt)
+    let p = upstream(vec2(mean n in neighbors { u@n - u }, 0), dt)
+    set u = u@p
   } }
 }
-`), "velX cannot contain a neighbor reduction");
+`), "velocity cannot contain a neighbor reduction");
 
   expectThrow(() => compileV2(`
 recipe "X"
@@ -1626,8 +1627,9 @@ field u: f32
 field slope: vec2
 step {
   stage flow { reads u, slope; writes u; cell {
-    set u = u@upstream(divergence(slope), 0, dt)
+    let p = upstream(vec2(divergence(slope), 0), dt)
+    set u = u@p
   } }
 }
-`), "velX cannot contain divergence");
+`), "velocity cannot contain divergence");
 });

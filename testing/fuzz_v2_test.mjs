@@ -60,10 +60,12 @@ step {
     cell {
       let g = gradient(u)
       let r = rand01(rng)
+      let p = upstream(wind, dt)
+      let wx = wind.x
       when u > 0 and not false {
         set d = divergence(wind)
       }
-      set u = u@upstream(wind.x, wind.y, dt) + (u@prev > 0 ? r : 0)
+      set u = u@p + wx * 0 + (u@prev > 0 ? r : 0)
       set rng = rngNext(rng)
     }
   }

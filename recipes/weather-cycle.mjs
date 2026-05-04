@@ -100,7 +100,8 @@ step {
     reads vapor, wind
     writes vapor
     cell {
-      let adv = vapor@upstream(wind.x * flowScale, wind.y * flowScale, dt * rate)
+      let p = upstream(wind * flowScale, dt * rate)
+      let adv = vapor@p
       set vapor = clamp(adv, 0, 2.5)
     }
   }

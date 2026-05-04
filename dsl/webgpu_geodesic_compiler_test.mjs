@@ -1,5 +1,5 @@
 // Tests for the WebGPU geodesic compiler — both the cell-stage WGSL
-// emit path and the @upstream / vec2 / type-checker paths it shares
+// emit path and the upstream-coordinate / vec2 / type-checker paths it shares
 // with the v2 frontend. Every test drives the compiler via compileV2,
 // since v1 (`compileDsl`) is gone.
 
@@ -453,7 +453,7 @@ step {
 });
 
 // =============================================================================
-// V2-only paths (vec2, gradient/divergence, @upstream, type checker).
+// V2-only paths (vec2, gradient/divergence, upstream coords, type checker).
 // =============================================================================
 
 test("vec2 field emits array<vec2<f32>> bindings + typed read locals", () => {
@@ -873,12 +873,11 @@ step {
     `expected gradient-on-vec2 type-check error; got: ${threw}`);
 });
 
-test("@upstream coord-arg field references add the field to pass.reads", () => {
-  // Regression: a stage that reads field `slope` only via the velocity
-  // arguments of `field@upstream(velX, velY, dt)` would silently drop
-  // `slope` from pass.reads, leaving the WGSL referencing an unbound
-  // identifier. The compiler must walk velX/velY/dt expressions when
-  // collecting per-target dependencies.
+test("upstream coord locals add their velocity field to pass.reads", () => {
+  // Regression: a stage that reads field `slope` only via upstream(...)
+  // would silently drop `slope` from pass.reads, leaving WGSL referencing
+  // an unbound identifier. The compiler must walk coord-local dependencies
+  // when filtering per-target actions.
   const recipe = compileV2(`
 recipe "Upstream args"
 substrate geodesic frequency 16
@@ -890,7 +889,8 @@ step {
     reads w, slope
     writes w
     cell {
-      set w = w@upstream(slope.x, slope.y, dt)
+      let p = upstream(slope, dt)
+      set w = w@p
     }
   }
 }
@@ -899,11 +899,11 @@ step {
   assert(pass.reads.includes("slope"), `pass.reads must include slope (got ${JSON.stringify(pass.reads)})`);
   assert(pass.source.includes("var<storage, read> f_slope: array<vec2<f32>>"),
     "slope must be bound as array<vec2<f32>>");
-  assert(pass.source.includes("v_slope.x") && pass.source.includes("v_slope.y"),
-    "@upstream args must reference the typed v_slope local");
+  assert(pass.source.includes("let p = _coord_upstream(cell, v_slope, params.dt);"),
+    "upstream(...) must reference the typed v_slope local");
 });
 
-test("@upstream inside when body still emits upstream helper", () => {
+test("field@coord inside when body still emits coord sampler", () => {
   const recipe = compileV2(`
 recipe "Conditional upstream"
 substrate geodesic frequency 16
@@ -915,17 +915,19 @@ step {
     reads u, wind
     writes u
     cell {
+      let p = upstream(wind, dt)
       when u > 0 {
-        set u = u@upstream(wind.x, wind.y, dt)
+        set u = u@p
       }
     }
   }
 }
 `);
   const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
-  assert(pass.source.includes("fn _upstream_u("), "conditional upstream read must emit helper function");
-  assert(pass.source.includes("_upstream_u(cell, v_wind.x, v_wind.y, params.dt)"),
-    "conditional body should call the emitted upstream helper");
+  assert(pass.source.includes("fn _coord_upstream("), "coord upstream helper emitted");
+  assert(pass.source.includes("fn _sample_u_at_coord("), "field@coord sampler emitted");
+  assert(pass.source.includes("_sample_u_at_coord(cell, p)"),
+    "conditional body should sample at the coord local");
 });
 
 test("coord-valued upstream can be bound and sampled with field@coord", () => {
@@ -985,7 +987,7 @@ step {
   assert(pass.source.includes("_coord_distance(cell, n)"), "distance(n) should lower against the edge coord binder");
 });
 
-test("validator rejects unknown identifier in @upstream coord arguments", () => {
+test("validator rejects unknown identifier in upstream coord arguments", () => {
   let threw = null;
   try {
     compileV2(`
@@ -998,13 +1000,14 @@ step {
     reads w
     writes w
     cell {
-      set w = w@upstream(notDeclared, 0, dt)
+      let p = upstream(notDeclared, dt)
+      set w = w@p
     }
   }
 }
 `);
   } catch (e) { threw = e; }
-  assert(threw, "expected validation error for unknown identifier in @upstream args");
+  assert(threw, "expected validation error for unknown identifier in upstream args");
   assert(/notDeclared/.test(threw.message), `expected error to mention notDeclared, got: ${threw.message}`);
 });
 

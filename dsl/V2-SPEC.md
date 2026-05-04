@@ -30,8 +30,7 @@ Compared to v1:
 - Neighbor reductions are cell-centered: `sum n in neighbors { u@n - u + v@n }`
   binds a *cell coordinate* `n`, then any field can be read at `n`. Replaces
   v1's field-centered `neighbor sum n in u { ... }`.
-- Continuous coordinate samples are first-class: prefer
-  `let p = upstream(wind, dt); u@p` over legacy `u@upstream(...)`.
+- Continuous coordinate samples are first-class: `let p = upstream(wind, dt); u@p`.
 - Special primitives (`diffuse`, `clamp`, `advect`, `wind`, `normalize`)
   collapse into the universal `cell { ... }` block. Each is now expressible as
   one or two lines of cell expression.
@@ -688,7 +687,6 @@ u@prev                             # this cell, previous tick (triggers history 
 u@n                                # bound coordinate read (reduction binder or edge binder)
 let p = upstream(wind, dt)         # continuous coordinate one timestep upstream
 u@p                                # sample field u at coordinate p
-u@upstream(velX, velY, dt)         # legacy spelling, equivalent to a temporary coord
 ```
 
 `coord` is an expression type, not a storage type. The currently implemented
@@ -1082,8 +1080,7 @@ The compile path:
 
 - `cst-v2.mjs` produces a tolerant concrete syntax tree with source ranges.
   `cst-to-ast-v2.mjs` strictly projects it into the compiler-facing v2 AST:
-  CoordRead nodes for `field@coord` (kinds: `prev`, `coord`, plus legacy
-  `upstream`),
+  CoordRead nodes for `field@coord` (kinds: `prev`, `coord`),
   NeighborReduce nodes carrying a `coord` binding name, plus cell-action types
   (`set`, `add`, `let`, `when`). The v1 stage primitives (`wind`, `advect`,
   `diffuse`, `clamp`, `normalize`) are rejected during strict projection with
