@@ -51,6 +51,7 @@ substrate geodesic frequency 64
 
 field u: f32
 field abs_u: f32 derived
+source wall: f32
 
 param speed   slider 0..0.29 default 0.25 label "WAVE SPEED"
 param damping slider 0..0.05 default 0    label "DAMPING γ"
@@ -72,6 +73,7 @@ views {
 
 stamps {
   stamp ripple "Drop ripple" { spot u at brush.pos, radius=brush.r, amount=1 }
+  stamp erase_wall "Erase wall" { set wall at brush.pos, radius=brush.r, value=0 }
 }
 
 scenarios {
@@ -129,8 +131,10 @@ not part of the simulation update loop:
 - stages may list sources in `reads`
 - stages may not list sources in `writes`
 - scenarios may initialize sources
-- stamps may edit sources, including erase stamps that subtract or reset source
-  values
+- stamps may edit sources
+- `set sourceName at brush.pos, radius=brush.r, value=0` assigns a source
+  brush region exactly, which is the preferred way to erase persistent source
+  layers
 - `spot sourceName ... radius=0` targets exactly the nearest cell, which makes
   single-cell source editing possible even when the UI brush radius slider is
   larger

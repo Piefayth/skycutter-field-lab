@@ -375,6 +375,13 @@ function validateStampActions(actions, declaredFields, declaredParams, declaredC
       validateExpr(action.lat, allFieldsVisible ?? new Set(), locals, `${label} spot lat`, declaredParams, declaredConstants, declaredPlanet, imports, extra);
       validateExpr(action.radius, allFieldsVisible ?? new Set(), locals, `${label} spot radius`, declaredParams, declaredConstants, declaredPlanet, imports, extra);
       validateExpr(action.amount, allFieldsVisible ?? new Set(), locals, `${label} spot amount`, declaredParams, declaredConstants, declaredPlanet, imports, extra);
+    } else if (action.type === "setSpot") {
+      requireImport(imports, "init", "spot", label);
+      requireDeclaredField(action.field, declaredFields, label, "set");
+      validateExpr(action.lon, allFieldsVisible ?? new Set(), locals, `${label} set lon`, declaredParams, declaredConstants, declaredPlanet, imports, extra);
+      validateExpr(action.lat, allFieldsVisible ?? new Set(), locals, `${label} set lat`, declaredParams, declaredConstants, declaredPlanet, imports, extra);
+      validateExpr(action.radius, allFieldsVisible ?? new Set(), locals, `${label} set radius`, declaredParams, declaredConstants, declaredPlanet, imports, extra);
+      validateExpr(action.value, allFieldsVisible ?? new Set(), locals, `${label} set value`, declaredParams, declaredConstants, declaredPlanet, imports, extra);
     } else if (action.type === "ellipse") {
       requireImport(imports, "init", "ellipse", label);
       requireDeclaredField(action.field, declaredFields, label, "ellipse");
@@ -400,6 +407,13 @@ function validatePresetActions(actions, declaredFields, declaredParams, declared
       requireImport(imports, "init", "fill", label);
       requireDeclaredField(action.field, declaredFields, label, "fill");
       validateExpr(action.value, allFieldsVisible ?? new Set(), locals, `${label} fill ${action.field}`, declaredParams, declaredConstants, declaredPlanet, imports, extra);
+    } else if (action.type === "setSpot") {
+      requireImport(imports, "init", "spot", label);
+      requireDeclaredField(action.field, declaredFields, label, "set");
+      validateExpr(action.lon, allFieldsVisible ?? new Set(), locals, `${label} set lon`, declaredParams, declaredConstants, declaredPlanet, imports, extra);
+      validateExpr(action.lat, allFieldsVisible ?? new Set(), locals, `${label} set lat`, declaredParams, declaredConstants, declaredPlanet, imports, extra);
+      validateExpr(action.radius, allFieldsVisible ?? new Set(), locals, `${label} set radius`, declaredParams, declaredConstants, declaredPlanet, imports, extra);
+      validateExpr(action.value, allFieldsVisible ?? new Set(), locals, `${label} set value`, declaredParams, declaredConstants, declaredPlanet, imports, extra);
     } else if (action.type === "spot") {
       requireImport(imports, "init", "spot", label);
       requireDeclaredField(action.field, declaredFields, label, "spot");

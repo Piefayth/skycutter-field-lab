@@ -163,6 +163,35 @@ step { stage s { reads u; writes u; cell { set u = u } } }
   assertEq(sc.actions[1].lon.type, "Number");
 });
 
+test("scenario and stamp set-at actions lower to setSpot", () => {
+  const out = parseStrict(`
+recipe "S"
+substrate geodesic frequency 16
+source mask: f32
+field u: f32
+
+stamps {
+  stamp erase {
+    set mask at brush.pos, radius=brush.r, value=0
+  }
+}
+
+scenarios {
+  scenario marked {
+    set mask at lon=0, lat=0, radius=0.1, value=1
+  }
+}
+
+step { stage s { reads u, mask; writes u; cell { set u = u + mask } } }
+`);
+  assertEq(out.stamps[0].actions[0].type, "setSpot");
+  assertEq(out.stamps[0].actions[0].field, "mask");
+  assertEq(out.stamps[0].actions[0].lon, { type: "Identifier", name: "lon" });
+  assertEq(out.stamps[0].actions[0].lat, { type: "Identifier", name: "lat" });
+  assertEq(out.presets[0].actions[0].type, "setSpot");
+  assertEq(out.presets[0].actions[0].value, { type: "Number", value: "1" });
+});
+
 // -----------------------------------------------------------------------------
 // Scenario param overrides — `param NAME = VALUE` inside a scenario body
 // captures into `paramOverrides` on the lowered preset.

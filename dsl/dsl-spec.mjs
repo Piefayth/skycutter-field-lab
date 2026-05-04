@@ -676,9 +676,10 @@ export const STAGE_BLOCKS = [
 // ---------------------------------------------------------------------------
 
 export const INIT_VERBS = [
-  // Note: `set` and `add` are documented under ACTION_VERBS — they
-  // work the same way in scenario / stamp / cell bodies. The init-verb
-  // group contains only the verbs unique to scenarios and stamps
+  // Note: `set` and `add` are documented under ACTION_VERBS. `set`
+  // also has an init-only `set FIELD at ..., value=...` assignment
+  // form for exact source/material painting. The init-verb group
+  // contains only the verbs unique to scenarios and stamps
   // (spot / ellipse / region / for).
   // Init verbs are syntactic block keywords — they appear at the front
   // of a scenario / stamp action, not as importable builtin names.
@@ -731,9 +732,9 @@ export const ACTION_VERBS = [
   },
   {
     name: "set",
-    signature: "set FIELD = EXPR",
-    doc: "Overwrites FIELD's output accumulator with EXPR for the current cell. Bare field reads inside EXPR read the stage-input snapshot. Use `let` locals when one formula needs to feed another.",
-    example: "set burning = 1",
+    signature: "set FIELD = EXPR | set FIELD at brush.pos, radius=R, value=V",
+    doc: "In cell / for-each bodies, overwrites FIELD's output accumulator with EXPR for the current cell. In scenario / stamp bodies, `set FIELD = EXPR` fills the whole field, while `set FIELD at ..., radius=..., value=...` assigns a geodesic brush disk exactly. Use the set-at form to erase or author persistent source layers without additive `spot` falloff.",
+    example: "set burning = 1\n// stamp:\nset wall at brush.pos, radius=brush.r, value=0",
   },
 ];
 

@@ -506,6 +506,20 @@ function initActionsCstToAst(cst, block, allowBrush) {
 
 function initActionCstToAst(stmt, allowBrush) {
   if (stmt.keyword === "set") {
+    if (/\bat\b/.test(stmt.cleanText) && /\bvalue\s*=/.test(stmt.cleanText)) {
+      if (!stmt.parts.target?.name) throw new Error("v2 CST projection: incomplete init set-at action");
+      const args = {};
+      if (allowBrush && /\bbrush\s*\.\s*pos\b/.test(stmt.cleanText)) {
+        args.lon = { type: "Identifier", name: "lon" };
+        args.lat = { type: "Identifier", name: "lat" };
+      }
+      for (const expr of stmt.expressions ?? []) {
+        if (!expr.kind.endsWith("Arg")) continue;
+        const key = expr.kind.slice(0, -"Arg".length);
+        args[key] = expressionCstToAst(expr.node);
+      }
+      return { type: "setSpot", field: stmt.parts.target.name, ...args };
+    }
     if (!stmt.parts.target?.name) throw new Error("v2 CST projection: incomplete init set action");
     return { type: "fill", field: stmt.parts.target.name, value: expressionCstToAst(firstExpression(stmt)) };
   }

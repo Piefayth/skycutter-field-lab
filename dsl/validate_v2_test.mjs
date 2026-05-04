@@ -256,6 +256,29 @@ step {
 }`);
 });
 
+test("source can be assigned exactly by set-at stamps", () => {
+  compileV2(`recipe "X"
+substrate geodesic frequency 16
+field u: f32
+source mask: f32
+
+stamps {
+  stamp erase "erase mask" {
+    set mask at brush.pos, radius=brush.r, value=0
+  }
+}
+
+scenarios {
+  scenario init {
+    set mask at lon=0, lat=0, radius=0.1, value=1
+  }
+}
+
+step {
+  stage step1 { reads u, mask; writes u; cell { set u = u + mask } }
+}`);
+});
+
 test("source cannot be written by stages", () => {
   expectThrow(() => compileV2(`recipe "X"
 substrate geodesic frequency 16
@@ -264,6 +287,21 @@ source mask: f32
 step {
   stage step1 { reads u; writes u, mask; cell { set mask = 1 } }
 }`), "source mask is immutable");
+});
+
+test("set-at value must match target field type", () => {
+  expectThrow(() => compileV2(`recipe "X"
+substrate geodesic frequency 16
+field wind: vec2
+field u: f32
+stamps {
+  stamp bad {
+    set wind at brush.pos, radius=brush.r, value=1
+  }
+}
+step {
+  stage step1 { reads u; writes u; cell { set u = u } }
+}`), "vec2 field");
 });
 
 // -----------------------------------------------------------------------------

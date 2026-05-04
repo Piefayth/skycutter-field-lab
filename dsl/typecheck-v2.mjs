@@ -118,7 +118,7 @@ function typecheckScenarioOrStamp(decl, ctx, kind) {
   for (const action of decl.actions ?? []) {
     if (action.type === "fill") {
       checkFieldAssignment(action.field, action.value, ctx, `${label} fill`);
-    } else if (action.type === "spot" || action.type === "ellipse" || action.type === "region") {
+    } else if (action.type === "spot" || action.type === "setSpot" || action.type === "ellipse" || action.type === "region") {
       // Position / size / angle args are always scalar.
       const positionalKeys = ["lon", "lat", "radius", "rx", "ry", "angle", "lonMin", "lonMax", "latMin", "latMax"];
       for (const key of positionalKeys) {
@@ -128,18 +128,19 @@ function typecheckScenarioOrStamp(decl, ctx, kind) {
         if (t === "vec2") throwTypeError(`${label} ${action.type} ${key}: expected scalar, got vec2`);
         if (t === "bool") throwTypeError(`${label} ${action.type} ${key}: expected scalar, got bool`);
       }
-      // The `amount` expression must match the targeted field's type.
+      // The `amount` / `value` expression must match the targeted field's type.
       // The runtime (visual/dsl-init-runtime.mjs:addGeodesicBlobAtVector)
       // explicitly rejects scalar amounts for vec2 fields and vec2
       // amounts for scalar fields — there is no broadcast. Catch the
       // mismatch here at recipe load instead of letting it surface as
       // a runtime error mid-paint.
-      if (action.amount) {
+      const writeExpr = action.type === "setSpot" ? action.value : action.amount;
+      if (writeExpr) {
         checkFieldAssignment(
           action.field,
-          action.amount,
+          writeExpr,
           ctx,
-          `${label} ${action.type} amount on "${action.field}"`,
+          `${label} ${action.type} ${action.type === "setSpot" ? "value" : "amount"} on "${action.field}"`,
         );
       }
     } else if (action.type === "eachCell") {

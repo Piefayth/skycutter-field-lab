@@ -99,6 +99,17 @@ function runPresetAction(state, action, cell) {
     );
     return;
   }
+  if (action.type === "setSpot") {
+    setGeodesicSpot(
+      state,
+      action.field,
+      evalInitExpr(action.lon, state, cell),
+      evalInitExpr(action.lat, state, cell),
+      evalInitExpr(action.radius, state, cell),
+      evalInitExpr(action.value, state, cell),
+    );
+    return;
+  }
   if (action.type === "ellipse") {
     addGeodesicEllipseAtLonLat(
       state,
@@ -345,6 +356,17 @@ function addGeodesicSpot(state, fieldName, lon, lat, radius, amount) {
   );
 }
 
+function setGeodesicSpot(state, fieldName, lon, lat, radius, value) {
+  const c = Math.cos(lat);
+  setGeodesicDiskAtVector(
+    state,
+    fieldName,
+    [Math.cos(lon) * c, Math.sin(lat), Math.sin(lon) * c],
+    radius,
+    value,
+  );
+}
+
 function addGeodesicBlobAtVector(state, fieldName, center, radius, amount) {
   const field = fieldArray(state, fieldName, "spot");
   const components = fieldComponents(state, fieldName);
@@ -372,6 +394,43 @@ function addGeodesicBlobAtVector(state, fieldName, center, radius, amount) {
       const base = cell * 2;
       field[base + 0] += ax * falloff;
       field[base + 1] += ay * falloff;
+    }
+    if (depth >= ringRadius) continue;
+    const count = grid.neighborCounts[cell] ?? 0;
+    for (let slot = 0; slot < count; slot++) {
+      const next = grid.neighbors[cell * grid.maxNeighbors + slot];
+      if (next < 0 || visited[next]) continue;
+      visited[next] = 1;
+      queue.push({ cell: next, depth: depth + 1 });
+    }
+  }
+}
+
+function setGeodesicDiskAtVector(state, fieldName, center, radius, value) {
+  const field = fieldArray(state, fieldName, "set");
+  const components = fieldComponents(state, fieldName);
+  if (components === 1 && isVec2(value)) {
+    throw new Error(`set ${fieldName}: scalar field can't take a vec2 value`);
+  }
+  if (components === 2 && !isVec2(value)) {
+    throw new Error(`set ${fieldName}: vec2 field requires a vec2 value (use \`vec2(x, y)\`)`);
+  }
+  const ax = components === 2 ? value.x : Number(value);
+  const ay = components === 2 ? value.y : 0;
+  const grid = geodesicGrid(state, "set");
+  const centerCell = nearestGeodesicCell(grid, center);
+  const ringRadius = Math.max(0, Math.round(Math.abs(radius) / averageNeighborAngle(grid, centerCell)));
+  const visited = new Uint8Array(grid.cellCount);
+  const queue = [{ cell: centerCell, depth: 0 }];
+  visited[centerCell] = 1;
+  for (let head = 0; head < queue.length; head++) {
+    const { cell, depth } = queue[head];
+    if (components === 1) {
+      field[cell] = ax;
+    } else {
+      const base = cell * 2;
+      field[base + 0] = ax;
+      field[base + 1] = ay;
     }
     if (depth >= ringRadius) continue;
     const count = grid.neighborCounts[cell] ?? 0;

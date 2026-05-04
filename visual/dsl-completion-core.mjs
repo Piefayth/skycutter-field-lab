@@ -236,7 +236,7 @@ function symbolsForMode(mode) {
 }
 
 function optionsForGrammarPosition(ctx, mode, prefix) {
-  const expectedOptions = optionsForExpectedContext(ctx, prefix);
+  const expectedOptions = optionsForExpectedContext(ctx, mode, prefix);
   if (expectedOptions) return expectedOptions;
 
   const fullLine = (ctx.lineUpToCursor ?? "").replace(/\/\/.*$/, "");
@@ -313,7 +313,9 @@ function optionsForGrammarPosition(ctx, mode, prefix) {
 
   if (mode.mode === "presetBody") {
     if (/^\s*(set|spot|ellipse|region)\s+$/.test(line)) return structural(storageNamesFromAst(ctx));
+    if (/^\s*set\s+[A-Za-z_][A-Za-z0-9_]*\s+$/.test(line)) return structural([keywordOption("at", "set field at ..., value=...")]);
     if (/\bat\s+$/.test(line) && ctx.stack.includes("stamp")) return structural([declaredOption("brush", "declared")]);
+    if (/\bradius\s*=\s*[^,]+,\s*$/.test(line)) return structural([keywordOption("value", "value=expr")]);
     if (initial || /^\s*[A-Za-z_]*$/.test(trimmed)) {
       return structural([
         keywordOption("set", "set field = expr", 30),
@@ -340,11 +342,22 @@ function optionsForGrammarPosition(ctx, mode, prefix) {
   return null;
 }
 
-function optionsForExpectedContext(ctx, prefix) {
+function optionsForExpectedContext(ctx, mode, prefix) {
   const expected = new Set(ctx.cursor?.expected ?? []);
   if (expected.size === 0 || expected.has("expression")) return null;
   const structural = (options) => filterOptions(options, prefix);
-  if (expected.has("fieldName")) return structural(fieldsFromAst(ctx));
+  if (expected.has("fieldName")) {
+    if (mode?.mode === "viewBody") {
+      const line = activeLineSegment(ctx.lineUpToCursor ?? "");
+      if (/^\s*set\s+/.test(line)) {
+        return structural([declaredOption("red", "declared"), declaredOption("green", "declared"), declaredOption("blue", "declared")]);
+      }
+      return structural(storageNamesFromAst(ctx));
+    }
+    return structural(mode?.mode === "presetBody" || mode?.mode === "initCellBody"
+      ? storageNamesFromAst(ctx)
+      : fieldsFromAst(ctx));
+  }
   if (expected.has("paletteName")) return structural(palettesFromAst(ctx));
   if (expected.has("scenarioName")) return structural(scenariosFromAst(ctx));
   if (expected.has("fieldType")) return structural(FIELD_TYPE_COMPLETIONS);

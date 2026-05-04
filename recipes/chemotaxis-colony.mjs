@@ -219,10 +219,10 @@ stamps {
   }
 
   stamp eraseSources "Erase springs and vents" {
-    // Big negative amount overpaints any existing source value at the
-    // brushed cells; the writeback clamps to 0.
-    spot foodSpring at brush.pos, radius=brush.r, amount=-100
-    spot toxinVent at brush.pos, radius=brush.r, amount=-100
+    // Assignment stamp: clears the persistent source layer instead
+    // of adding a negative emitter.
+    set foodSpring at brush.pos, radius=brush.r, value=0
+    set toxinVent at brush.pos, radius=brush.r, value=0
   }
 
   stamp clearBugs "Clear bugs" {

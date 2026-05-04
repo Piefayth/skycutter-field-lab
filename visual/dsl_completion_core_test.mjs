@@ -142,6 +142,12 @@ stamps {
 step { stage hold { reads u; writes u; cell { set u = u } } }
 `;
   assertEq(labels(stamp, "@@", "m"), ["mask"]);
+
+  const setAt = stamp.replace("spot @@", "set @@");
+  assertEq(labels(setAt, "@@", "m"), ["mask"]);
+
+  const afterTarget = stamp.replace("spot @@", "set mask @@");
+  assertEq(labels(afterTarget, "@@", "a"), ["at"]);
 });
 
 test("views section offers view declarations", () => {
@@ -150,6 +156,23 @@ views {
   @@
 }`;
   assertEq(labels(source, "@@").filter((label) => ["palette", "view", "overlay"].includes(label)), ["palette", "view", "overlay"]);
+});
+
+test("expr view set target offers color channels", () => {
+  const source = `
+recipe "V"
+substrate geodesic frequency 16
+field u: f32
+views {
+  view composite {
+    color expr {
+      set @@
+    }
+  }
+}
+step { stage hold { reads u; writes u; cell { set u = u } } }
+`;
+  assertEq(labels(source, "@@", "r"), ["red"]);
 });
 
 test("palette reference offers declared palettes", () => {

@@ -72,15 +72,22 @@ stamps {
   stamp mark "Mark source cell" {
     spot mask at brush.pos, radius=0, amount=1
   }
+  stamp erase "Erase source cell" {
+    set mask at brush.pos, radius=0, value=0
+  }
 }
 step { stage s { reads u, mask; writes u; cell { set u = u + mask } } }
 `),
   });
   const state = makeGeodesicStampState(8, recipe);
-  const stamp = recipe.stamps.find((s) => s.id === "mark");
-  assert(stamp, "source stamp must materialize");
-  stamp.run(state, 128, 64, 10, { lon: 0, lat: 0, u: 0.5, v: 0.5, px: 1, py: 0, pz: 0 });
+  const hit = { lon: 0, lat: 0, u: 0.5, v: 0.5, px: 1, py: 0, pz: 0 };
+  const mark = recipe.stamps.find((s) => s.id === "mark");
+  const erase = recipe.stamps.find((s) => s.id === "erase");
+  assert(mark && erase, "source stamps must materialize");
+  mark.run(state, 128, 64, 10, hit);
   assert(nonZeroCount(state.fields.mask) === 1, "radius=0 source stamp should affect exactly one cell");
+  erase.run(state, 128, 64, 10, hit);
+  assert(nonZeroCount(state.fields.mask) === 0, "set-at radius=0 source stamp should erase exactly that cell");
 });
 
 function makeGeodesicStampState(frequency, recipe = stampRecipe) {

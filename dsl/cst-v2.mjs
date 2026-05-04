@@ -410,6 +410,25 @@ function annotateStatement(stmt) {
     const target = /^\s*(set|add)\s+([A-Za-z_][A-Za-z0-9_]*)?/.exec(line);
     const targetFrom = line.indexOf(stmt.keyword) + stmt.keyword.length;
     const eq = line.indexOf("=");
+    const at = line.indexOf(" at ", afterKeyword);
+    const isInitRegionSet = stmt.keyword === "set"
+      && (stmt.blockKeyword === "scenario" || stmt.blockKeyword === "stamp")
+      && at >= 0
+      && /\bvalue\s*=/.test(line);
+    if (isInitRegionSet) {
+      const firstModifier = firstPositive([
+        at,
+        line.indexOf(" value", afterKeyword),
+        line.length,
+      ]);
+      addZone(afterKeyword, firstModifier, "fieldName", "initTarget");
+      if (target?.[2]) {
+        const rel = line.indexOf(target[2], target.index + target[1].length);
+        stmt.parts.target = { name: target[2], from: base + rel, to: base + rel + target[2].length };
+      }
+      annotateNamedArgExpressions(stmt, line, base, addExpr);
+      return;
+    }
     addZone(targetFrom, eq >= 0 ? eq : line.length, "fieldName", "assignmentTarget");
     if (target?.[2]) {
       const rel = line.indexOf(target[2], target.index + target[1].length);
@@ -509,10 +528,10 @@ function annotateStatement(stmt) {
 }
 
 function annotateNamedArgExpressions(stmt, line, base, addExpr) {
-  for (const match of line.matchAll(/\b(amount|radius|rx|ry|angle|lon|lat|lonMin|lonMax|latMin|latMax)\s*=/g)) {
+  for (const match of line.matchAll(/\b(amount|value|radius|rx|ry|angle|lon|lat|lonMin|lonMax|latMin|latMax)\s*=/g)) {
     const start = match.index + match[0].length;
     const rest = line.slice(start);
-    const next = /\s+\b(amount|radius|rx|ry|angle|lon|lat|lonMin|lonMax|latMin|latMax)\s*=/.exec(rest);
+    const next = /\s+\b(amount|value|radius|rx|ry|angle|lon|lat|lonMin|lonMax|latMin|latMax)\s*=/.exec(rest);
     const end = next ? start + next.index : line.length;
     addExpr(start, end, `${match[1]}Arg`);
   }
