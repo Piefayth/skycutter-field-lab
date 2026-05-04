@@ -385,7 +385,7 @@ const particleGlowColor = wgslFn(`
     let r2 = dot(p, p);
     let core = exp(-r2 * 18.0);
     let halo = exp(-r2 * 3.2);
-    return tint * (0.42 * halo + 1.35 * core);
+    return tint * (0.20 * halo + 1.10 * core);
   }
 `);
 
@@ -396,7 +396,7 @@ const particleGlowAlpha = wgslFn(`
     let core = exp(-r2 * 18.0);
     let halo = exp(-r2 * 3.2);
     let rim = smoothstep(0.92, 0.25, sqrt(r2));
-    return clamp(0.16 * halo + 0.92 * core, 0.0, 1.0) * rim * strength;
+    return clamp(0.07 * halo + 0.78 * core, 0.0, 1.0) * rim * strength;
   }
 `);
 
@@ -552,7 +552,7 @@ function createParticleLayer(scene, grid) {
       const px = history[base + 0];
       const py = history[base + 1];
       const pz = history[base + 2];
-      const sample = sampleVectorField(vectorField, cell, [px, py, pz]);
+      const sample = sampleVectorField(vectorField, cell, px, py, pz);
       let vx = sample.x;
       let vy = sample.y;
       let mag = Math.hypot(vx, vy);
@@ -611,9 +611,9 @@ function createParticleLayer(scene, grid) {
     for (let i = 0; i < count; i++) {
       const base = i * trailLength * 3;
       const speedBase = i * trailLength;
+      let ageT = 1;
       for (let t = 0; t < trailLength; t++) {
         const speedT = Math.max(0, Math.min(1, speedHistory[speedBase + t] ?? 0));
-        const ageT = t === 0 ? 1 : Math.pow(fade, t);
         const intensity = (t === 0 ? 1.75 : 1.02) * ageT * (0.62 + 0.72 * speedT);
         const alpha = Math.max(0.03, Math.min(1, (t === 0 ? 0.95 : 0.62) * ageT * (0.42 + 0.74 * speedT)));
         const hot = 0.20 * speedT;
@@ -643,6 +643,7 @@ function createParticleLayer(scene, grid) {
           alphas[quad * 4 + corner] = alpha;
         }
         quad++;
+        ageT *= fade;
       }
     }
     geometry.attributes.position.needsUpdate = true;
@@ -650,15 +651,15 @@ function createParticleLayer(scene, grid) {
     geometry.attributes.particleAlpha.needsUpdate = true;
   }
 
-  function sampleVectorField(vectorField, cell, p) {
+  function sampleVectorField(vectorField, cell, px, py, pz) {
     let sx = 0;
     let sy = 0;
     let sw = 0;
     const addCell = (c) => {
       if (c < 0) return;
-      const d = Math.max(-1, Math.min(1, cellDot(c, p)));
-      const angle = Math.acos(d);
-      const w = 1 / (angle * angle + 0.00008);
+      const off = c * 3;
+      const d = grid.positions[off + 0] * px + grid.positions[off + 1] * py + grid.positions[off + 2] * pz;
+      const w = Math.max(0.0001, d - 0.992);
       sx += (vectorField[c * 2 + 0] ?? 0) * w;
       sy += (vectorField[c * 2 + 1] ?? 0) * w;
       sw += w;
