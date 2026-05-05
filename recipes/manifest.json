@@ -1,8 +1,12 @@
 {
   "version": 1,
-  "defaultRecipe": "blank",
+  "defaultRecipe": "planet-wind-moisture",
   "featuredRecipes": [
     "blank",
+    "planet-wind-moisture",
+    "planet-moisture",
+    "planet-heat",
+    "planet-biosphere",
     "wave-equation",
     "shallow-water",
     "weather-cycle",
@@ -26,6 +30,16 @@
       "label": "Starter",
       "recipes": [
         "blank"
+      ]
+    },
+    {
+      "id": "planet",
+      "label": "Planet",
+      "recipes": [
+        "planet-wind-moisture",
+        "planet-moisture",
+        "planet-heat",
+        "planet-biosphere"
       ]
     },
     {
@@ -107,6 +121,30 @@
       "name": "Blank",
       "path": "recipes/blank.mjs",
       "summary": "Empty starter recipe. One field, one no-op stage. Replace contents of pipelineDsl with your own simulation."
+    },
+    {
+      "id": "planet-wind-moisture",
+      "name": "Planet wind moisture",
+      "path": "recipes/planet-wind-moisture.mjs",
+      "summary": "Minimal planet advection test. A derived wind field moves one moisture layer around the sphere with no sources, drying, clouds, or diffusion."
+    },
+    {
+      "id": "planet-moisture",
+      "name": "Planet moisture",
+      "path": "recipes/planet-moisture.mjs",
+      "summary": "Single-layer planet moisture. Oceans and springs feed atmospheric water, wind advects it around the sphere, and saturation appears as cloud bands."
+    },
+    {
+      "id": "planet-heat",
+      "name": "Planet heat",
+      "path": "recipes/planet-heat.mjs",
+      "summary": "Single-layer planetary temperature. Sunlight, albedo, ocean buffering, and diffusion form stable climate bands and hot/cold anomalies."
+    },
+    {
+      "id": "planet-biosphere",
+      "name": "Planet biosphere",
+      "path": "recipes/planet-biosphere.mjs",
+      "summary": "Toy coupled planet layers. Oceans create moisture, latitude creates heat, vegetation grows where heat/moisture/fertility align, and industry emits pollution."
     },
     {
       "id": "fitzhugh-nagumo",

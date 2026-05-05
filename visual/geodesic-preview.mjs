@@ -743,9 +743,9 @@ function setTangentBasis(out, x, y, z) {
   out.ex = ex;
   out.ey = ey;
   out.ez = ez;
-  out.nx = ey * z - ez * y;
-  out.ny = ez * x - ex * z;
-  out.nz = ex * y - ey * x;
+  out.nx = y * ez - z * ey;
+  out.ny = z * ex - x * ez;
+  out.nz = x * ey - y * ex;
   return out;
 }
 

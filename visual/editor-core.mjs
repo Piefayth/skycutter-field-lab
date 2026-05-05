@@ -143,9 +143,10 @@ export function createEditorView({ parent, onApply, onDocChange, language = "jav
   });
 
   function setSource(text) {
+    const source = normalizeLoadedSource(text ?? "");
     suppressDocChange = true;
     view.dispatch({
-      changes: { from: 0, to: view.state.doc.length, insert: text ?? "" },
+      changes: { from: 0, to: view.state.doc.length, insert: source },
       // Move cursor to start so loading a fresh item doesn't leave it
       // pointing past the new content.
       selection: { anchor: 0 },
@@ -176,6 +177,10 @@ export function createEditorView({ parent, onApply, onDocChange, language = "jav
   }
 
   return { view, setSource, getSource, setFieldNames, refreshLayout, setDiagnostics };
+}
+
+function normalizeLoadedSource(source) {
+  return String(source).replace(/^(?:\r?\n)+/, "");
 }
 
 const fieldLabBraceFoldService = foldService.of((state, lineStart, lineEnd) => {

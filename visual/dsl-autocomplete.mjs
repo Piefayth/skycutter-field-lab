@@ -24,7 +24,7 @@ import {
 import {
   keymap, Decoration, WidgetType, EditorView, ViewPlugin,
 } from "@codemirror/view";
-import { StateField, StateEffect, Prec } from "@codemirror/state";
+import { StateField, StateEffect, Prec, Transaction } from "@codemirror/state";
 
 import {
   blankStructuralOptionsForSource,
@@ -191,6 +191,7 @@ const blankStructuralCompletionPlugin = ViewPlugin.fromClass(class {
   }
   update(update) {
     if (!update.docChanged && !update.selectionSet) return;
+    if (!update.transactions.some((tr) => tr.annotation(Transaction.userEvent))) return;
     this.schedule();
   }
   schedule() {
