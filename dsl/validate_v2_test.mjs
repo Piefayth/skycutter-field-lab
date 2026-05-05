@@ -1607,6 +1607,35 @@ step {
 `);
 });
 
+test("type-check accepts explicit vector transport from neighbor basis", () => {
+  compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field heading: vec2
+step {
+  stage align { reads heading; writes heading; cell {
+    let avg = mean n in neighbors { transport(heading@n, n) }
+    set heading = avg
+  } }
+}
+`);
+});
+
+test("transport(...) rejects scalar vector argument", () => {
+  expectThrow(() => compileV2(`
+recipe "X"
+substrate geodesic frequency 16
+field heading: vec2
+field u: f32
+step {
+  stage align { reads heading, u; writes heading; cell {
+    let avg = mean n in neighbors { transport(u@n, n) }
+    set heading = avg
+  } }
+}
+`), "transport(...) argument 1 must be a vec2");
+});
+
 test("upstream coord args reject nested stencil expressions", () => {
   expectThrow(() => compileV2(`
 recipe "X"

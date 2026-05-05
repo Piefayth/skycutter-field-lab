@@ -20,7 +20,27 @@ export function compileWebGpuGeodesicPipeline(dsl = {}) {
     name: stage.name,
     passes: compileWebGpuGeodesicStage(stage, dsl),
   }));
-  return { stages };
+  const stageById = new Map(stages.map((stage) => [stage.id, stage]));
+  const steps = (dsl.stepItems ?? []).map((item) => {
+    if (item?.type === "relax") {
+      return {
+        type: "relax",
+        id: item.id,
+        name: item.name ?? item.id,
+        maxIters: item.maxIters ?? 1,
+        stages: (item.stages ?? []).map((stageId) => {
+          const stage = stageById.get(stageId);
+          if (!stage) throw new Error(`relax ${item.id ?? ""}: unknown stage ${stageId}`);
+          return stage;
+        }),
+      };
+    }
+    const stageId = item?.stageId ?? item?.id;
+    const stage = stageById.get(stageId);
+    if (!stage) throw new Error(`step: unknown stage ${stageId}`);
+    return { type: "stage", stage };
+  });
+  return { stages, steps };
 }
 
 export function compileWebGpuGeodesicStage(stage, dsl = {}) {
@@ -1153,6 +1173,32 @@ fn _coord_distance(cell: u32, coord: vec3<f32>) -> f32 {
   let p = _stencil_position(cell);
   return acos(clamp(dot(p, normalize(coord)), -1.0, 1.0));
 }
+
+fn _transport_vec_to_cell(cell: u32, fromCoord: vec3<f32>, vector2: vec2<f32>) -> vec2<f32> {
+  let toP = _stencil_position(cell);
+  let fromP = normalize(fromCoord);
+  let fromEast = _stencil_eastBasis(fromP);
+  let fromNorth = normalize(cross(fromP, fromEast));
+  let world = fromEast * vector2.x + fromNorth * vector2.y;
+
+  let axisRaw = cross(fromP, toP);
+  let axisLen = length(axisRaw);
+  var transported = world;
+  if (axisLen > 0.000001) {
+    let axis = axisRaw / axisLen;
+    let cosA = clamp(dot(fromP, toP), -1.0, 1.0);
+    let sinA = axisLen;
+    transported =
+      world * cosA +
+      cross(axis, world) * sinA +
+      axis * dot(axis, world) * (1.0 - cosA);
+  }
+
+  let tangent = transported - toP * dot(transported, toP);
+  let east = _stencil_eastBasis(toP);
+  let north = normalize(cross(toP, east));
+  return vec2<f32>(dot(tangent, east), dot(tangent, north));
+}
 `.trim());
   for (const fieldName of coordSamples) {
     const t = typeOf(fieldName);
@@ -1737,7 +1783,7 @@ function inferReductionBodyType(ast, bindings, ctx) {
       return inferReductionBodyType(ast.consequent, bindings, ctx);
     case "Call": {
       const name = ast.callee?.name;
-      if (name === "vec2" || name === "gradient" || name === "direction") return "vec2";
+      if (name === "vec2" || name === "gradient" || name === "direction" || name === "transport") return "vec2";
       // length, divergence, dot, plus all the scalar math fns.
       return "f32";
     }
@@ -1969,6 +2015,11 @@ function compileCall(ast, ctx) {
     if (ast.args.length !== 1) throw new Error(`distance expects 1 arg; got ${ast.args.length}`);
     markCoordFnUsed(ctx, "distance");
     return `_coord_distance(${ctx.currentCell ?? "cell"}, ${compileExpr(ast.args[0], ctx)})`;
+  }
+  if (name === "transport") {
+    if (ast.args.length !== 2) throw new Error(`transport expects 2 args; got ${ast.args.length}`);
+    markCoordFnUsed(ctx, "transport");
+    return `_transport_vec_to_cell(${ctx.currentCell ?? "cell"}, ${compileExpr(ast.args[1], ctx)}, ${compileExpr(ast.args[0], ctx)})`;
   }
   // Generic math-fn dispatch via the registry. Everything else flows
   // through here, including new fns added later — no switch update.

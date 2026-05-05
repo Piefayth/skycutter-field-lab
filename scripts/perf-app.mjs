@@ -23,7 +23,6 @@ const renderCheck = Boolean(args.renderCheck);
 const traceEnabled = Boolean(args.trace);
 const headed = Boolean(args.headed);
 const cpuRender = Boolean(args.cpuRender);
-const gpuRender = Boolean(args.gpuRender);
 
 let server = null;
 let browser = null;
@@ -46,12 +45,8 @@ try {
   });
   if (cpuRender) {
     await context.addInitScript(() => {
+      window.__FIELD_LAB_GPU_SURFACE_DISABLED__ = true;
       window.__FIELD_LAB_GPU_RENDER_DISABLED__ = true;
-    });
-  }
-  if (gpuRender) {
-    await context.addInitScript(() => {
-      window.__FIELD_LAB_GPU_SURFACE_ENABLED__ = true;
     });
   }
   const page = await context.newPage();
@@ -94,8 +89,9 @@ try {
   });
   const frameStats = await sampleFrames(page, seconds);
   const spans = await page.evaluate(() => window.__FIELD_LAB_PERF__?.spans ?? {});
+  const debug = await page.evaluate(() => window.__FIELD_LAB_DEBUG__?.() ?? null);
   const screenshotPath = path.join(outDir, `${renderCheck ? "rendercheck" : "perf"}-${selected.recipe}-${Date.now()}.png`);
-  await page.locator(gpuRender ? "#viewportSurface" : "#viewport").screenshot({ path: screenshotPath });
+  await page.locator(await visibleViewportSelector(page)).screenshot({ path: screenshotPath });
 
   let tracePath = null;
   if (traceEnabled) {
@@ -106,8 +102,9 @@ try {
   const result = {
     ok: pageErrors.length === 0 && !hasSevereConsoleError(consoleMessages),
     mode: renderCheck ? "rendercheck" : "perf",
-    gpuRenderEnabled: gpuRender && !cpuRender,
-    gpuRenderDisabled: cpuRender || !gpuRender,
+    gpuRenderEnabled: Boolean(debug?.gpuSurfaceActive),
+    gpuRenderDisabled: !debug?.gpuSurfaceActive,
+    gpuSurfaceRequested: Boolean(debug?.gpuSurface),
     url: baseUrl,
     selected,
     seconds,
@@ -277,6 +274,22 @@ async function settle(page) {
     const el = document.querySelector("#viewportSurface") ?? document.querySelector("#viewport");
     return el?.clientWidth > 0;
   }, { timeout: 10_000 });
+}
+
+async function visibleViewportSelector(page) {
+  return page.evaluate(() => {
+    const candidates = ["#viewportSurface", "#viewport"];
+    for (const selector of candidates) {
+      const el = document.querySelector(selector);
+      if (!el) continue;
+      const rect = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      if (rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden") {
+        return selector;
+      }
+    }
+    return "#viewport";
+  });
 }
 
 async function sampleFrames(page, seconds) {

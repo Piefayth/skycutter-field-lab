@@ -40,6 +40,7 @@ field moisture: f32
 field biomass: f32
 field pollution: f32
 field wind: vec2 derived
+field windFlow: vec2 derived
 field habitability: f32 derived
 
 param simRateHz slider 0..240 step 1 default 60 label "SIM RATE"
@@ -56,13 +57,15 @@ param flowScale slider 0..2   step 0.01 default 0.75 label "WIND FLOW"
 step {
   stage windField "Prevailing wind" {
     reads heat
-    writes wind
+    writes wind, windFlow
     cell {
       let thermal = gradient(heat)
       let belts = vec2(0.75 + 0.35 * cos(lat * 3), 0.22 * sin(lon * 2 + frame / 520))
       let raw = belts + thermal * 0.45
       let mag = max(length(raw), 0.001)
-      set wind = raw / mag
+      let flow = raw / mag
+      set wind = flow
+      set windFlow = flow * flowScale
     }
   }
 
@@ -82,10 +85,10 @@ step {
   }
 
   stage advect "Wind moves moisture and pollution" {
-    reads moisture, pollution, wind
+    reads moisture, pollution, windFlow
     writes moisture, pollution
     cell {
-      let p = upstream(wind * flowScale, dt * rate)
+      let p = upstream(windFlow, dt * rate)
       set moisture = clamp(moisture@p, 0, 1.5)
       set pollution = clamp(pollution@p, 0, 1.8)
     }
@@ -163,7 +166,7 @@ views {
       set green = baseG * (1 - p) + (95 + h * 35) * p
       set blue = baseB * (1 - p) + 38 * p
     }
-    particles advect=wind count=2500 length=12 speed=0.6 fade=0.88 size=3.5 color [225, 245, 210]
+    particles advect=windFlow count=2500 length=12 speed=0.6 fade=0.88 size=3.5 color [225, 245, 210]
   }
 
   view biomass "Biomass" {
@@ -172,7 +175,7 @@ views {
 
   view pollution "Pollution" {
     color ramp pollution range [0, 1] palette POLLUTION
-    particles advect=wind count=2000 length=13 speed=0.55 fade=0.9 size=3 color [255, 210, 120]
+    particles advect=windFlow count=2000 length=13 speed=0.55 fade=0.9 size=3 color [255, 210, 120]
   }
 
   view habitability "Habitability" {

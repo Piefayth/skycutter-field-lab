@@ -102,7 +102,7 @@ step {
       // Count neighbors at the target state. state@n surfaces as
       // f32; equality compares as f32 == f32 which is exact for
       // the small integer values we're dealing with.
-      let triggers = sum n in neighbors { (state@n == nextState) ? 1 : 0 }
+      let triggers = count n in neighbors where state@n == nextState
       let advance = triggers >= threshold
       set state = advance ? nextState : state
       // Diagnostic — was this cell rotated this tick? Drives the

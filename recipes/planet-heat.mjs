@@ -1,8 +1,8 @@
 // Planet heat layer.
 //
 // One scalar temperature field plus permanent ocean/albedo masks. Latitude
-// forcing, ocean buffering, and local diffusion create climate bands without
-// needing a full weather model.
+// forcing, thermal inertia, greenhouse balance, ice feedback, and local
+// diffusion create climate bands without needing a full weather model.
 
 import { compileV2 } from "../dsl/compile-v2.mjs";
 
@@ -12,6 +12,7 @@ export const metrics = [
   { id: "meanT", label: "MEAN T", source: "dsl:meanT", spark: true, precision: 3 },
   { id: "hot", label: "HOT AREA", source: "dsl:hotArea", mini: true, precision: 0 },
   { id: "cold", label: "COLD AREA", source: "dsl:coldArea", mini: true, precision: 0 },
+  { id: "ice", label: "ICE AREA", source: "dsl:iceArea", mini: true, precision: 0 },
   { id: "fps", label: "FPS", source: "fps", mini: true },
 ];
 
@@ -24,7 +25,7 @@ export const regime = {
 
 export const pipelineDsl = `
 recipe "Planet heat"
-summary "Single-layer planetary temperature. Sunlight, albedo, ocean buffering, and diffusion form stable climate bands and hot/cold anomalies. A simple temperature substrate for later ecology and weather recipes."
+summary "Single-layer planetary temperature. Sunlight, albedo, ocean inertia, greenhouse balance, ice feedback, seasons, and diffusion form stable climate bands and hot/cold anomalies."
 recommendedPreset continents
 
 substrate geodesic frequency 32
@@ -33,40 +34,47 @@ source ocean: f32
 source albedo: f32
 
 field T: f32
+field ice: f32 derived
 field comfort: f32 derived
 
 param simRateHz slider 0..180 step 1 default 45 label "SIM RATE"
 param rate      slider 1..80  step 1 default 16 label "RATE"
 param sun       slider 0..2   step 0.01 default 1.05 label "SUN"
-param cooling   slider 0..2   step 0.01 default 0.82 label "COOLING"
-param oceanMix  slider 0..2   step 0.01 default 0.48 label "OCEAN BUFFER"
-param diffusion slider 0..2   step 0.01 default 0.55 label "DIFFUSION"
-param seasonal  slider 0..1   step 0.01 default 0.20 label "SEASONS"
+param greenhouse slider 0..2 step 0.01 default 0.38 label "GREENHOUSE"
+param cooling   slider 0..2   step 0.01 default 0.90 label "COOLING"
+param oceanInertia slider 0..1 step 0.01 default 0.72 label "OCEAN INERTIA"
+param diffusion slider 0..2   step 0.01 default 0.42 label "DIFFUSION"
+param seasonal  slider 0..1   step 0.01 default 0.24 label "SEASONS"
+param iceFeedback slider 0..1 step 0.01 default 0.68 label "ICE FEEDBACK"
 
 step {
-  stage climate "Latitude forcing + ocean buffer" {
+  stage climate "Radiation + thermal inertia" {
     reads T, ocean, albedo
-    writes T, comfort
+    writes T, ice, comfort
     cell {
       let season = seasonal * sin(frame / 900)
       let sunAngle = max(0, cos(lat - season * 0.55))
-      let reflect = clamp(albedo, 0, 1)
-      let oceanTarget = 0.10 + 0.20 * sunAngle
-      let landTarget = -0.28 + sun * sunAngle * (1 - 0.65 * reflect)
-      let climateGoal = ocean * oceanTarget + (1 - ocean) * landTarget
-      let buffer = ocean * oceanMix + (1 - ocean) * 0.35
-      let tendency = (climateGoal - T) * buffer - cooling * max(T - 0.15, 0) * 0.18
-      let next = clamp(T + tendency * dt * rate, -1.2, 1.4)
+      let frozen = clamp((-0.12 - T) * 3.4, 0, 1)
+      let reflect = clamp(albedo + frozen * iceFeedback * (1 - albedo), 0, 0.92)
+      let absorbed = sun * sunAngle * (1 - reflect)
+      let inertia = 1 - ocean * oceanInertia * 0.74
+      let solarGain = absorbed * 0.54
+      let greenhouseGain = greenhouse * 0.10
+      let outgoing = cooling * max(T + 0.48, 0) * (0.26 + max(T, 0) * 0.18)
+      let oceanMemory = ocean * sun * oceanInertia * (0.06 + sunAngle * 0.14 - T) * 0.12
+      let next = clamp(T + (solarGain + greenhouseGain + oceanMemory - outgoing) * inertia * dt * rate, -1.2, 1.45)
+      let iceNext = clamp((-0.12 - next) * 3.4, 0, 1)
       set T = next
-      set comfort = clamp(1 - abs(next - 0.18) * 1.65 - albedo * 0.18, 0, 1)
+      set ice = iceNext
+      set comfort = clamp(1 - abs(next - 0.18) * 1.65 - iceNext * 0.22 - albedo * 0.10, 0, 1)
     }
   }
 
-  stage diffuse "Atmosphere/ocean smoothing" {
-    reads T
+  stage diffuse "Ocean/atmosphere heat exchange" {
+    reads T, ocean
     writes T
     cell {
-      let k = clamp(diffusion * dt * rate, 0, 0.20)
+      let k = clamp(diffusion * (0.55 + ocean * 0.70) * dt * rate, 0, 0.22)
       add T = (mean n in neighbors { T@n } - T) * k
     }
   }
@@ -75,6 +83,7 @@ step {
 metric meanT = mean cells { T }
 metric hotArea = count cells where T > 0.55
 metric coldArea = count cells where T < -0.35
+metric iceArea = count cells where ice > 0.35
 
 views {
   palette TEMP {
@@ -91,8 +100,18 @@ views {
     stop 1 color [210, 228, 135]
   }
 
+  palette ICE {
+    stop 0 color [20, 24, 34]
+    stop 0.35 color [70, 110, 145]
+    stop 1 color [235, 250, 255]
+  }
+
   view temp "Temperature" {
     color ramp T range [-1, 1.2] palette TEMP
+  }
+
+  view ice "Ice" {
+    color ramp ice range [0, 1] palette ICE
   }
 
   view comfort "Habitable band" {

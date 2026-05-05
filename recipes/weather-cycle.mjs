@@ -48,6 +48,7 @@ field water: f32              // surface water / ocean depth proxy
 field vapor: f32              // atmospheric moisture
 field T: f32                  // normalized surface temperature
 field wind: vec2              // tangent-frame wind
+field windFlow: vec2 derived  // wind scaled by vapor advection strength
 field cloud: f32 derived      // condensed vapor
 field rain: f32 derived       // precipitation intensity
 field tide: f32 derived       // oscillating ocean tide anomaly
@@ -82,7 +83,7 @@ step {
 
   stage windStep "Pressure + thermal wind" {
     reads water, tide, T, wind
-    writes wind, speed
+    writes wind, windFlow, speed
     cell {
       let pressureGrad = gradient(water + tide)
       let thermalGrad = gradient(T)
@@ -92,15 +93,16 @@ step {
       let damp = clamp(friction * dt * rate, 0, 0.35)
       let nextWind = (wind + accel * dt * rate) * (1 - damp)
       set wind = nextWind
+      set windFlow = nextWind * flowScale
       set speed = length(nextWind)
     }
   }
 
   stage advectVapor "Wind carries vapor" {
-    reads vapor, wind
+    reads vapor, windFlow
     writes vapor
     cell {
-      let p = upstream(wind * flowScale, dt * rate)
+      let p = upstream(windFlow, dt * rate)
       let adv = vapor@p
       set vapor = clamp(adv, 0, 2.5)
     }
@@ -222,7 +224,7 @@ views {
       set green = baseG * (1 - c) + cloudG * c
       set blue = baseB * (1 - c) + cloudB * c
     }
-    particles advect=wind count=3400 length=14 speed=0.85 fade=0.86 size=5 color [235, 250, 255]
+    particles advect=windFlow count=3400 length=14 speed=0.85 fade=0.86 size=5 color [235, 250, 255]
   }
 
   view water "Surface water" {
@@ -243,7 +245,7 @@ views {
 
   view wind "Wind" {
     color ramp speed range [0, 1.5] palette WIND
-    particles advect=wind count=3800 length=13 speed=0.95 fade=0.86 size=5.5 color [255, 225, 135]
+    particles advect=windFlow count=3800 length=13 speed=0.95 fade=0.86 size=5.5 color [255, 225, 135]
   }
 }
 

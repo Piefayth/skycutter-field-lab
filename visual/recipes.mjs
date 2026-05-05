@@ -466,14 +466,6 @@ export function initRecipes({
       readFields(state, names) {
         return readBack(state, names).catch(handleReadbackError);
       },
-      copyFieldToRenderBuffer(name) {
-        if (disposed || !gpuReady || failed || dirty) return null;
-        return gpuRunner.copyFieldToRenderBuffer?.(name) ?? null;
-      },
-      copyFieldToRenderTexture(name) {
-        if (disposed || !gpuReady || failed || dirty) return null;
-        return gpuRunner.copyFieldToRenderTexture?.(name) ?? null;
-      },
       renderField(name) {
         if (disposed || !gpuReady || failed || dirty) return null;
         return gpuRunner.renderField?.(name) ?? null;

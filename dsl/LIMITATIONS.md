@@ -6,7 +6,7 @@ rediscovering them through tuning.
 
 ## Geometry And Vector Fields
 
-### Raw `vec2` Neighbor Reads Are Not Transported
+### Raw `vec2` Neighbor Reads Are Literal
 
 `vec2` fields store components in each cell's local tangent basis. A read such
 as `wind@n` returns the neighbor cell's local components, not those components
@@ -22,6 +22,16 @@ That expression is only an approximation. It treats every neighbor's local
 east/north basis as if it matched the current cell's basis. On a sphere this is
 not geometrically exact.
 
+Use explicit transport when that basis conversion matters:
+
+```dsl
+let avg = mean n in neighbors { transport(heading@n, n) }
+```
+
+`transport(vec, n)` transports a neighbor-local tangent vector into
+the current cell's tangent basis. The explicit spelling is intentional:
+`field@n` remains a literal neighbor read.
+
 Recipe examples:
 
 - `vicsek-flock`: local alignment is visually usable at low noise, but the
@@ -29,32 +39,28 @@ Recipe examples:
 - `toner-tu`: vec2 diffusion/alignment has the same caveat anywhere it reads
   neighbor velocity vectors directly.
 
-Likely future feature:
-
-```dsl
-mean n in neighbors { transport(heading@n, from=n) }
-```
-
-or another explicit transport form. We should not silently change `field@n`
-semantics because existing recipes may rely on literal component reads.
+We should not silently change `field@n` semantics because existing recipes may
+rely on literal component reads.
 
 ## Cascades And Relaxation
 
-### No Bounded Relaxation Loop
+### Bounded Relaxation Has No Stable Early Exit Yet
 
-Current `step { stage ... }` semantics run each stage once per tick. That is
-not enough for models whose defining behavior is "keep applying this rule until
-stable, then continue."
+`step { relax NAME max_iters N { stage ... } }` can now repeat ordinary stages
+inside one tick. That is enough for bounded cascade experiments such as the
+current `sandpile` recipe, but it is still not a full "apply this rule until
+stable, then continue" construct.
 
 Recipe examples:
 
-- `sandpile`: the authored recipe can express a synchronous one-topple-sweep
-  parallel sandpile. It cannot express the classic Abelian sandpile protocol:
-  drop one grain, fully relax the avalanche, then drop the next grain.
+- `sandpile`: the authored recipe can express a bounded synchronous relaxation
+  loop. It still cannot express the classic Abelian sandpile protocol exactly:
+  drop one grain, fully relax the avalanche to quiescence with early exit, then
+  drop the next grain.
 - future avalanche, cascade, settling, and chain-reaction recipes will hit the
   same wall.
 
-Likely future feature:
+Likely future extension:
 
 ```dsl
 relax settle max_iters 64 until all cells { toppled == 0 } {
@@ -91,8 +97,9 @@ multi-resolution fields, or specialized blur/convolution paths.
 The custom GPU surface renderer supports `color ramp` and `color wheel` views.
 It does not yet compile `color expr` view bodies to WGSL.
 
-When GPU surface mode is active and a recipe's selected view is expression-only,
-the UI switches to the first ramp/wheel view rather than showing a blank planet.
+The GPU surface renderer is the default render path. If a recipe's selected view
+is expression-only, the UI switches to the first ramp/wheel view rather than
+showing a blank planet.
 
 Recipe examples:
 

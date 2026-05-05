@@ -89,6 +89,27 @@ test("CST expression projection handles neighbor reductions", () => {
       right: { type: "Identifier", name: "u" },
     },
   });
+  assertExpressionProjection("count n in neighbors where u@n > 0.5", {
+    type: "NeighborReduce",
+    op: "sum",
+    coord: "n",
+    source: { kind: "neighbors" },
+    body: {
+      type: "Conditional",
+      test: {
+        type: "Binary",
+        op: ">",
+        left: {
+          type: "CoordRead",
+          field: "u",
+          coord: { kind: "coord", name: "n" },
+        },
+        right: { type: "Number", value: "0.5" },
+      },
+      consequent: { type: "Number", value: "1" },
+      alternate: { type: "Number", value: "0" },
+    },
+  });
 });
 
 test("CST expression projection handles ring and disk reductions", () => {

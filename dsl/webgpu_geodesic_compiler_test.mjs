@@ -697,7 +697,7 @@ test("MATH_FUNCTIONS registry drives all consumers (smoke)", async () => {
     // wgsl + js callbacks. Stage-only helpers are intentionally null
     // (compiler-side specials emit helper-fn calls; init runtime
     // rejects them via the init-subset validator).
-    if (!["gradient", "divergence", "direction", "distance", "upstream"].includes(fn.name)) {
+    if (!["gradient", "divergence", "direction", "distance", "upstream", "transport"].includes(fn.name)) {
       assert(typeof fn.wgsl === "function",
         `${fn.name}: wgsl callback missing — adding a math fn now means ONE entry in dsl-spec.mjs`);
       assert(typeof fn.js === "function",
@@ -757,6 +757,31 @@ step {
     "mean's result accumulator must be vec2");
   assert(/select\(vec2<f32>\(0\.0,\s*0\.0\),\s*nr_0_sum\s*\/\s*f32\(nr_0_count\)/.test(pass.source),
     "empty-neighbor guard must select between matching vec2<f32> branches");
+});
+
+test("transport(vec, n) transports neighbor vec2s into the current basis", () => {
+  const recipe = compileV2(`
+recipe "Transported alignment"
+substrate geodesic frequency 16
+field heading: vec2
+
+step {
+  stage align {
+    reads heading
+    writes heading
+    cell {
+      let avg = mean n in neighbors { transport(heading@n, n) }
+      set heading = avg
+    }
+  }
+}
+`);
+  const [pass] = compileWebGpuGeodesicCellStage(recipe.dsl.stages[0], recipe.dsl);
+  assert(pass.source.includes("fn _transport_vec_to_cell("), "transport helper emitted");
+  assert(pass.source.includes("_transport_vec_to_cell(cell, n, _n_heading)"),
+    "transport(heading@n, n) should lower with neighbor coord + neighbor vec binding");
+  assert(pass.source.includes("var nr_0_sum: vec2<f32> = vec2<f32>(0.0, 0.0)"),
+    "transported vec2 mean uses a vec2 accumulator");
 });
 
 test("neighbor reduction over vec2 field component emits per-neighbor vec2 local", () => {

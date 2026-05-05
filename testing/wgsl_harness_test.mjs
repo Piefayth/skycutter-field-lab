@@ -55,6 +55,34 @@ scenarios { scenario blank "Blank" { set u = 0 } }
     }
   });
 
+  await t.test("relax repeats enclosed stage inside one tick", async () => {
+    const recipe = `
+recipe "Relax Tick"
+substrate geodesic frequency 8
+field u: f32
+step {
+  relax settle max_iters 3 {
+    stage drain {
+      reads u
+      writes u
+      cell { set u = max(0, u - 1) }
+    }
+  }
+}
+`;
+    const h = await makeHarness({ recipeDsl: recipe, frequency: FREQUENCY });
+    try {
+      h.uploadField("u", new Float32Array(h.cellCount).fill(2));
+      await h.tick();
+      const out = await h.readField("u");
+      for (let i = 0; i < out.length; i++) {
+        assert.ok(closeTo(out[i], 0), `cell ${i}: got ${out[i]}, want 0`);
+      }
+    } finally {
+      h.dispose();
+    }
+  });
+
   // -- Test 2: history init seeds previous from current ----------------------
   await t.test("history init seeds @prev from current", async () => {
     const recipe = `

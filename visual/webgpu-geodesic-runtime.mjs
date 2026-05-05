@@ -75,9 +75,6 @@ export class WebGpuGeodesicRuntime {
     this.bindLayouts = new Map();
     this.metricKernels = new Map();
     this.edgeFluxBuffers = new Map();
-    this.renderBuffers = new Map();
-    this.renderTextures = new Map();
-    this.renderTextureCopyPipelines = new Map();
 
     this.positionsBuffer = makeStorageBuffer(device, grid.positions, GPUBufferUsage.STORAGE);
     this.neighborsBuffer = makeStorageBuffer(device, grid.neighbors, GPUBufferUsage.STORAGE);
@@ -190,34 +187,6 @@ export class WebGpuGeodesicRuntime {
     return field.history ? field.buffers[field.bufferIdx[1]] : field.buffers[field.index];
   }
 
-  renderBuffer(name) {
-    const field = this.ensureField(name);
-    let buffer = this.renderBuffers.get(name);
-    if (!buffer) {
-      buffer = this.device.createBuffer({
-        size: field.bytes,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
-      });
-      this.renderBuffers.set(name, buffer);
-    }
-    return buffer;
-  }
-
-  copyCurrentToRenderBuffer(name) {
-    const field = this.ensureField(name);
-    const target = this.renderBuffer(name);
-    const encoder = this.device.createCommandEncoder();
-    encoder.copyBufferToBuffer(this.currentBuffer(name), 0, target, 0, field.bytes);
-    this.device.queue.submit([encoder.finish()]);
-    return {
-      name,
-      type: field.type,
-      bytes: field.bytes,
-      cellCount: this.cellCount,
-      buffer: target,
-    };
-  }
-
   currentRenderField(name) {
     const field = this.ensureField(name);
     return {
@@ -227,81 +196,6 @@ export class WebGpuGeodesicRuntime {
       cellCount: this.cellCount,
       buffer: this.currentBuffer(name),
     };
-  }
-
-  renderTexture(name) {
-    const field = this.ensureField(name);
-    if (field.type !== "f32") return null;
-    let entry = this.renderTextures.get(name);
-    if (!entry) {
-      const width = Math.min(4096, Math.ceil(this.cellCount / 4));
-      const height = Math.ceil(this.cellCount / (width * 4));
-      const texture = this.device.createTexture({
-        label: `field-lab-render-${name}`,
-        size: { width, height, depthOrArrayLayers: 1 },
-        format: "rgba32float",
-        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC,
-      });
-      entry = {
-        name,
-        type: field.type,
-        width,
-        height,
-        cellCount: this.cellCount,
-        texture,
-      };
-      this.renderTextures.set(name, entry);
-    }
-    return entry;
-  }
-
-  copyCurrentToRenderTexture(name) {
-    const field = this.ensureField(name);
-    if (field.type !== "f32") return null;
-    const target = this.renderTexture(name);
-    const pipelineEntry = this.renderTextureCopyPipeline(name, target);
-    const bindGroup = this.device.createBindGroup({
-      layout: pipelineEntry.layout,
-      entries: [
-        { binding: 0, resource: { buffer: this.currentBuffer(name) } },
-        { binding: 1, resource: target.texture.createView() },
-      ],
-    });
-    const encoder = this.device.createCommandEncoder();
-    const pass = encoder.beginComputePass();
-    pass.setPipeline(pipelineEntry.pipeline);
-    pass.setBindGroup(0, bindGroup);
-    pass.dispatchWorkgroups(Math.ceil((target.width * target.height) / 64));
-    pass.end();
-    this.device.queue.submit([encoder.finish()]);
-    return target;
-  }
-
-  renderTextureCopyPipeline(name, target) {
-    const key = `${name}:${target.width}:${target.height}:${target.cellCount}`;
-    let entry = this.renderTextureCopyPipelines.get(key);
-    if (!entry) {
-      const layout = this.device.createBindGroupLayout({
-        entries: [
-          { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
-          {
-            binding: 1,
-            visibility: GPUShaderStage.COMPUTE,
-            storageTexture: { access: "write-only", format: "rgba32float", viewDimension: "2d" },
-          },
-        ],
-      });
-      const pipeline = this.device.createComputePipeline({
-        layout: this.device.createPipelineLayout({ bindGroupLayouts: [layout] }),
-        compute: {
-          module: this.device.createShaderModule({ code: renderTextureCopyShader(target) }),
-          entryPoint: "main",
-        },
-      });
-      entry = { layout, pipeline };
-      this.renderTextureCopyPipelines.set(key, entry);
-    }
-    return entry;
   }
 
   nextBuffer(name) {
@@ -620,11 +514,6 @@ export class WebGpuGeodesicRuntime {
     }
     for (const buffer of this.edgeFluxBuffers.values()) buffer.destroy();
     this.edgeFluxBuffers.clear();
-    for (const buffer of this.renderBuffers.values()) buffer.destroy();
-    this.renderBuffers.clear();
-    for (const entry of this.renderTextures.values()) entry.texture.destroy();
-    this.renderTextures.clear();
-    this.renderTextureCopyPipelines.clear();
     this.paramsBuffer.destroy();
     this.readbackBuffer.destroy();
     for (const field of this.fields.values()) {
@@ -656,30 +545,6 @@ function packMetricKernelEntries(table) {
     view.setFloat32(offset + 4, table.weights[i], true);
   }
   return new Uint32Array(buffer);
-}
-
-function renderTextureCopyShader({ width, cellCount }) {
-  return `
-@group(0) @binding(0) var<storage, read> src: array<f32>;
-@group(0) @binding(1) var dst: texture_storage_2d<rgba32float, write>;
-
-@compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-  let pixel = gid.x;
-  let base = pixel * 4u;
-  if (base >= ${cellCount}u) {
-    return;
-  }
-  let x = i32(pixel % ${width}u);
-  let y = i32(pixel / ${width}u);
-  var value = vec4<f32>(0.0, 0.0, 0.0, 0.0);
-  value.x = src[base];
-  if (base + 1u < ${cellCount}u) { value.y = src[base + 1u]; }
-  if (base + 2u < ${cellCount}u) { value.z = src[base + 2u]; }
-  if (base + 3u < ${cellCount}u) { value.w = src[base + 3u]; }
-  textureStore(dst, vec2<i32>(x, y), value);
-}
-`;
 }
 
 function alignTo(value, alignment) {

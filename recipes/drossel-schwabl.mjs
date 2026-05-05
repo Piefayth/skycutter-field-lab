@@ -63,6 +63,10 @@ substrate geodesic frequency 64
 
 field state: u32
 
+const EMPTY = 0
+const TREE = 1
+const BURNING = 2
+
 field stateNorm:    f32 derived  // state / 2 for the ramp colorer
 field isBurning:    u32 derived  // 1 if currently burning, 0 otherwise
 field isTree:       u32 derived  // 1 if currently a tree, 0 otherwise
@@ -93,10 +97,10 @@ step {
     reads state
     writes state
     cell {
-      // Has any neighbor caught fire? state@n >= 2 catches state=2
+      // Has any neighbor caught fire? state@n >= BURNING catches state=2
       // (burning) AND state=3+ (paint-overflowed, also treated as
       // burning — see below).
-      let burnNbrs = sum n in neighbors { (state@n >= 2) ? 1 : 0 }
+      let burnNbrs = count n in neighbors where state@n >= BURNING
       // cellRand returns [-1, 1]; remap to [0, 1] before comparing
       // against probabilities (otherwise half of cells fire every tick
       // regardless of f and p).
@@ -107,22 +111,22 @@ step {
 
       // Predicates are written >= k rather than == k so paint stamps
       // and scenarios that ADD into state (the spot semantics) can't
-      // produce zombie cells. e.g. painting the ignite stamp (amount=2)
-      // onto a tree (state=1) gives state=3, which would fall through
-      // every == k rule and stay state=3 forever. With >= 2 the
+      // produce zombie cells. e.g. painting the ignite stamp (amount=BURNING)
+      // onto a tree (state=TREE) gives state=3, which would fall through
+      // every == k rule and stay state=3 forever. With >= BURNING the
       // overflow registers as burning and the next tick clears it to 0.
-      let isBurningCell = (state >= 2) ? 1 : 0
-      let isTreeCell    = (state == 1) ? 1 : 0
-      let isEmptyCell   = (state == 0) ? 1 : 0
+      let isBurningCell = (state >= BURNING) ? 1 : 0
+      let isTreeCell    = (state == TREE) ? 1 : 0
+      let isEmptyCell   = (state == EMPTY) ? 1 : 0
 
       let treeIgnites   = isTreeCell == 1 && (burnNbrs > 0 || strike)
       let emptySprouts  = isEmptyCell == 1 && sprout
 
       // Cascade: burning resolves first, then tree-spreads, then
       // empty-sprouts. Each branch is mutually exclusive on this tick.
-      let next1 = (isBurningCell == 1) ? 0 : state
-      let next2 = treeIgnites ? 2 : next1
-      let next3 = emptySprouts ? 1 : next2
+      let next1 = (isBurningCell == 1) ? EMPTY : state
+      let next2 = treeIgnites ? BURNING : next1
+      let next3 = emptySprouts ? TREE : next2
       set state = next3
     }
   }
@@ -135,10 +139,10 @@ step {
     reads state
     writes stateNorm, isBurning, isTree, isEmpty
     cell {
-      set stateNorm = state * 0.5
-      set isBurning = (state >= 2) ? 1 : 0
-      set isTree    = (state == 1) ? 1 : 0
-      set isEmpty   = (state == 0) ? 1 : 0
+      set stateNorm = state / BURNING
+      set isBurning = (state >= BURNING) ? 1 : 0
+      set isTree    = (state == TREE) ? 1 : 0
+      set isEmpty   = (state == EMPTY) ? 1 : 0
     }
   }
 }
@@ -180,7 +184,7 @@ stamps {
   stamp ignite "Strike a match" {
     // Force the painted area to burning; trees there light immediately,
     // empty ground there will go out next tick (you're burning the air).
-    spot state at brush.pos, radius=brush.r, amount=2
+    spot state at brush.pos, radius=brush.r, amount=BURNING
   }
 
   stamp clearcut "Clear the patch" {
@@ -193,7 +197,7 @@ stamps {
     // Push every cell exactly to state 1. Negative amount first knocks
     // it down past zero, so this stamp is destructive of any fires —
     // good for resetting a region to a clean tree-bed.
-    spot state at brush.pos, radius=brush.r, amount=1
+    spot state at brush.pos, radius=brush.r, amount=TREE
   }
 }
 
@@ -204,16 +208,16 @@ scenarios {
     // it crosses the pentagon at the icosahedron pole.
     for each cell {
       let r = cellRand(11)
-      set state = (r < 0.6) ? 1 : 0
+      set state = (r < 0.6) ? TREE : EMPTY
     }
-    spot state at lon=0, lat=0, radius=0.04, amount=2
+    spot state at lon=0, lat=0, radius=0.04, amount=BURNING
   }
 
   scenario virgin "Empty world (regrowth only)" {
     // Bare lattice. Trees nucleate at rate p, lightning ignites them
     // once density crosses percolation. Useful for watching the
     // spontaneous build-up to the first big fire.
-    set state = 0
+    set state = EMPTY
   }
 
   scenario densePack "Saturated forest" {
@@ -221,16 +225,16 @@ scenarios {
     // burns essentially the whole sphere — sphere-spanning conflagration
     // demo. After the burn-out the system relaxes into the
     // power-law regime.
-    set state = 1
+    set state = TREE
   }
 
   scenario halfBurn "Burning hemisphere vs trees" {
     // Northern hemisphere starts burning, southern hemisphere starts
     // as trees, equator empty. The fire eats southwards across the
     // boundary and the SOC dynamics take over from there.
-    set state = 0
-    for each cell where lat > 0.1  { set state = 2 }
-    for each cell where lat < -0.1 { set state = 1 }
+    set state = EMPTY
+    for each cell where lat > 0.1  { set state = BURNING }
+    for each cell where lat < -0.1 { set state = TREE }
   }
 }
 `;

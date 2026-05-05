@@ -52,6 +52,7 @@ export function recipeCstToAst(cst, options = {}) {
     parameters: params,
     presets: scenarios.map((s) => ({ id: s.id, label: s.label, actions: s.actions, paramOverrides: s.paramOverrides ?? {} })),
     stamps,
+    stepItems: stepItemsCstToAst(cst),
     stages: cst.blocks
       .filter((block) => block.keyword === "stage")
       .sort(byFrom)
@@ -102,13 +103,14 @@ function validateStrictRecipeCst(cst) {
     throw new Error("v2 parse: recipe must declare `substrate ...`");
   }
   const stepBlocks = cst.blocks.filter((block) => block.keyword === "step");
-  if (stepBlocks.length === 0 || !stepBlocks.some((block) => (block.children ?? []).some((child) => child.keyword === "stage"))) {
+  if (stepBlocks.length === 0 || !stepBlocks.some((block) => stepBlockHasStage(block))) {
     throw new Error("v2 parse: recipe must declare at least one stage inside `step { }`");
   }
 
   for (const block of sorted(cst.blocks)) {
     validateBlockPlacement(block);
     if (block.keyword === "step") validateStepBlock(block);
+    else if (block.keyword === "relax") validateRelaxBlock(cst, block);
     else if (block.keyword === "stage") validateStageBlock(block);
     else if (block.keyword === "views") validateSectionBlock(block, ["palette", "view"], ["palette", "view", "overlay"]);
     else if (block.keyword === "stamps") validateSectionBlock(block, ["stamp"], ["stamp"]);
@@ -126,7 +128,8 @@ function validateBlockPlacement(block) {
   const parent = block.parent?.keyword ?? "root";
   const ok =
     (["step", "views", "stamps", "scenarios"].includes(block.keyword) && parent === "root")
-    || (block.keyword === "stage" && parent === "step")
+    || (block.keyword === "relax" && parent === "step")
+    || (block.keyword === "stage" && (parent === "step" || parent === "relax"))
     || ((block.keyword === "cell" || block.keyword === "edge") && parent === "stage")
     || (block.keyword === "when" && (parent === "cell" || parent === "for" || parent === "when" || parent === "view"))
     || (block.keyword === "for" && (parent === "scenario" || parent === "stamp" || parent === "on"))
@@ -145,8 +148,24 @@ function validateBlockPlacement(block) {
 }
 
 function validateStepBlock(block) {
-  if (!(block.children ?? []).some((child) => child.keyword === "stage")) {
+  if (!stepBlockHasStage(block)) {
     throw new Error("v2 parse: empty step block");
+  }
+  validateSectionBlock(block, ["stage", "relax"], ["stage", "relax"]);
+}
+
+function validateRelaxBlock(cst, block) {
+  const words = blockHeaderWords(cst, block);
+  const id = block.id ?? words[1] ?? null;
+  const maxItersAt = words.indexOf("max_iters");
+  const maxIters = maxItersAt >= 0 ? Number(words[maxItersAt + 1]) : NaN;
+  if (!id) throw new Error("v2 parse: relax block must be `relax NAME max_iters N { ... }`");
+  if (maxItersAt < 0 || !Number.isInteger(maxIters) || maxIters < 1) {
+    throw new Error(`v2 parse: relax ${id}: expected positive integer \`max_iters N\``);
+  }
+  if (maxIters > 256) throw new Error(`v2 parse: relax ${id}: max_iters limit is 256`);
+  if (!(block.children ?? []).some((child) => child.keyword === "stage")) {
+    throw new Error(`v2 parse: relax ${id}: empty relax block`);
   }
   validateSectionBlock(block, ["stage"], ["stage"]);
 }
@@ -190,6 +209,13 @@ function validateSectionBlock(block, childKeywords, statementKeywords) {
       throw new Error(`v2 parse: ${block.keyword} section: unexpected ${stmt.keyword} declaration`);
     }
   }
+}
+
+function stepBlockHasStage(block) {
+  return (block.children ?? []).some((child) => (
+    child.keyword === "stage"
+    || (child.keyword === "relax" && (child.children ?? []).some((grandchild) => grandchild.keyword === "stage"))
+  ));
 }
 
 function validateInitBlock(block) {
@@ -426,6 +452,37 @@ export function stageCstToAst(cst, stageBlock) {
     declares: [],
     body: { statements },
     previousReads: [...previousReads],
+  };
+}
+
+function stepItemsCstToAst(cst) {
+  const items = [];
+  const stepBlocks = (cst.blocks ?? [])
+    .filter((block) => block.keyword === "step")
+    .sort(byFrom);
+  for (const stepBlock of stepBlocks) {
+    for (const child of sorted(stepBlock.children ?? [])) {
+      if (child.keyword === "stage") {
+        items.push({ type: "stage", stageId: child.id });
+      } else if (child.keyword === "relax") {
+        items.push(relaxCstToAst(cst, child));
+      }
+    }
+  }
+  return items;
+}
+
+function relaxCstToAst(cst, block) {
+  const words = blockHeaderWords(cst, block);
+  const maxItersAt = words.indexOf("max_iters");
+  return {
+    type: "relax",
+    id: block.id ?? words[1] ?? null,
+    name: blockLabel(cst, block) ?? block.id ?? words[1] ?? "relax",
+    maxIters: Number(words[maxItersAt + 1]),
+    stages: sorted(block.children ?? [])
+      .filter((child) => child.keyword === "stage")
+      .map((child) => child.id),
   };
 }
 
@@ -853,7 +910,11 @@ function byFrom(a, b) {
 }
 
 function wordsFrom(text) {
-  return [...String(text ?? "").matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)].map((m) => m[0]);
+  return [...String(text ?? "").matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b|[+-]?(?:\d+\.\d*|\.\d+|\d+)(?:e[+-]?\d+)?/gi)].map((m) => m[0]);
+}
+
+function blockHeaderWords(cst, block) {
+  return wordsFrom(cst.source.slice(block.headerFrom, block.headerTo));
 }
 
 function wordsAfterKeyword(stmt) {

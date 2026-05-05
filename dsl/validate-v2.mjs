@@ -531,15 +531,16 @@ function describeAstSource(ast) {
 // scalar / vec2 reads of a cell's own field values, math functions,
 // vec2 / length / cellNoise / cellRand / rand01 / rngNext. It does NOT implement
 // neighbor reductions, coordinate queries (`@prev` / `@n` / `@p`),
-// coordinate helpers like `upstream(...)`, or the tangent-frame stencil builtins
-// (`gradient` / `divergence`) — those need GPU-side neighbor topology.
+// coordinate helpers like `upstream(...)`, vector transport, or the
+// tangent-frame stencil builtins (`gradient` / `divergence`) — those
+// need GPU-side neighbor topology.
 //
 // Without this pass, a recipe like `scenario init { for each cell {
 // set wind = gradient(u) } }` would compile clean and only fail when
 // the user picked the scenario, with an opaque "unknown init function"
 // error. Catch the unsupported constructs at recipe load with a
 // pointer at the cell-stage form that does work.
-const INIT_REJECTED_CALLEES = new Set(["gradient", "divergence", "direction", "distance", "upstream"]);
+const INIT_REJECTED_CALLEES = new Set(["gradient", "divergence", "direction", "distance", "upstream", "transport"]);
 
 function validateInitExpressions(schema) {
   for (const scenario of schema.presets ?? []) {

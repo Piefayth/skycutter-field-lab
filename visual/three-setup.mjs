@@ -20,15 +20,13 @@ export async function createThreeSetup({ gpuSurface = false, skipGpuDevice = fal
   }
   const inputCanvas = surfaceCanvas ?? canvas;
   let renderer = null;
-  if (!gpuSurfaceActive) {
-    try {
-      renderer = await createRenderer(canvas);
-    } catch (error) {
-      console.warn("Three WebGPU renderer disabled:", error);
-    }
+  try {
+    renderer = await createRenderer(canvas, { transparent: gpuSurfaceActive });
+  } catch (error) {
+    console.warn("Three WebGPU renderer disabled:", error);
   }
   renderer?.setPixelRatio(Math.min(devicePixelRatio, 2));
-  renderer?.setClearColor(0x090b0f, 1);
+  renderer?.setClearColor(gpuSurfaceActive ? 0x000000 : 0x090b0f, gpuSurfaceActive ? 0 : 1);
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
@@ -115,11 +113,11 @@ async function createDevice() {
   return device;
 }
 
-async function createRenderer(canvas) {
+async function createRenderer(canvas, { transparent = false } = {}) {
   if (!globalThis.navigator?.gpu) {
     throw new Error("WebGPU is required for Field Lab's geodesic renderer.");
   }
-  const renderer = new WebGPURenderer({ canvas, antialias: true });
+  const renderer = new WebGPURenderer({ canvas, antialias: true, alpha: transparent });
   await renderer.init();
   renderer.fieldLabBackend = "webgpu";
   return renderer;

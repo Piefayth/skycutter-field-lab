@@ -8,12 +8,12 @@
 const BLOCK_KEYWORDS = new Set([
   "views", "stamps", "scenarios",
   "palette", "view", "stamp", "scenario",
-  "step", "stage", "cell", "edge", "when", "for", "on",
+  "step", "relax", "stage", "cell", "edge", "when", "for", "on",
 ]);
 
 const NAME_DECL_KEYWORDS = new Set([
   "field", "source", "param", "const",
-  "stage", "scenario", "stamp", "metric", "palette", "view",
+  "relax", "stage", "scenario", "stamp", "metric", "palette", "view",
 ]);
 
 const NAME_BUCKET = {
@@ -21,6 +21,7 @@ const NAME_BUCKET = {
   source: "sources",
   param: "parameters",
   const: "constants",
+  relax: "relaxes",
   stage: "stages",
   scenario: "scenarios",
   stamp: "stamps",
@@ -699,7 +700,7 @@ const BINARY_PRECEDENCE = new Map([
   ["%", 7],
 ]);
 
-const REDUCTION_OPS = new Set(["sum", "max", "min", "mean"]);
+const REDUCTION_OPS = new Set(["sum", "max", "min", "mean", "count"]);
 
 function parseExpressionNode(tokens) {
   const parser = { tokens, index: 0 };
@@ -920,6 +921,33 @@ function tryParseReductionNode(parser) {
   const source = tryParseReductionSource(parser.tokens, start + 3);
   if (!source) return null;
   const open = parser.tokens[source.nextIndex];
+  if (op.value === "count" && open?.kind === "identifier" && open.value === "where") {
+    parser.index = source.nextIndex + 1;
+    const predicate = parseConditionalNode(parser);
+    const body = {
+      type: "ExprConditional",
+      test: predicate,
+      consequent: { type: "ExprNumber", value: "1", from: predicate.to, to: predicate.to },
+      alternate: { type: "ExprNumber", value: "0", from: predicate.to, to: predicate.to },
+      from: predicate.from,
+      to: predicate.to,
+    };
+    return {
+      type: "ExprNeighborReduce",
+      op: "sum",
+      surfaceOp: "count",
+      binder: binder.value,
+      source: source.value,
+      body,
+      from: op.from,
+      to: predicate.to,
+      binderFrom: binder.from,
+      bodyFrom: predicate.from,
+      bodyTo: predicate.to,
+      missing: false,
+    };
+  }
+  if (op.value === "count") return null;
   if (open?.value !== "{") return null;
   parser.index = source.nextIndex + 1;
   const body = parseConditionalNode(parser);
@@ -1051,6 +1079,22 @@ function reductionsInExpression(text, base) {
       binderTo: base + match.index + binderOffset + match[2].length,
       bodyFrom: base + bodyOpenRel + 1,
       bodyTo: base + (bodyCloseRel >= 0 ? bodyCloseRel : text.length),
+    });
+  }
+  const countWhereRe = new RegExp(String.raw`\bcount\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+(neighbors|(?:ring|disk)\s*\(\s*[+-]?(?:\d+\.\d*|\.\d+|\d+)(?:e[+-]?\d+)?\s*\)|kernel\s+bell\s*\(\s*${atom}\s*,\s*${atom}\s*\))\s+where\b`, "g");
+  for (const match of text.matchAll(countWhereRe)) {
+    const binderOffset = match[0].indexOf(match[1]);
+    out.push({
+      type: "ReductionSpan",
+      op: "count",
+      binder: match[1],
+      source: reductionSourceFromText(match[2]),
+      from: base + match.index,
+      to: base + text.length,
+      binderFrom: base + match.index + binderOffset,
+      binderTo: base + match.index + binderOffset + match[1].length,
+      bodyFrom: base + match.index + match[0].length,
+      bodyTo: base + text.length,
     });
   }
   return out;
@@ -1204,6 +1248,7 @@ function namesFromSymbols(symbols) {
     parameters: [],
     constants: [],
     planet: [],
+    relaxes: [],
     stages: [],
     scenarios: [],
     stamps: [],
@@ -1272,6 +1317,7 @@ function classifyMode(stack) {
     if (keyword === "view") return "viewBody";
     if (keyword === "palette") return "paletteBody";
     if (keyword === "stage") return "stageBody";
+    if (keyword === "relax") return "stepBody";
     if (keyword === "step") return "stepBody";
     if (keyword === "views") return "viewsSection";
     if (keyword === "stamps") return "stampsSection";

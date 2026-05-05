@@ -15,6 +15,17 @@ function assertEq(a, b, msg = "") {
   const x = JSON.stringify(a), y = JSON.stringify(b);
   if (x !== y) throw new Error(`${msg}\n  expected: ${y}\n  actual:   ${x}`);
 }
+function assertThrows(fn, pattern, msg = "expected throw") {
+  try {
+    fn();
+  } catch (error) {
+    if (pattern && !pattern.test(String(error?.message ?? error))) {
+      throw new Error(`${msg}: wrong error\n  expected: ${pattern}\n  actual:   ${error?.message ?? error}`);
+    }
+    return;
+  }
+  throw new Error(msg);
+}
 
 const WAVE_V2 = `
 recipe "Wave equation"
@@ -83,6 +94,52 @@ test("v2 wave-equation lowers + compiles to WGSL", () => {
     "WGSL should bind f_u_prev_1 for u@prev reads");
   assert(cellPass.source.includes("var<storage, read> f_u"),
     "WGSL should bind f_u for current reads");
+});
+
+test("relax wraps existing stages in a bounded schedule item", () => {
+  const source = `
+recipe "Relax"
+substrate geodesic frequency 4
+field h: f32
+step {
+  stage seed {
+    reads h
+    writes h
+    cell { set h = h + 1 }
+  }
+
+  relax settle max_iters 3 {
+    stage drain {
+      reads h
+      writes h
+      cell { set h = max(0, h - 1) }
+    }
+  }
+}`;
+  const r = compileV2(source);
+  assertEq(r.dsl.stepItems, [
+    { type: "stage", stageId: "seed" },
+    { type: "relax", id: "settle", name: "settle", maxIters: 3, stages: ["drain"] },
+  ]);
+  const compiled = compileWebGpuGeodesicPipeline(r.dsl);
+  assertEq(compiled.steps.map((item) => item.type), ["stage", "relax"]);
+  assert(compiled.steps[1].stages[0].id === "drain", "relax should reference the compiled stage");
+});
+
+test("relax rejects history-field writers", () => {
+  assertThrows(() => compileV2(`
+recipe "Relax History"
+substrate geodesic frequency 4
+field u: f32
+step {
+  relax settle max_iters 3 {
+    stage wave {
+      reads u previous
+      writes u
+      cell { set u = u@prev }
+    }
+  }
+}`), /history field u/, "history writes inside relax should be rejected");
 });
 
 test("diagnoseV2 includes a source range for editor diagnostics", () => {

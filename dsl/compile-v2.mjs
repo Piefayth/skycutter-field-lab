@@ -39,6 +39,7 @@ export function compileV2(source) {
   const presets = schema.presets;
   const stamps = schema.stamps;
   const stages = schema.stages;
+  const stepItems = schema.stepItems ?? stages.map((stage) => ({ type: "stage", stageId: stage.id }));
   const metrics = schema.metrics;
 
   // Infer history depth from @prev usage. v2 doesn't declare `field u
@@ -51,6 +52,7 @@ export function compileV2(source) {
     const depth = historyDepths.get(field.name);
     if (depth) field.history = Math.max(field.history ?? 0, depth);
   }
+  validateRelaxHistoryWrites(stepItems, stages, historyDepths);
 
   annotateStageParamRefs(stages, schema);
   validateNameUniqueness(schema, stages);
@@ -96,6 +98,7 @@ export function compileV2(source) {
         outputs: [...writes, ...declares],
         params, body, previousReads,
       })),
+      stepItems,
       metrics: schema.metrics,
       // Render-side declarations from v2's `palette` / `view` /
       // `overlay` keywords. visual/recipes.mjs::materializeRecipe
@@ -150,6 +153,21 @@ function collectHistoryFields(stages, metrics) {
     if (m.predicate) walk(m.predicate);
   }
   return out;
+}
+
+function validateRelaxHistoryWrites(stepItems, stages, historyDepths) {
+  if (!historyDepths?.size) return;
+  const stageById = new Map(stages.map((stage) => [stage.id, stage]));
+  for (const item of stepItems ?? []) {
+    if (item?.type !== "relax") continue;
+    for (const stageId of item.stages ?? []) {
+      const stage = stageById.get(stageId);
+      const historyWrite = (stage?.writes ?? []).find((field) => historyDepths.has(field));
+      if (historyWrite) {
+        throw new Error(`relax ${item.id}: stage ${stageId} writes history field ${historyWrite}; history fields cannot be written inside relax`);
+      }
+    }
+  }
 }
 
 export function diagnoseV2(source) {

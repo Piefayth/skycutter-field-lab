@@ -68,7 +68,7 @@ step {
     writes state
     cell {
       let isEmpty = state == 0
-      let occNbrs = sum n in neighbors { (state@n == 1) ? 1 : 0 }
+      let occNbrs = count n in neighbors where state@n == 1
       let onFront = isEmpty && (occNbrs > 0)
       // cellRand returns [-1, 1]; remap to [0, 1] before comparing
       // to the growth probability.
@@ -86,7 +86,7 @@ step {
     writes frontF
     cell {
       let isEmpty = state == 0
-      let occNbrs = sum n in neighbors { (state@n == 1) ? 1 : 0 }
+      let occNbrs = count n in neighbors where state@n == 1
       set frontF  = (isEmpty && (occNbrs > 0)) ? 1 : 0
     }
   }

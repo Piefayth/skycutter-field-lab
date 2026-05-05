@@ -2,12 +2,6 @@ import * as THREE from "three";
 import {
   MeshBasicNodeMaterial,
   attribute,
-  clamp as nodeClamp,
-  floor,
-  int,
-  ivec2,
-  mod,
-  textureLoad,
   uv,
   wgslFn,
 } from "three/addons/nodes/Nodes.js";
@@ -29,10 +23,6 @@ export async function createGeodesicPreview({ scene, globe, renderer = null, cam
     polygonOffsetFactor: -1,
     polygonOffsetUnits: -1,
   });
-  let gpuMaterial = null;
-  let gpuDataTexture = null;
-  let gpuMaterialKey = "";
-  let activeMaterialMode = "cpu";
   const mesh = new THREE.Mesh(geometry, cpuMaterial);
   mesh.name = "geodesic-state-preview";
   scene.add(mesh);
@@ -67,22 +57,17 @@ export async function createGeodesicPreview({ scene, globe, renderer = null, cam
     mesh,
     glyphLayer,
     particleLayer,
-    refresh({ fields, viewSpec, frame = 0, fieldRevision = 0, force = false, gpuRenderBuffer = null, externalSurfaceActive = false } = {}) {
+    refresh({ fields, viewSpec, frame = 0, particleStepDt = 1 / 60, fieldRevision = 0, force = false, externalSurfaceActive = false } = {}) {
       const perfStart = perfNow();
       if (disposed) return;
       mesh.visible = !externalSurfaceActive;
-      const gpuColor = externalSurfaceActive ? false : installGpuScalarMaterial(viewSpec, gpuRenderBuffer);
-      if (!gpuColor && activeMaterialMode !== "cpu") {
-        mesh.material = cpuMaterial;
-        activeMaterialMode = "cpu";
-      }
       const g = viewSpec?.glyph;
-      const p = externalSurfaceActive ? null : viewSpec?.particles;
+      const p = viewSpec?.particles;
       const glyphKey = g ? `${g.kind}:${g.rotate ?? "_"}:${g.size ?? "_"}:${g.length}:${g.stride}` : "";
       const particleKey = p ? `${p.advect}:${p.count}:${p.length}:${p.speed}:${p.fade}:${p.size}:${p.color?.join(",")}` : "";
       const viewId = viewSpec?.id ?? "";
       const colorKey = `${viewId}:${fieldRevision}`;
-      if (!externalSurfaceActive && !gpuColor && (force || colorKey !== lastColorKey)) {
+      if (!externalSurfaceActive && (force || colorKey !== lastColorKey)) {
         lastColorKey = colorKey;
         refreshColors({ grid, geometry, fields, viewSpec });
       }
@@ -96,8 +81,9 @@ export async function createGeodesicPreview({ scene, globe, renderer = null, cam
         lastParticleKey = nextParticleKey;
         particleLayer.populate({
           fields,
-          viewSpec: externalSurfaceActive ? { ...viewSpec, particles: null } : viewSpec,
+          viewSpec,
           frame,
+          particleStepDt,
         });
       }
       recordPerfSpan("geodesicPreview.refresh", perfStart, { view: viewSpec?.id ?? "" });
@@ -111,118 +97,8 @@ export async function createGeodesicPreview({ scene, globe, renderer = null, cam
       particleLayer.dispose();
       geometry.dispose();
       cpuMaterial.dispose();
-      gpuMaterial?.dispose?.();
-      gpuDataTexture?.dispose?.();
     },
   };
-
-  function installGpuScalarMaterial(viewSpec, gpuRenderBuffer) {
-    if (!renderer?.backend?.get || !gpuRenderBuffer?.texture || gpuRenderBuffer.type !== "f32") return false;
-    const gpuSpec = viewSpec?.gpuColor;
-    if (gpuSpec?.kind !== "ramp") return false;
-    const key = `${viewSpec?.id ?? ""}:${gpuRenderBuffer.width}x${gpuRenderBuffer.height}:${JSON.stringify(gpuSpec.range)}:${JSON.stringify(gpuSpec.stops)}`;
-    if (!gpuMaterial || key !== gpuMaterialKey) {
-      gpuMaterial?.dispose?.();
-      gpuDataTexture?.dispose?.();
-      gpuDataTexture = new THREE.DataTexture(
-        new Float32Array(gpuRenderBuffer.width * gpuRenderBuffer.height * 4),
-        gpuRenderBuffer.width,
-        gpuRenderBuffer.height,
-        THREE.RGBAFormat,
-        THREE.FloatType,
-      );
-      gpuDataTexture.name = "field-lab-render-field";
-      gpuDataTexture.magFilter = THREE.NearestFilter;
-      gpuDataTexture.minFilter = THREE.NearestFilter;
-      gpuDataTexture.generateMipmaps = false;
-      const textureData = renderer.backend.get(gpuDataTexture);
-      textureData.texture = gpuRenderBuffer.texture;
-      textureData.initialized = true;
-      textureData.version = gpuDataTexture.version;
-      const cell = floor(attribute("cellIndex", "float"));
-      const pixel = floor(cell.div(4));
-      const texel = textureLoad(
-        gpuDataTexture,
-        ivec2(int(mod(pixel, gpuRenderBuffer.width)), int(floor(pixel.div(gpuRenderBuffer.width)))),
-      );
-      const value = packedTexelValue({ texel, channel: mod(cell, 4) });
-      const [lo, hi] = gpuSpec.range ?? [0, 1];
-      const span = (hi - lo) || 1;
-      const t = nodeClamp(value.sub(lo).div(span), 0, 1);
-      gpuMaterial = new MeshBasicNodeMaterial();
-      gpuMaterial.colorNode = gpuRampColorNode(gpuSpec.stops ?? [], key)({ t });
-      gpuMaterial.side = THREE.DoubleSide;
-      gpuMaterial.polygonOffset = true;
-      gpuMaterial.polygonOffsetFactor = -1;
-      gpuMaterial.polygonOffsetUnits = -1;
-      gpuMaterialKey = key;
-    } else {
-      renderer.backend.get(gpuDataTexture).texture = gpuRenderBuffer.texture;
-    }
-    if (activeMaterialMode !== "gpu") {
-      mesh.material = gpuMaterial;
-      activeMaterialMode = "gpu";
-    }
-    return true;
-  }
-}
-
-const packedTexelValue = wgslFn(`
-fn packedTexelValue(texel: vec4<f32>, channel: f32) -> f32 {
-  if (channel < 0.5) { return texel.x; }
-  if (channel < 1.5) { return texel.y; }
-  if (channel < 2.5) { return texel.z; }
-  return texel.w;
-}
-`);
-
-function gpuRampColorNode(stops, key) {
-  const fnName = `fieldLabRamp_${hashString(key).toString(16)}`;
-  const normalized = normalizeRampStops(stops);
-  const fallback = "return vec3<f32>(0.31, 0.24, 0.35);";
-  let body = fallback;
-  if (normalized.length === 1) {
-    body = `return vec3<f32>(${rgbLiteral(normalized[0].color)});`;
-  } else if (normalized.length > 1) {
-    const lines = [];
-    for (let i = 0; i < normalized.length - 1; i++) {
-      const a = normalized[i];
-      const b = normalized[i + 1];
-      const span = Math.max(1e-6, b.t - a.t);
-      const condition = i === normalized.length - 2 ? "true" : `t <= ${floatLiteral(b.t)}`;
-      lines.push(`
-  if (${condition}) {
-    let localT = clamp((t - ${floatLiteral(a.t)}) / ${floatLiteral(span)}, 0.0, 1.0);
-    return mix(vec3<f32>(${rgbLiteral(a.color)}), vec3<f32>(${rgbLiteral(b.color)}), localT);
-  }`);
-    }
-    body = lines.join("\n");
-  }
-  return wgslFn(`
-fn ${fnName}(t: f32) -> vec3<f32> {
-  ${body}
-}
-`);
-}
-
-function normalizeRampStops(stops) {
-  const source = Array.isArray(stops) ? stops : [];
-  return source
-    .map((stop) => ({
-      t: Math.max(0, Math.min(1, Number(stop?.t ?? 0))),
-      color: Array.isArray(stop?.color) ? stop.color : [80, 60, 90],
-    }))
-    .sort((a, b) => a.t - b.t);
-}
-
-function rgbLiteral(color) {
-  return [0, 1, 2]
-    .map((i) => floatLiteral(Math.max(0, Math.min(255, Number(color[i] ?? 0))) / 255))
-    .join(", ");
-}
-
-function floatLiteral(value) {
-  return Number(value).toFixed(8);
 }
 
 // =============================================================================
@@ -562,6 +438,8 @@ function createParticleLayer(scene, grid, camera = null) {
   let lastParticleFrame = -Infinity;
   const sampleScratch = { x: 0, y: 0 };
   const basisScratch = { ex: 1, ey: 0, ez: 0, nx: 0, ny: 1, nz: 0 };
+  const sampleBasisScratch = { ex: 1, ey: 0, ez: 0, nx: 0, ny: 1, nz: 0 };
+  const transportScratch = { x: 0, y: 0, z: 0 };
 
   function ensure(spec) {
     const trailLength = Math.max(2, Math.min(128, spec.length | 0));
@@ -671,7 +549,7 @@ function createParticleLayer(scene, grid, camera = null) {
   }
 
   return {
-    populate({ fields = {}, viewSpec = null, frame = 0 } = {}) {
+    populate({ fields = {}, viewSpec = null, frame = 0, particleStepDt = 1 / 60 } = {}) {
       const spec = viewSpec?.particles;
       if (!spec) {
         if (mesh) mesh.visible = false;
@@ -688,9 +566,16 @@ function createParticleLayer(scene, grid, camera = null) {
       const cadence = pointCount > 30000 ? 4 : pointCount > 18000 ? 3 : pointCount > 8000 ? 2 : 1;
       const frameNumber = Number.isFinite(frame) ? frame : 0;
       if (lastParticleFrame !== -Infinity && cadence > 1 && frameNumber % cadence !== 0) return;
-      lastParticleFrame = frameNumber;
       const stepStart = perfNow();
-      stepParticles({ spec, vectorField, count: layout.count, trailLength: layout.trailLength });
+      const tickDelta = lastParticleFrame === -Infinity ? 1 : Math.max(1, frameNumber - lastParticleFrame);
+      lastParticleFrame = frameNumber;
+      stepParticles({
+        spec,
+        vectorField,
+        count: layout.count,
+        trailLength: layout.trailLength,
+        stepDt: particleStepDt * tickDelta,
+      });
       recordPerfSpan("particles.step", stepStart, { count: layout.count, trailLength: layout.trailLength });
       const writeStart = perfNow();
       writeParticleGeometry({ spec, count: layout.count, trailLength: layout.trailLength });
@@ -701,9 +586,9 @@ function createParticleLayer(scene, grid, camera = null) {
     },
   };
 
-  function stepParticles({ spec, vectorField, count, trailLength }) {
-    const baseScale = (2 * Math.PI) / (5.5 * Math.max(1, grid.frequency ?? 32));
-    const stepScale = baseScale * spec.speed * 0.22;
+  function stepParticles({ spec, vectorField, count, trailLength, stepDt }) {
+    const cellScale = (2 * Math.PI) / (5.5 * Math.max(1, grid.frequency ?? 32));
+    const stepScale = Math.max(0, stepDt) * spec.speed;
     for (let i = 0; i < count; i++) {
       if (ages[i]-- === 0) {
         respawnParticle(i, trailLength);
@@ -726,15 +611,8 @@ function createParticleLayer(scene, grid, camera = null) {
       }
 
       const speedNorm = Math.max(0, Math.min(1, mag / 6));
-      const jitter = (rng() - 0.5) * (0.10 + 0.22 * speedNorm);
-      const invMag = 1 / Math.max(1e-6, mag);
-      const oldVx = vx;
-      const oldVy = vy;
-      vx = oldVx - oldVy * invMag * jitter;
-      vy = oldVy + oldVx * invMag * jitter;
-      mag = Math.hypot(vx, vy);
       const basis = setTangentBasis(basisScratch, px, py, pz);
-      const move = Math.min(baseScale * 1.6, mag * stepScale);
+      const move = Math.min(cellScale * 3.0, mag * stepScale);
       const nx = px + (basis.ex * vx + basis.nx * vy) * move;
       const ny = py + (basis.ey * vx + basis.ny * vy) * move;
       const nz = pz + (basis.ez * vx + basis.nz * vy) * move;
@@ -838,16 +716,21 @@ function createParticleLayer(scene, grid, camera = null) {
   }
 
   function sampleVectorField(out, vectorField, cell, px, py, pz) {
-    let sx = 0;
-    let sy = 0;
+    let wx = 0;
+    let wy = 0;
+    let wz = 0;
     let sw = 0;
+    const sampleBasis = setTangentBasis(sampleBasisScratch, px, py, pz);
     if (cell >= 0) {
       const off = cell * 3;
       const d = grid.positions[off + 0] * px + grid.positions[off + 1] * py + grid.positions[off + 2] * pz;
       const w = Math.max(0.0001, d - 0.992);
-      sx += (vectorField[cell * 2 + 0] ?? 0) * w;
-      sy += (vectorField[cell * 2 + 1] ?? 0) * w;
-      sw += w;
+      if (transportVectorToSample(transportScratch, vectorField, cell, px, py, pz)) {
+        wx += transportScratch.x * w;
+        wy += transportScratch.y * w;
+        wz += transportScratch.z * w;
+        sw += w;
+      }
     }
     const count = grid.neighborCounts[cell] ?? 0;
     const start = cell * grid.maxNeighbors;
@@ -857,18 +740,63 @@ function createParticleLayer(scene, grid, camera = null) {
       const off = n * 3;
       const d = grid.positions[off + 0] * px + grid.positions[off + 1] * py + grid.positions[off + 2] * pz;
       const w = Math.max(0.0001, d - 0.992);
-      sx += (vectorField[n * 2 + 0] ?? 0) * w;
-      sy += (vectorField[n * 2 + 1] ?? 0) * w;
-      sw += w;
+      if (transportVectorToSample(transportScratch, vectorField, n, px, py, pz)) {
+        wx += transportScratch.x * w;
+        wy += transportScratch.y * w;
+        wz += transportScratch.z * w;
+        sw += w;
+      }
     }
     if (sw > 0) {
-      out.x = sx / sw;
-      out.y = sy / sw;
+      const inv = 1 / sw;
+      const tx = wx * inv;
+      const ty = wy * inv;
+      const tz = wz * inv;
+      out.x = tx * sampleBasis.ex + ty * sampleBasis.ey + tz * sampleBasis.ez;
+      out.y = tx * sampleBasis.nx + ty * sampleBasis.ny + tz * sampleBasis.nz;
     } else {
       out.x = 0;
       out.y = 0;
     }
     return out;
+  }
+
+  function transportVectorToSample(out, vectorField, sourceCell, px, py, pz) {
+    const vx = vectorField[sourceCell * 2 + 0] ?? 0;
+    const vy = vectorField[sourceCell * 2 + 1] ?? 0;
+    if (!Number.isFinite(vx) || !Number.isFinite(vy)) return false;
+    const off = sourceCell * 3;
+    const sx = grid.positions[off + 0];
+    const sy = grid.positions[off + 1];
+    const sz = grid.positions[off + 2];
+    const sourceBasis = setTangentBasis(basisScratch, sx, sy, sz);
+    let vxw = sourceBasis.ex * vx + sourceBasis.nx * vy;
+    let vyw = sourceBasis.ey * vx + sourceBasis.ny * vy;
+    let vzw = sourceBasis.ez * vx + sourceBasis.nz * vy;
+
+    const ax = sy * pz - sz * py;
+    const ay = sz * px - sx * pz;
+    const az = sx * py - sy * px;
+    const axisLen = Math.hypot(ax, ay, az);
+    if (axisLen > 1e-6) {
+      const ux = ax / axisLen;
+      const uy = ay / axisLen;
+      const uz = az / axisLen;
+      const cosA = Math.max(-1, Math.min(1, sx * px + sy * py + sz * pz));
+      const sinA = axisLen;
+      const dotAxis = ux * vxw + uy * vyw + uz * vzw;
+      const cx = uy * vzw - uz * vyw;
+      const cy = uz * vxw - ux * vzw;
+      const cz = ux * vyw - uy * vxw;
+      vxw = vxw * cosA + cx * sinA + ux * dotAxis * (1 - cosA);
+      vyw = vyw * cosA + cy * sinA + uy * dotAxis * (1 - cosA);
+      vzw = vzw * cosA + cz * sinA + uz * dotAxis * (1 - cosA);
+    }
+
+    out.x = vxw;
+    out.y = vyw;
+    out.z = vzw;
+    return true;
   }
 
   function nearestNeighborCell(cell, px, py, pz) {

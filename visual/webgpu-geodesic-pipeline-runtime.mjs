@@ -36,7 +36,7 @@ export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGri
       .map((decl) => [decl.name, decl.type]),
   );
   const runtime = await createWebGpuGeodesicRuntime({ grid, fieldNames, fieldTypes, device });
-  const { stages } = compileWebGpuGeodesicPipeline(dsl);
+  const { stages, steps } = compileWebGpuGeodesicPipeline(dsl);
   const consts = Object.fromEntries((dsl.constants ?? []).map((decl) => [decl.name, decl.value]));
   const planet = dsl.planet ?? {};
   // Upgrade every history-declared field to 3-buffer rotation. The
@@ -65,6 +65,7 @@ export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGri
     metricRuntime,
     fieldNames,
     stages,
+    steps,
     metrics: compiledMetrics,
     uploadState(state, names = fieldNames) {
       runtime.uploadState(state, names);
@@ -82,19 +83,13 @@ export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGri
     async readState(state, names = fieldNames) {
       await runtime.readState(state, names);
     },
-    copyFieldToRenderBuffer(name) {
-      return runtime.copyCurrentToRenderBuffer(name);
-    },
-    copyFieldToRenderTexture(name) {
-      return runtime.copyCurrentToRenderTexture(name);
-    },
     renderField(name) {
       return runtime.currentRenderField(name);
     },
     runTick(dt) {
       const params = getParams?.() ?? {};
       const frame = getFrame?.() ?? 0;
-      for (const stage of stages) {
+      const runCompiledStage = (stage) => {
         // V2 stages always emit only `cell`-kind passes (the parser
         // rejects every legacy v1 primitive form). Multi-pass stages
         // delay the field swap to the end of the stage so each pass
@@ -147,6 +142,17 @@ export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGri
           if (delayedCellSwaps && !isHistoryWrite) fieldsToSwap.push(pass.field);
         }
         if (delayedCellSwaps) runtime.swapFields([...new Set(fieldsToSwap)]);
+      };
+      const schedule = steps?.length ? steps : stages.map((stage) => ({ type: "stage", stage }));
+      for (const item of schedule) {
+        if (item.type === "relax") {
+          const maxIters = Math.max(1, Math.floor(item.maxIters ?? 1));
+          for (let i = 0; i < maxIters; i++) {
+            for (const stage of item.stages ?? []) runCompiledStage(stage);
+          }
+        } else {
+          runCompiledStage(item.stage);
+        }
       }
       // End-of-tick rotation for history fields. The cell pass that
       // wrote u this tick produced u_{N+1} in `next`; promote it to

@@ -5,12 +5,11 @@
 //   - Topple: any cell with h ≥ threshold redistributes — loses
 //     `threshold` grains, sends 1 to each neighbour.
 //
-// This is deliberately the synchronous, one-relaxation-sweep-per-tick
-// version that the current DSL can express cleanly. It is related to
-// Bak-Tang-Wiesenfeld, but it is not the full Abelian sandpile protocol
-// where one grain is dropped and the avalanche relaxes to quiescence
-// before the next grain arrives. That fully-relaxed model wants a bounded
-// cascade/relax primitive.
+// This uses the DSL's bounded relax wrapper: after each sparse drive step,
+// the toppling rule runs several times inside the same tick. It is still
+// synchronous and budgeted rather than a mathematically exact Abelian
+// "relax until quiescent" solver, but the visible dynamics are now much
+// closer to avalanche fronts than the old one-sweep-per-tick version.
 //
 // Why the geodesic: BTW is canonically a square-lattice rule (h ≥ 4 →
 // topple, distribute 1 to each of 4 neighbours; mass exactly conserved).
@@ -49,13 +48,15 @@ export const regime = {
 
 export const pipelineDsl = `
 recipe "Sandpile relaxation"
-summary "Parallel sandpile relaxation on a sphere. Sparse random grains slowly load an integer height field; cells at threshold lose grains to their neighbours, producing toppling fronts and pinned sinks at the 12 pentagonal cells. This is the synchronous one-sweep-per-tick model the current DSL can express, not the fully-relaxed Abelian sandpile."
+summary "Parallel sandpile relaxation on a sphere. Sparse random grains slowly load an integer height field; cells at threshold lose grains to their neighbours, then a bounded relax loop runs the cascade for many synchronous sweeps in one tick."
 recommendedPreset patchy
 
 substrate geodesic frequency 32
 
 field h: u32                  // sand height (integer grains)
-field toppled: u32 derived    // 1 if this cell toppled this tick (for visualization + metrics)
+field toppled: u32 derived    // number of relax iterations where this cell toppled this tick
+field stress: f32 derived     // smoothed proximity to threshold, for rendering
+field activity: f32 derived   // smoothed avalanche activity, for rendering
 
 // Drop rate: probability per cell per tick of receiving a grain. Keep it
 // low: at frequency 32, 0.00008 is roughly one random drop per tick.
@@ -82,22 +83,46 @@ step {
     }
   }
 
+  stage clearActivity "Clear avalanche activity" {
+    reads toppled
+    writes toppled
+    cell {
+      set toppled = 0
+    }
+  }
+
   // Stage 2 — Topple. Synchronous: every cell at/above threshold loses
   // THRESHOLD grains; every cell receives 1 grain per toppling neighbour.
-  // One tick performs one relaxation sweep, so large avalanches visibly
-  // travel as fronts instead of collapsing into a single hidden event.
-  stage topple "Toppling cascade" {
-    reads h
-    writes h, toppled
+  // The relax wrapper repeats this stage, so a tall pile can cascade inside
+  // one tick. toppled accumulates toppling counts across the loop.
+  relax settle max_iters 48 {
+    stage topple "Toppling cascade" {
+      reads h, toppled
+      writes h, toppled
+      cell {
+        let willTopple = h >= THRESHOLD
+        let incoming   = count n in neighbors where h@n >= THRESHOLD
+        let outflow    = willTopple ? THRESHOLD : 0
+        // max(0, ...) is a safety net for u32 underflow; with willTopple
+        // gating outflow it's mathematically unreachable but makes the
+        // intent explicit.
+        set h       = max(0, h + incoming - outflow)
+        set toppled = toppled + (willTopple ? 1 : 0)
+      }
+    }
+  }
+
+  stage deriveVisuals "Smoothed display fields" {
+    reads h, toppled
+    writes stress, activity
     cell {
-      let willTopple = h >= THRESHOLD
-      let incoming   = sum n in neighbors { (h@n >= THRESHOLD) ? 1 : 0 }
-      let outflow    = willTopple ? THRESHOLD : 0
-      // max(0, ...) is a safety net for u32 underflow; with willTopple
-      // gating outflow it's mathematically unreachable but makes the
-      // intent explicit.
-      set h       = max(0, h + incoming - outflow)
-      set toppled = willTopple ? 1 : 0
+      let localStress = h / THRESHOLD
+      let nbrStress = mean n in neighbors { h@n / THRESHOLD }
+      let localActivity = toppled
+      let nbrActivity = mean n in neighbors { toppled@n }
+
+      set stress = clamp(localStress * 0.68 + nbrStress * 0.32, 0, 1.4)
+      set activity = clamp((localActivity + nbrActivity * 0.45) / 5.0, 0, 1)
     }
   }
 }
@@ -107,27 +132,35 @@ metric critical = count cells where h >= (THRESHOLD - 1)
 metric meanH    = mean cells { h }
 
 views {
-  // Sand-yellow ramp through the typical operating range. Cells right
-  // at threshold appear bright; deep stable regions are warm-dim.
+  // Smoothed criticality ramp. This is easier to read than raw integer h
+  // on a geodesic lattice, where single-cell variation otherwise dominates.
   palette SAND {
-    stop 0   color [10, 12, 18]
-    stop 0.3 color [80, 60, 30]
-    stop 0.6 color [200, 140, 50]
-    stop 1   color [255, 240, 180]
+    stop 0    color [8, 10, 16]
+    stop 0.25 color [42, 43, 44]
+    stop 0.55 color [122, 91, 38]
+    stop 0.82 color [220, 158, 55]
+    stop 1    color [255, 236, 172]
   }
 
-  // Avalanche colorer — pure heat from non-toppling to actively toppling.
+  // Avalanche colorer — toppling count, lightly smoothed by neighbours.
   palette FIRE {
-    stop 0 color [10, 12, 18]
-    stop 1 color [255, 100, 30]
+    stop 0    color [8, 10, 16]
+    stop 0.18 color [35, 40, 58]
+    stop 0.45 color [160, 45, 42]
+    stop 0.75 color [255, 130, 40]
+    stop 1    color [255, 245, 185]
   }
 
-  view height "Sand height" {
-    color ramp h range [0, 8] palette SAND
+  view height "Pile stress" {
+    color ramp stress range [0, 1.15] palette SAND
   }
 
   view avalanche "Toppling activity" {
-    color ramp toppled range [0, 1] palette FIRE
+    color ramp activity range [0, 1] palette FIRE
+  }
+
+  view grains "Raw grains" {
+    color ramp h range [0, 8] palette SAND
   }
 }
 

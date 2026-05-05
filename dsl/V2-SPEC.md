@@ -31,8 +31,10 @@ Compared to v1:
 - `prev(u)` is no longer a magic function call — it's `u@prev` (a coordinate
   query, not a Call expression).
 - Neighbor reductions are cell-centered: `sum n in neighbors { u@n - u + v@n }`
-  binds a *cell coordinate* `n`, then any field can be read at `n`. Replaces
-  v1's field-centered `neighbor sum n in u { ... }`.
+  binds a *cell coordinate* `n`, then any field can be read at `n`.
+  `count n in neighbors where PRED` counts matching neighbors and is sugar for
+  `sum n in neighbors { PRED ? 1 : 0 }`. Replaces v1's field-centered
+  `neighbor sum n in u { ... }`.
 - Continuous coordinate samples are first-class: `let p = upstream(wind, dt); u@p`.
 - Special primitives (`diffuse`, `clamp`, `advect`, `wind`, `normalize`)
   collapse into the universal `cell { ... }` block. Each is now expressible as
@@ -183,13 +185,13 @@ message.
 `vec2` fields are components in each cell's local tangent basis. A bare
 `wind` read returns the current cell's local components. A neighbor read such
 as `wind@n` returns the neighbor cell's own local components; it is **not**
-implicitly parallel-transported into the current cell's basis.
+implicitly transported into the current cell's basis.
 
 That is a deliberate v2 contract: raw coordinate queries are literal reads.
-Future intrinsic vector calculus should be added with explicit transport
-syntax, not by silently changing the meaning of `field@n`. The existing
-`gradient(scalarField)` and `divergence(vec2Field)` helpers are separate
-geometry-aware operators and may perform their own basis work internally.
+Use `transport(wind@n, n)` when a neighbor vector should be moved into
+the current cell's basis. The existing `gradient(scalarField)` and
+`divergence(vec2Field)` helpers are separate geometry-aware operators and may
+perform their own basis work internally.
 
 ### `derived` annotation
 
@@ -601,11 +603,18 @@ step {
       flux water = water * max(height - height@n, 0) * runoffRate * dt
     }
   }
+  relax settle max_iters 32 {
+    stage topple {
+      reads h
+      writes h
+      cell { set h = max(0, h - 1) }
+    }
+  }
 }
 ```
 
-The `step { }` block makes tick boundaries explicit. Stages execute in source
-order within a step.
+The `step { }` block makes tick boundaries explicit. Direct stages and
+`relax` blocks execute in source order within a step.
 
 Reserved for future: `step at 30hz { ... }` for tick-rate decoupling, multiple
 steps for multi-rate simulations.
@@ -614,7 +623,11 @@ steps for multi-rate simulations.
 
 A `step { }` is one simulation tick.
 
-- Stages execute in source order.
+- Direct stages and `relax` blocks execute in source order.
+- A `relax NAME max_iters N { ... }` block repeats its enclosed stages in
+  declaration order up to `N` times before the outer step continues. First-pass
+  `relax` is bounded-only: no early-exit/stable condition yet, and `N` must be
+  a positive integer no larger than 256.
 - Each stage pass reads the current buffers at dispatch time.
 - For ordinary fields, a write becomes visible to later stages as soon as that
   pass swaps. Multiple stages may write the same ordinary field; the last
@@ -625,6 +638,11 @@ A `step { }` is one simulation tick.
 - If a stage writes multiple ordinary fields, the compiler may emit multiple
   passes and delay their swaps until the end of that stage so every pass in
   the stage sees the same stage-input snapshot.
+
+`relax` exists for bounded cascade/settling rules such as sandpiles. It does
+not change the stage language: enclosed stages are ordinary `stage` blocks,
+and each iteration reads the committed result of the previous iteration. The
+loop resets each tick.
 
 Inside one `cell { }` block, bare field reads are reads from the stage-input
 snapshot, not from earlier `set` statements in the same block. `let` locals
@@ -690,6 +708,7 @@ u@prev                             # this cell, previous tick (triggers history 
 u@n                                # bound coordinate read (reduction binder or edge binder)
 let p = upstream(wind, dt)         # continuous coordinate one timestep upstream
 u@p                                # sample field u at coordinate p
+transport(wind@n, n)               # move neighbor-local vec2 into this cell's basis
 ```
 
 `coord` is an expression type, not a storage type. The currently implemented
@@ -703,6 +722,12 @@ coordinate values are:
 binder. For arbitrary continuous coords, the first implementation supports
 sampling `f32` fields by gathering the current cell and its immediate neighbors
 with inverse-distance weighting.
+
+`vec2` fields are stored in each cell's local tangent basis. A bare neighbor
+read such as `wind@n` is intentionally literal: it returns the neighbor's local
+east/north components. Use `transport(wind@n, n)` when a neighbor vector should
+be transported into the current cell's basis before alignment,
+averaging, or diffusion.
 
 Reserved for future:
 - `u@prev(N)` for N-deep history
@@ -788,7 +813,7 @@ sampling. Use `kernel bell(...)` when authored semantics are metric.
 - Math: `clamp`, `min`, `max`, `abs`, `sin`, `cos`, `asin`, `exp`, `sqrt`,
   `pow`, `hypot`, `wrapAngle`, `smoothstep`, `dot`
 - Coordinate helpers: `upstream(vec2, dt) -> coord`, `direction(coord) -> vec2`,
-  `distance(coord) -> f32`
+  `distance(coord) -> f32`, `transport(vec2, coord) -> vec2`
 - Noise / RNG: `cellNoise(seed, scale?)`, `cellRand(seed)`,
   `rand01(state)`, `rngNext(state)`
 - Globals: `dt`, `frame`, `PI`, `TAU`, `N` (cell count)
@@ -1148,7 +1173,6 @@ Reserved in grammar, not implemented:
 - `vec3` field type
 - `@prev(N)` for N>1
 - `@anti`, `@boundary` queries
-- explicit vector transport between tangent bases
 - `step at Nhz` multi-rate
 - Multiple substrates (square, torus, voxel)
 - Eager metric evaluation (`metric x rate Nhz`)

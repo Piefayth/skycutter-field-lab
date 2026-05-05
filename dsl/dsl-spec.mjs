@@ -17,6 +17,7 @@
 //   stamp          — `stamp ripple "Drop ripple" { ... }`
 //   step           — `step { stage propagate { reads ...; writes ...;
 //                                              cell { ... } } }`
+//   relax          — `relax settle max_iters 32 { stage topple { ... } }`
 //   metric         — `metric peak = max cells [where pred] { expr }`
 //
 // V2 EXPRESSION SURFACE:
@@ -25,7 +26,7 @@
 //   - `field@n` (inside `<op> n in neighbors/ring/disk { ... }`) reads at neighbor n
 //   - `let p = upstream(wind, dt); field@p` continuous-position semi-Lagrangian
 //   - math fns, neighbor reductions, position helpers (lon/lat/x/y/...)
-//   - `vec2`, `length`, `gradient`, `divergence` for vec2 fields
+//   - `vec2`, `length`, `gradient`, `divergence`, `transport` for vec2 fields
 //
 // V2 has no stage primitives — every kernel operation is a cell stage.
 // The parser rejects v1's `wind`/`advect`/`diffuse`/`clamp`/`normalize`
@@ -460,6 +461,18 @@ export const MATH_FUNCTIONS = [
     doc: "Returns the coordinate reached by walking backward from the current cell along a tangent vec2 velocity for dt. Bind the coordinate first, then sample a field at it: `let p = upstream(wind, dt); set field = field@p`.",
     example: "let p = upstream(wind, dt)\nset dye = dye@p",
   },
+  {
+    name: "transport",
+    target: null,
+    arity: [2],
+    argTypes: ["vec2", "coord"], returnType: "vec2",
+    wgsl: null,
+    js: null,
+    importNamespace: "core",
+    signature: "transport(vector, fromCoord)",
+    doc: "Parallel-transports a tangent vec2 from another coordinate's local east/north basis into the current cell's basis. Use inside neighbor reductions when averaging or aligning vector fields: `mean n in neighbors { transport(wind@n, n) }`. This is explicit on purpose: bare `wind@n` remains a literal neighbor-basis read.",
+    example: "let aligned = mean n in neighbors { transport(heading@n, n) }",
+  },
   // Tangent-frame differential operators on the geodesic substrate.
   // These are stencil reads (gather over neighbors) compiled to per-cell
   // WGSL helpers — semantically the same as a neighbor reduction, but
@@ -509,8 +522,8 @@ export const STENCIL_HELPERS = [
     // neighbor via `field@coord`. Replaces v1's field-centered
     // `neighbor MOD BIND in FIELD { EXPR }` form.
     signature: "<op> n in neighbors|ring(k)|disk(k)|kernel bell(center,width) { EXPR with field@n }",
-    doc: "Per-cell neighborhood reduction. `neighbors`/`ring`/`disk` are topological graph neighborhoods. `kernel bell(center,width)` is a weighted metric neighborhood over great-circle distance on the unit sphere: weight(d)=exp(-0.5*((d-center)/width)^2), gathered out to center+3*width. Kernel reductions support sum/mean; mean normalizes by total weight, sum returns the raw weighted sum. The center cell is included when it falls inside the kernel cutoff (notably bell(0,width)).",
-    example: "let lap      = mean n in neighbors { u@n - u }\nlet smooth2  = mean n in disk(2) { u@n }\nlet shell    = sum n in ring(3) { activator@n }\nlet blur     = mean n in kernel bell(0, 0.05) { u@n }\nlet annulus  = mean n in kernel bell(0.12, 0.03) { u@n }",
+    doc: "Per-cell neighborhood reduction. `neighbors`/`ring`/`disk` are topological graph neighborhoods. `count n in SOURCE where PRED` is sugar for summing 1 for neighbours that match PRED. `kernel bell(center,width)` is a weighted metric neighborhood over great-circle distance on the unit sphere: weight(d)=exp(-0.5*((d-center)/width)^2), gathered out to center+3*width. Kernel reductions support sum/mean; mean normalizes by total weight, sum returns the raw weighted sum. The center cell is included when it falls inside the kernel cutoff (notably bell(0,width)).",
+    example: "let lap      = mean n in neighbors { u@n - u }\nlet fires    = count n in neighbors where state@n == 1\nlet smooth2  = mean n in disk(2) { u@n }\nlet shell    = sum n in ring(3) { activator@n }\nlet blur     = mean n in kernel bell(0, 0.05) { u@n }\nlet annulus  = mean n in kernel bell(0.12, 0.03) { u@n }",
   },
   {
     name: "ring",
@@ -876,8 +889,14 @@ export const DECL_DIRECTIVES = [
 export const BLOCK_KEYWORDS = [
   {
     name: "step",
-    signature: "step { stage X { ... } stage Y { ... } ... }",
-    doc: "Tick boundary. Runs every simulation tick. Stages inside execute in declaration order; ordinary field writes become visible to later stages, while history-field writes become visible only after end-of-tick rotation. Metrics dispatch after the step. Multi-rate steps (`step at Nhz { ... }`) are reserved for future v2 work.",
+    signature: "step { stage X { ... } relax R max_iters N { stage Y { ... } } ... }",
+    doc: "Tick boundary. Runs every simulation tick. Stages and relax blocks inside execute in declaration order; ordinary field writes become visible to later stages, while history-field writes become visible only after end-of-tick rotation. Metrics dispatch after the step. Multi-rate steps (`step at Nhz { ... }`) are reserved for future v2 work.",
+  },
+  {
+    name: "relax",
+    signature: "relax NAME max_iters N { stage X { ... } }",
+    doc: "Bounded synchronous relaxation loop inside `step { }`. The enclosed stages run in declaration order up to N times before the outer step continues. This is for cascade/settling recipes such as sandpiles where one tick needs several local relaxation sweeps. First pass is bounded-only: no early-exit/stable condition yet, and max_iters must be a positive integer no larger than 256.",
+    example: "relax settle max_iters 32 {\n  stage topple {\n    reads h\n    writes h\n    cell { set h = max(0, h - 1) }\n  }\n}",
   },
   {
     name: "stage",

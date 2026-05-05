@@ -36,6 +36,7 @@ source spring: f32
 
 field moisture: f32
 field wind: vec2 derived
+field windFlow: vec2 derived
 field cloud: f32 derived
 field wetness: f32 derived
 
@@ -51,13 +52,15 @@ param beltWind  slider 0..3   step 0.01 default 1.10 label "WIND STRENGTH"
 step {
   stage windField "Latitude wind belts" {
     reads ocean
-    writes wind
+    writes wind, windFlow
     cell {
       let jet = beltWind * (0.28 + 0.34 * cos(lat * 3))
       let meander = 0.22 * sin(lon * 2 + frame / 120) * cos(lat)
       let pulse = 0.16 * sin(lon * 1.2 - frame / 180 + lat * 2.5)
       let oceanLift = ocean * 0.12 * sin(lon * 3 - frame / 160)
-      set wind = vec2(jet + pulse, meander + oceanLift)
+      let flow = vec2(jet + pulse, meander + oceanLift)
+      set wind = flow
+      set windFlow = flow * flowScale
     }
   }
 
@@ -74,10 +77,10 @@ step {
   }
 
   stage advect "Wind carries moisture" {
-    reads moisture, wind
+    reads moisture, windFlow
     writes moisture
     cell {
-      let p = upstream(wind * flowScale, dt * rate)
+      let p = upstream(windFlow, dt * rate)
       set moisture = clamp(moisture@p, 0, 1.8)
     }
   }
@@ -121,12 +124,12 @@ views {
 
   view moisture "Moisture" {
     color ramp moisture range [0, 1.2] palette WET
-    particles advect=wind count=2200 length=12 speed=0.7 fade=0.88 size=3.5 color [205, 235, 255]
+    particles advect=windFlow count=2200 length=12 speed=0.7 fade=0.88 size=3.5 color [205, 235, 255]
   }
 
   view cloud "Cloud" {
     color ramp cloud range [0, 1] palette CLOUD
-    particles advect=wind count=2600 length=13 speed=0.8 fade=0.86 size=4 color [235, 248, 255]
+    particles advect=windFlow count=2600 length=13 speed=0.8 fade=0.86 size=4 color [235, 248, 255]
   }
 }
 

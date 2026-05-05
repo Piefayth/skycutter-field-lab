@@ -118,6 +118,9 @@ export async function makeHarness({ recipeDsl, dsl, frequency = 16 } = {}) {
   const passes = stagesPipeline.stages.flatMap((stage) =>
     stage.passes.map((pass) => ({ stageId: stage.id, ...pass })),
   );
+  const schedule = stagesPipeline.steps?.length
+    ? stagesPipeline.steps
+    : stagesPipeline.stages.map((stage) => ({ type: "stage", stage }));
 
   // History fields rotate at end-of-tick rather than swap per-pass.
   // tick() needs to know which fields are history-flavoured so it
@@ -133,6 +136,7 @@ export async function makeHarness({ recipeDsl, dsl, frequency = 16 } = {}) {
     fieldTypes,
     layout: passes[0]?.layout,
     passes,
+    schedule,
     compiled,
 
     // Upload an initial field state. `values` is a Float32Array (for
@@ -159,12 +163,16 @@ export async function makeHarness({ recipeDsl, dsl, frequency = 16 } = {}) {
     runPass(passIndex, { dt = 1 / 60, frame = 0, params = {}, consts = {} } = {}) {
       const pass = passes[passIndex];
       if (!pass) throw new Error(`runPass: index ${passIndex} out of range (have ${passes.length})`);
+      this.runCompiledPass(pass, { dt, frame, params, consts });
+    },
+
+    runCompiledPass(pass, { dt = 1 / 60, frame = 0, params = {}, consts = {}, swapAfterOverride = null } = {}) {
       const uniforms = buildWebGpuGeodesicUniforms(pass.layout, {
         dt, frame, cellCount: grid.cellCount, params, consts,
       });
       // History-field passes must not swap mid-tick — rotation
       // happens via rotateHistory at end-of-tick.
-      const swapAfter = !historyFieldSet.has(pass.field);
+      const swapAfter = swapAfterOverride ?? !historyFieldSet.has(pass.field);
       if (pass.kind === "edgeFlux") {
         runtime.runEdgeFluxPass({
           key: pass.key,
@@ -192,6 +200,23 @@ export async function makeHarness({ recipeDsl, dsl, frequency = 16 } = {}) {
       }
     },
 
+    runCompiledStage(stage, { dt = 1 / 60, frame = 0, params = {}, consts = {} } = {}) {
+      const delayedCellSwaps = stage.passes.length > 1;
+      const fieldsToSwap = [];
+      for (const pass of stage.passes) {
+        const isHistoryWrite = historyFieldSet.has(pass.field);
+        this.runCompiledPass({ stageId: stage.id, ...pass }, {
+          dt,
+          frame,
+          params,
+          consts,
+          swapAfterOverride: isHistoryWrite ? false : !delayedCellSwaps,
+        });
+        if (delayedCellSwaps && !isHistoryWrite) fieldsToSwap.push(pass.field);
+      }
+      if (delayedCellSwaps) runtime.swapFields([...new Set(fieldsToSwap)]);
+    },
+
     // Run every pass in declared order — equivalent to one tick of
     // the recipe's `step { ... }` block. Async because we wrap the
     // dispatch in an error scope and await it: dawn-node logs WGSL
@@ -201,8 +226,14 @@ export async function makeHarness({ recipeDsl, dsl, frequency = 16 } = {}) {
     // queued during the tick (or null if everything succeeded).
     async tick({ dt = 1 / 60, frame = 0, params = {}, consts = {} } = {}) {
       device.pushErrorScope("validation");
-      for (let i = 0; i < passes.length; i++) {
-        this.runPass(i, { dt, frame, params, consts });
+      for (const item of schedule) {
+        if (item.type === "relax") {
+          for (let i = 0; i < Math.max(1, Math.floor(item.maxIters ?? 1)); i++) {
+            for (const stage of item.stages ?? []) this.runCompiledStage(stage, { dt, frame, params, consts });
+          }
+        } else {
+          this.runCompiledStage(item.stage, { dt, frame, params, consts });
+        }
       }
       // End-of-tick rotation for history fields — promotes the
       // freshly-written `next` slot to `current` and demotes

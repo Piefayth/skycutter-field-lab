@@ -331,7 +331,7 @@ field curlProxy: f32 derived
 param decay slider 0..1 step 0.01 default ${fixed(0.02 + rng() * 0.1)} label "DECAY"
 
 step {
-  stage relax {
+  stage relaxWind {
     reads wind, density
     writes wind, density
     cell {

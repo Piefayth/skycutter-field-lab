@@ -109,8 +109,8 @@ step {
   }
 
   // Stage 3 — Momentum. (α − β|v|²)v drives self-propulsion;
-  // pressure ∝ −∇ρ; viscosity smooths velocity (graph-Laplacian
-  // form on the vec2 field directly); friction bleeds energy;
+  // pressure ∝ −∇ρ; viscosity smooths velocity using explicit
+  // vector transport across tangent bases; friction bleeds energy;
   // η·random kick provides the noise floor that's the order
   // parameter of the Vicsek-flock transition.
   stage momentum "Velocity update" {
@@ -119,7 +119,7 @@ step {
     cell {
       let speed2 = v.x * v.x + v.y * v.y
       let drive  = ALPHA - BETA * speed2
-      let visc   = (mean n in neighbors { v@n } - v) * DIFF
+      let visc   = (mean n in neighbors { transport(v@n, n) } - v) * DIFF
       let press  = gradient(rho)
       // Independent random kicks per component. cellRand returns
       // [-1, 1], so multiplying by NOISE directly gives the symmetric

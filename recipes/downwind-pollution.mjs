@@ -40,7 +40,7 @@ field plume: f32 derived
 param simRateHz slider 0..240 step 1 default 60 label "SIM RATE"
 param rate      slider 1..60  step 1 default 24 label "RATE"
 param emission  slider 0..5   step 0.01 default 1.40 label "EMISSION"
-param transport slider 0..0.5 step 0.005 default 0.160 label "TRANSPORT"
+param transportRate slider 0..0.5 step 0.005 default 0.160 label "TRANSPORT"
 param windBias  slider 0..4   step 0.01 default 2.80 label "WIND BIAS"
 param crossMix  slider 0..0.4 step 0.005 default 0.010 label "CROSS MIX"
 param decay     slider 0..2   step 0.01 default 0.035 label "DECAY"
@@ -76,7 +76,7 @@ step {
       let downwind = max(dot(wind, direction(n)), 0)
       let distWeight = clamp(0.050 / max(distance(n), 0.001), 0.55, 1.3)
       let push = crossMix + windBias * downwind
-      flux pollutant = pollutant * clamp(push * distWeight * transport * dt * rate, 0, 0.22)
+      flux pollutant = pollutant * clamp(push * distWeight * transportRate * dt * rate, 0, 0.22)
     }
   }
 

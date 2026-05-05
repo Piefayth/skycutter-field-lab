@@ -86,18 +86,21 @@ ui.resetButton = document.querySelector("#resetButton");
 ui.randomButton = document.querySelector("#randomButton");
 
 const metrics = createMetrics({ ui });
-const gpuRenderQueryEnabled = new URLSearchParams(window.location.search).has("gpu-render");
-const gpuSurfaceQueryEnabled = new URLSearchParams(window.location.search).has("gpu-surface")
-  || globalThis.__FIELD_LAB_GPU_SURFACE_ENABLED__ === true;
-let gpuSurfaceActive = gpuSurfaceQueryEnabled;
-const surfaceContinuousQueryEnabled = new URLSearchParams(window.location.search).has("surface-continuous");
+const query = new URLSearchParams(window.location.search);
+const gpuSurfaceDisabled = query.has("cpu-render")
+  || query.has("no-gpu-surface")
+  || globalThis.__FIELD_LAB_GPU_SURFACE_DISABLED__ === true
+  || globalThis.__FIELD_LAB_GPU_RENDER_DISABLED__ === true;
+const gpuSurfaceRequested = !gpuSurfaceDisabled;
+let gpuSurfaceActive = gpuSurfaceRequested;
+const surfaceContinuousQueryEnabled = query.has("surface-continuous");
 const surfaceFrameIntervalMs = surfacePresentIntervalMs();
-const startPausedQueryEnabled = new URLSearchParams(window.location.search).has("startPaused");
+const startPausedQueryEnabled = query.has("startPaused");
 const simRateOverride = simRateQueryOverride();
-const perfHudQueryEnabled = new URLSearchParams(window.location.search).has("perfHud");
-const idleRafQueryEnabled = new URLSearchParams(window.location.search).has("idleRaf");
-const bootStage = new URLSearchParams(window.location.search).get("bootStage") ?? "";
-const skipGpuDeviceQueryEnabled = new URLSearchParams(window.location.search).has("skipGpuDevice");
+const perfHudQueryEnabled = query.has("perfHud");
+const idleRafQueryEnabled = query.has("idleRaf");
+const bootStage = query.get("bootStage") ?? "";
+const skipGpuDeviceQueryEnabled = query.has("skipGpuDevice");
 document.body.classList.toggle("gpu-surface-mode", gpuSurfaceActive);
 
 ui.pauseButton.addEventListener("click", () => {
@@ -328,12 +331,6 @@ function updateAll({ force = false } = {}) {
   const shouldSyncFull = force || now - lastFullSyncMs >= 5000;
   const renderSyncIntervalMs = gpuSurfaceActive ? 100 : 33;
   const shouldSyncRender = force || now - lastRenderSyncMs >= renderSyncIntervalMs;
-  const gpuRenderField = (globalThis.__FIELD_LAB_GPU_RENDER_ENABLED__ === true || gpuRenderQueryEnabled)
-    && !globalThis.__FIELD_LAB_GPU_RENDER_DISABLED__
-    ? gpuRenderableField(viewSpec)
-    : null;
-  const gpuRenderQueued = gpuRenderField && typeof runner?.copyFieldToRenderTexture === "function";
-  const gpuRenderResource = gpuRenderQueued ? copyGpuRenderResource(gpuRenderField) : null;
   const surfaceField = gpuSurfaceField(viewSpec);
   const surfaceActive = Boolean(
     gpuSurfaceActive &&
@@ -342,8 +339,8 @@ function updateAll({ force = false } = {}) {
     runner?.renderField
   );
   const renderFields = fieldsForView(viewSpec, {
-    gpuRenderField: surfaceActive ? surfaceField : (gpuRenderQueued ? gpuRenderField : null),
-    skipParticles: surfaceActive,
+    surfaceField: surfaceActive ? surfaceField : null,
+    skipParticles: false,
   });
   const shouldBackgroundFullSync = !surfaceActive && (shouldRefreshPipeline || shouldRefreshMetrics || shouldRefreshProbe);
   const shouldForceFullSync = force && !surfaceActive;
@@ -363,9 +360,9 @@ function updateAll({ force = false } = {}) {
     fields: state.fields,
     viewSpec,
     frame: runtime.frame,
+    particleStepDt: FIXED_SIM_DT * Math.max(0, Number(paramValue("rate") ?? 1)),
     fieldRevision: state.__fieldRevision ?? 0,
     force,
-    gpuRenderBuffer: gpuRenderResource,
     externalSurfaceActive: surfaceActive,
   });
   if (shouldRefreshMetrics) {
@@ -389,14 +386,6 @@ function queueReadback(request) {
   pendingReadback = { full: false, fields: request.fields ?? [] };
 }
 
-function gpuRenderableField(viewSpec) {
-  if (viewSpec?.gpuColor?.kind !== "ramp") return null;
-  const fields = viewSpec?.color?.fields;
-  if (!Array.isArray(fields) || fields.length !== 1) return null;
-  if (viewSpec?.glyph) return null;
-  return fields[0] ?? null;
-}
-
 function gpuSurfaceField(viewSpec) {
   if (viewSpec?.gpuColor?.kind !== "ramp" && viewSpec?.gpuColor?.kind !== "wheel") return null;
   if (viewSpec.gpuColor.field) return viewSpec.gpuColor.field;
@@ -412,21 +401,6 @@ function ensureGpuSurfaceCompatibleView() {
   if (!fallback) return current;
   ui.viewSelect.value = fallback.id;
   return fallback;
-}
-
-function copyGpuRenderResource(field) {
-  const runner = getRunner();
-  const info = runner?.copyFieldToRenderTexture?.(field);
-  if (!info) return null;
-  return {
-    field,
-    width: info.width,
-    height: info.height,
-    cellCount: info.cellCount,
-    type: info.type,
-    frame: runtime.frame,
-    texture: info.texture,
-  };
 }
 
 function flushReadbackAfterRender() {
@@ -445,10 +419,10 @@ function flushReadbackAfterRender() {
   });
 }
 
-function fieldsForView(viewSpec, { gpuRenderField = null, skipParticles = false } = {}) {
+function fieldsForView(viewSpec, { surfaceField = null, skipParticles = false } = {}) {
   const names = new Set();
   for (const name of viewSpec?.color?.fields ?? []) {
-    if (name === gpuRenderField) continue;
+    if (name === surfaceField) continue;
     if (name) names.add(name);
   }
   const glyph = viewSpec?.glyph;
@@ -654,13 +628,12 @@ function updatePerfHud() {
 
 function shouldRenderThreeOverlay({ surfaceRendered, viewSpec }) {
   if (gpuSurfaceActive) {
-    return Boolean(viewSpec?.glyph);
+    return Boolean(viewSpec?.glyph || viewSpec?.particles);
   }
   if (!surfaceRendered) return true;
   // In surface mode the colored planet is already drawn by the custom WebGPU
-  // pass. CPU particles are intentionally disabled in this mode until they
-  // move to a GPU-native path.
-  return Boolean(viewSpec?.glyph);
+  // pass. Keep lightweight Three overlays for glyphs and tracer particles.
+  return Boolean(viewSpec?.glyph || viewSpec?.particles);
 }
 
 function shouldPresentThreeOverlay({ cameraChanged = false, viewSpec = null } = {}) {
@@ -886,7 +859,7 @@ function windowMenuItems(windows) {
 // Boot
 // =========================================================================
 export async function bootApp() {
-  traceDebug("boot-start", { gpuSurface: gpuSurfaceQueryEnabled });
+  traceDebug("boot-start", { gpuSurface: gpuSurfaceRequested });
   let nextGpuSurfaceActive = false;
   ({
     canvas,
@@ -900,11 +873,11 @@ export async function bootApp() {
     globe,
     gpuSurfaceActive: nextGpuSurfaceActive,
   } = await createThreeSetup({
-    gpuSurface: gpuSurfaceQueryEnabled,
+    gpuSurface: gpuSurfaceRequested,
     skipGpuDevice: skipGpuDeviceQueryEnabled,
   }));
   traceDebug("three-setup", {
-    requestedSurface: gpuSurfaceQueryEnabled,
+    requestedSurface: gpuSurfaceRequested,
     activeSurface: nextGpuSurfaceActive,
     hasSurfaceCanvas: Boolean(surfaceCanvas),
     hasRenderer: Boolean(renderer),
@@ -1099,7 +1072,8 @@ function installDebugSnapshot() {
     watchdogTicks,
     gpuErrors: globalThis.__FIELD_LAB_GPU_ERRORS__ ?? [],
     debugTrace: [...debugTrace],
-    gpuSurface: gpuSurfaceQueryEnabled,
+    gpuSurface: gpuSurfaceRequested,
+    gpuSurfaceRequested,
     gpuSurfaceActive,
     surfaceField: debugSurfaceField,
     surfaceFieldType: debugRenderField?.type ?? null,

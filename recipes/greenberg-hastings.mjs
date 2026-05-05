@@ -73,7 +73,7 @@ step {
       let isExcited = state == 1
       // Any neighbour in the excited (1) state? Threshold 1 = "at
       // least one fires me up".
-      let neighborFires = sum n in neighbors { (state@n == 1) ? 1 : 0 }
+      let neighborFires = count n in neighbors where state@n == 1
       let willFire = isResting && (neighborFires > 0)
       // Resting + neighbour-excited → 1. Excited or refractory →
       // (state + 1) mod K. Otherwise stay put. The ternary cascade

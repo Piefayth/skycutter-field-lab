@@ -30,9 +30,8 @@
 // (orientation on a 2D tangent plane), and the alignment update
 // needs the neighborhood mean of those vec2s. v1 would have had
 // to fake it with two scalar fields and lose the algebraic
-// elegance — v2 stores it as one vec2 field, reads neighbors via
-// `mean n in neighbors { heading@n.x }` / `.y` (the type checker
-// requires component-wise scalar reductions today), and renders
+// elegance — v2 stores it as one vec2 field, explicitly transports
+// neighbor headings into the current cell's tangent basis, and renders
 // the result via atan2 + the existing phase colorer.
 
 import { compileV2 } from "../dsl/compile-v2.mjs";
@@ -92,11 +91,11 @@ step {
     reads heading
     writes heading
     cell {
-      // Vec2 neighbor-mean — single reduction, vec2 result. (Earlier
-      // versions of v2 required pulling .x and .y as separate scalar
-      // reductions; sum/mean now accept vec2 bodies directly and
-      // emit a vec2<f32> accumulator.)
-      let avg = mean n in neighbors { heading@n }
+      // Vec2 neighbor-mean. transport(heading@n, n) rotates each
+      // neighbor-local heading into this cell's tangent basis before
+      // averaging, so the alignment rule is geometric instead of
+      // averaging raw east/north components from different bases.
+      let avg = mean n in neighbors { transport(heading@n, n) }
       // Normalize the neighborhood mean. When neighbors agree, the
       // mean is unit length already; when they disagree, the mean
       // shrinks toward zero and normalization commits to whichever
@@ -127,7 +126,7 @@ step {
       // Local alignment = |neighborhood-mean heading|. 1.0 means
       // every neighbor (and self) point the same way; 0.0 means the
       // mean cancels (a defect core).
-      set align = length(mean n in neighbors { heading@n })
+      set align = length(mean n in neighbors { transport(heading@n, n) })
     }
   }
 }
