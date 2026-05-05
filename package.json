@@ -6,9 +6,9 @@
   "description": "Geodesic-sphere simulation lab — v2 DSL, WebGPU compute pipeline, recipes corpus.",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "vite build",
+    "build": "vite build && node scripts/copy-runtime-assets.mjs",
     "preview": "vite preview --host 127.0.0.1",
-    "test": "node --test",
+    "test": "node --test dsl/*_test.mjs kernel/*_test.mjs testing/*_test.mjs visual/*_test.mjs",
     "fuzz": "node testing/fuzz-v2.mjs",
     "fuzz:wgsl": "node testing/fuzz-v2.mjs --wgsl",
     "fuzz:execute": "node testing/fuzz-v2.mjs --execute",

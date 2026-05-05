@@ -33,9 +33,7 @@ jobs:
         run: npm install
 
       - name: Build site
-        run: |
-          npm run build
-          cp .nojekyll dist/.nojekyll
+        run: npm run build
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
