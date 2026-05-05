@@ -9,6 +9,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { harnessAvailable, makeHarness, closeTo } from "./wgsl-harness.mjs";
+import { pipelineDsl as planetHeatDsl } from "../recipes/planet-heat.mjs";
 
 const FREQUENCY = 8;  // ~640-cell mesh; small enough for fast tests
 
@@ -178,6 +179,43 @@ scenarios { scenario blank "Blank" { set u = 0 } }
         if (out[i] > 0.001) nonzeroNeighbors++;
       }
       assert.ok(nonzeroNeighbors >= 5, `expected ≥5 neighbors to pick up signal, got ${nonzeroNeighbors}`);
+    } finally {
+      h.dispose();
+    }
+  });
+
+  await t.test("planet heat has no hidden heat tendency when drivers are zero", async () => {
+    const h = await makeHarness({ recipeDsl: planetHeatDsl, frequency: FREQUENCY });
+    try {
+      const initial = new Float32Array(h.cellCount);
+      const ocean = new Float32Array(h.cellCount);
+      const albedo = new Float32Array(h.cellCount);
+      for (let i = 0; i < initial.length; i++) {
+        initial[i] = -0.4 + (i % 17) * 0.05;
+        ocean[i] = (i % 3) / 2;
+        albedo[i] = (i % 5) / 5;
+      }
+      h.uploadField("T", initial);
+      h.uploadField("ocean", ocean);
+      h.uploadField("albedo", albedo);
+
+      await h.tick({
+        params: {
+          sun: 0,
+          greenhouse: 0,
+          cooling: 0,
+          diffusion: 0,
+          seasonal: 0,
+          oceanInertia: 0,
+          iceFeedback: 0,
+          rate: 16,
+        },
+      });
+
+      const out = await h.readField("T");
+      for (let i = 0; i < out.length; i++) {
+        assert.ok(closeTo(out[i], initial[i], 1e-5), `cell ${i}: got ${out[i]}, want ${initial[i]}`);
+      }
     } finally {
       h.dispose();
     }
