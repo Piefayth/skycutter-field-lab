@@ -920,12 +920,17 @@ export async function bootApp() {
   initControls(ui);
   initPaint({
     canvas: inputCanvas ?? canvas, camera, globe, ui, state, controls,
-    onBeforePaint: async () => {
+    onBeforePaint: async (writtenFields = []) => {
+      const syncFields = Array.isArray(writtenFields) ? writtenFields.filter(Boolean) : [];
       paintSyncActive = true;
+      traceDebug("paint-sync-start", { fields: syncFields });
       try {
-        await getRunner()?.syncState?.(state, undefined, { fresh: true });
+        if (syncFields.length > 0) {
+          await getRunner()?.syncState?.(state, syncFields, { fresh: true });
+        }
       } finally {
         paintSyncActive = false;
+        traceDebug("paint-sync-end", { fields: syncFields });
       }
     },
     onPaintStart: () => {
@@ -937,9 +942,12 @@ export async function bootApp() {
       updateAll({ force: true });
     },
     onAfterPaint: (writtenFields = null) => {
+      const fields = Array.isArray(writtenFields) ? writtenFields.filter(Boolean) : [];
+      if (fields.length === 0) return;
       const runner = getRunner();
-      runner?.markStateDirty?.(writtenFields);
-      runner?.flushStateUpload?.(state, writtenFields);
+      traceDebug("paint-upload", { fields });
+      runner?.markStateDirty?.(fields);
+      runner?.flushStateUpload?.(state, fields);
       invalidateSurfaceFrame();
       updateAll();
     },

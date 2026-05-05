@@ -73,6 +73,7 @@ export function initPaint(deps) {
   let wasPausedBeforePaint = false;
   let paintPrepared = false;
   let paintPreparePromise = null;
+  let paintPreparedFieldsKey = "";
 
   function pointerHit(event) {
     const rect = canvas.getBoundingClientRect();
@@ -113,13 +114,22 @@ export function initPaint(deps) {
     return Array.isArray(fn.writes) ? fn.writes : [];
   }
 
-  async function ensurePaintPrepared() {
-    if (paintPrepared) {
+  function stampWrittenFields(brush) {
+    const compiled = controls.stamps;
+    const fn = compiled && compiled[brush];
+    if (!fn) return null;
+    return Array.isArray(fn.writes) ? fn.writes : [];
+  }
+
+  async function ensurePaintPrepared(writtenFields) {
+    const fieldsKey = [...writtenFields].sort().join(",");
+    if (paintPrepared && paintPreparedFieldsKey === fieldsKey) {
       if (paintPreparePromise) await paintPreparePromise;
       return;
     }
     paintPrepared = true;
-    paintPreparePromise = Promise.resolve(onBeforePaint?.())
+    paintPreparedFieldsKey = fieldsKey;
+    paintPreparePromise = Promise.resolve(onBeforePaint?.(writtenFields))
       .finally(() => {
         paintPreparePromise = null;
       });
@@ -131,7 +141,9 @@ export function initPaint(deps) {
     if (!hit) return;
     const r = controls.brushRadius.value;
     const brush = ui.brushSelect.value;
-    await ensurePaintPrepared();
+    const expectedWrites = stampWrittenFields(brush);
+    if (!expectedWrites) return;
+    await ensurePaintPrepared(expectedWrites);
     if (!paintDown) return;
     const writtenFields = applyStamp(brush, hit.x, hit.y, r, hit, phase);
     if (!writtenFields) return;
@@ -147,6 +159,7 @@ export function initPaint(deps) {
     paintDown = false;
     paintPrepared = false;
     paintPreparePromise = null;
+    paintPreparedFieldsKey = "";
     if (canvas.hasPointerCapture(event.pointerId)) {
       canvas.releasePointerCapture(event.pointerId);
     }
@@ -167,6 +180,7 @@ export function initPaint(deps) {
     paintDown = true;
     paintPrepared = false;
     paintPreparePromise = null;
+    paintPreparedFieldsKey = "";
     onPaintStart?.();
     if (ui.autoPausePaint.checked) {
       wasPausedBeforePaint = getPaused();
