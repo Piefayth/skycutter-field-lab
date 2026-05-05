@@ -32,14 +32,14 @@ field windFlow: vec2 derived
 
 param simRateHz slider 0..240 step 1 default 60 label "SIM RATE"
 param rate      slider 1..60  step 1 default 12 label "RATE"
-param windSpeed slider 0..2   step 0.01 default 0.92 label "WIND SPEED"
+param windSpeed slider 0..2   step 0.01 default 0.59 label "WIND SPEED"
 param belts     slider 0..2   step 0.01 default 0.85 label "BELTS"
 param meander   slider 0..2   step 0.01 default 0.80 label "MEANDER"
-param eddies    slider 0..2   step 0.01 default 0.70 label "EDDIES"
+param eddies    slider 0..2   step 0.01 default 1.53 label "EDDIES"
 param shear     slider 0..2   step 0.01 default 0.55 label "SHEAR"
-param moisturePull slider 0..2 step 0.01 default 0.05 label "MOISTURE PULL"
-param drift     slider 0..2   step 0.01 default 0.70 label "DRIFT"
-param flowScale slider 0..1   step 0.01 default 0.45 label "ADVECTION SCALE"
+param moisturePull slider 0..2 step 0.01 default 0.02 label "MOISTURE PULL"
+param drift     slider 0..2   step 0.01 default 0.97 label "DRIFT"
+param flowScale slider 0..1   step 0.01 default 0.30 label "ADVECTION SCALE"
 
 step {
   stage windField "Wind field" {

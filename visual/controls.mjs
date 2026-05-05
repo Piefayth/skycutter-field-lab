@@ -211,7 +211,9 @@ function renderStamps(decls) {
   const map = Object.create(null);
   for (const decl of decls) {
     if (typeof decl?.id === "string" && typeof decl.run === "function") {
-      map[decl.id] = decl.run;
+      const fn = decl.run;
+      fn.writes = Array.isArray(decl.writes) ? [...decl.writes] : [];
+      map[decl.id] = fn;
     }
   }
   registry.stamps = map;

@@ -36,8 +36,34 @@ export function buildDslStampDecls(stamps, dsl, getParam) {
   return stamps.map((stamp) => ({
     id: stamp.id,
     label: stamp.label ?? stamp.id,
+    writes: stampWriteFields(stamp),
     run: (state, x, y, r, hit = null, phase = "drag") => runDslStamp(state, stamp, x, y, r, dsl, hit, getParam, phase),
   }));
+}
+
+function stampWriteFields(stamp) {
+  const fields = new Set();
+  if (stamp.phases) {
+    collectInitActionWrites(stamp.phases.press ?? [], fields);
+    collectInitActionWrites(stamp.phases.drag ?? [], fields);
+  } else {
+    collectInitActionWrites(stamp.actions ?? [], fields);
+  }
+  return [...fields];
+}
+
+function collectInitActionWrites(actions, fields) {
+  for (const action of actions ?? []) {
+    if (action?.field) fields.add(action.field);
+    if (action?.type === "eachCell") collectCellActionWrites(action.actions ?? [], fields);
+  }
+}
+
+function collectCellActionWrites(actions, fields) {
+  for (const action of actions ?? []) {
+    if ((action?.type === "set" || action?.type === "add") && action.field) fields.add(action.field);
+    if (action?.type === "when") collectCellActionWrites(action.actions ?? [], fields);
+  }
 }
 
 function runDslPreset(state, preset, dsl, getParam, setParam) {

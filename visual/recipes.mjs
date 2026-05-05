@@ -438,6 +438,8 @@ export function initRecipes({
     let gpuRunner = null;
     let gpuReady = false;
     let dirty = true;
+    let dirtyFieldNames = null;
+    let stateEpoch = 0;
     // Set by markPresetApplied: on the next upload, also seed the
     // history field's prev slot from current. Stamps DON'T set this —
     // their asymmetry between current and prev is the velocity impulse.
@@ -450,8 +452,11 @@ export function initRecipes({
       ...metadataRunner,
       backend: "geodesic-webgpu",
       grid: deps.state.grid?.topology ?? null,
-      markStateDirty() {
+      markStateDirty(names = null) {
+        const wasDirty = dirty;
         dirty = true;
+        dirtyFieldNames = mergeDirtyFieldNames(dirtyFieldNames, names, { wasDirty });
+        stateEpoch++;
         bumpFieldRevision(deps.state);
       },
       // Distinct from markStateDirty: signals that current state.fields
@@ -460,7 +465,9 @@ export function initRecipes({
       // reads u_0 on the first tick instead of uninitialized memory.
       markPresetApplied() {
         dirty = true;
+        dirtyFieldNames = null;
         presetJustApplied = true;
+        stateEpoch++;
         bumpFieldRevision(deps.state);
       },
       readFields(state, names) {
@@ -470,17 +477,20 @@ export function initRecipes({
         if (disposed || !gpuReady || failed || dirty) return null;
         return gpuRunner.renderField?.(name) ?? null;
       },
-      flushStateUpload(state) {
+      flushStateUpload(state, names = undefined) {
         if (disposed || !gpuReady || failed || !dirty) return;
-        gpuRunner.uploadState(state);
+        const uploadNames = names ?? (dirtyFieldNames ? [...dirtyFieldNames] : undefined);
+        gpuRunner.uploadState(state, uploadNames);
         if (presetJustApplied) {
           gpuRunner.initHistory?.();
           presetJustApplied = false;
         }
         dirty = false;
+        dirtyFieldNames = null;
+        stateEpoch++;
       },
-      syncState(state) {
-        return readBack(state).catch(handleReadbackError);
+      syncState(state, names = undefined, options = undefined) {
+        return readBack(state, names, options).catch(handleReadbackError);
       },
       runTick(state, dt) {
         if (disposed || !gpuReady || failed) return;
@@ -491,6 +501,7 @@ export function initRecipes({
           }
           wrapper.flushStateUpload(state);
           gpuRunner.runTick(dt);
+          stateEpoch++;
           // Pull the latest GPU-reduced metric values into state.dslMetrics
           // so the metrics panel (which evaluates `dsl:<id>` sources)
           // sees them. Values are async-readback; entries are null
@@ -510,13 +521,33 @@ export function initRecipes({
       },
     };
 
-    async function readBack(state, names = gpuRunner?.fieldNames) {
+    async function readBack(state, names = gpuRunner?.fieldNames, options = {}) {
       if (disposed || !gpuReady || failed || dirty) return;
-      if (reading) return readPromise;
+      if (reading) {
+        const currentRead = readPromise;
+        if (!options?.fresh) return currentRead;
+        await currentRead;
+        if (disposed || !gpuReady || failed || dirty) return;
+      }
       reading = true;
+      const readEpoch = stateEpoch;
+      const fieldNames = Array.isArray(names) ? names : (gpuRunner?.fieldNames ?? []);
+      const snapshotState = {
+        ...state,
+        fields: Object.fromEntries(fieldNames
+          .filter((name) => state.fields?.[name])
+          .map((name) => {
+            const arr = state.fields[name];
+            return [name, new arr.constructor(arr.length)];
+          })),
+      };
       readPromise = (async () => {
         const perfStart = perfNow();
-        await gpuRunner.readState(state, names);
+        await gpuRunner.readState(snapshotState, Object.keys(snapshotState.fields));
+        if (readEpoch !== stateEpoch || dirty) return;
+        for (const [name, arr] of Object.entries(snapshotState.fields)) {
+          state.fields[name]?.set(arr);
+        }
         await gpuRunner.readEventCounts?.(state);
         bumpFieldRevision(state);
         recordPerfSpan("webgpu.readBack", perfStart, { fields: Array.isArray(names) ? names.length : null });
@@ -527,6 +558,14 @@ export function initRecipes({
         reading = false;
         readPromise = null;
       }
+    }
+
+    function mergeDirtyFieldNames(current, names, { wasDirty = false } = {}) {
+      if (!Array.isArray(names) || names.length === 0) return null;
+      if (current === null && wasDirty) return null;
+      const next = current ? new Set(current) : new Set();
+      for (const name of names) next.add(name);
+      return next;
     }
 
     function handleReadbackError(error) {

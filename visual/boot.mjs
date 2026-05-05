@@ -225,6 +225,8 @@ let geodesicPreviewLoadingFrequency = null;
 let geodesicSurfaceRenderer = null;
 let menuRef = null;
 let overlayCanvasVisible = true;
+let paintStrokeActive = false;
+let paintSyncActive = false;
 let perfHudEl = null;
 let lastAnimatePhase = "not-started";
 let lastAnimateError = null;
@@ -344,11 +346,12 @@ function updateAll({ force = false } = {}) {
   });
   const shouldBackgroundFullSync = !surfaceActive && (shouldRefreshPipeline || shouldRefreshMetrics || shouldRefreshProbe);
   const shouldForceFullSync = force && !surfaceActive;
-  if (runner && (shouldForceFullSync || shouldBackgroundFullSync) && shouldSyncFull) {
+  const canQueueReadback = !paintStrokeActive;
+  if (canQueueReadback && runner && (shouldForceFullSync || shouldBackgroundFullSync) && shouldSyncFull) {
     queueReadback({ full: true });
     lastFullSyncMs = now;
     lastRenderSyncMs = now;
-  } else if (runner && shouldSyncRender && renderFields.length > 0 && typeof runner.readFields === "function") {
+  } else if (canQueueReadback && runner && shouldSyncRender && renderFields.length > 0 && typeof runner.readFields === "function") {
     queueReadback({ fields: renderFields });
     lastRenderSyncMs = now;
   }
@@ -476,7 +479,7 @@ function runAnimationFrame(source = "raf") {
       updatePerfHud();
       return;
     }
-    if (!runtime.paused) {
+    if (!runtime.paused && !paintSyncActive) {
       lastAnimatePhase = "step-sim";
       const stepStart = perfNow();
       stepSim(dt);
@@ -917,11 +920,26 @@ export async function bootApp() {
   initControls(ui);
   initPaint({
     canvas: inputCanvas ?? canvas, camera, globe, ui, state, controls,
-    onBeforePaint: () => getRunner()?.syncState?.(state),
-    onAfterPaint: () => {
+    onBeforePaint: async () => {
+      paintSyncActive = true;
+      try {
+        await getRunner()?.syncState?.(state, undefined, { fresh: true });
+      } finally {
+        paintSyncActive = false;
+      }
+    },
+    onPaintStart: () => {
+      paintStrokeActive = true;
+      pendingReadback = null;
+    },
+    onPaintEnd: () => {
+      paintStrokeActive = false;
+      updateAll({ force: true });
+    },
+    onAfterPaint: (writtenFields = null) => {
       const runner = getRunner();
-      runner?.markStateDirty?.();
-      runner?.flushStateUpload?.(state);
+      runner?.markStateDirty?.(writtenFields);
+      runner?.flushStateUpload?.(state, writtenFields);
       invalidateSurfaceFrame();
       updateAll();
     },
@@ -1084,6 +1102,8 @@ function installDebugSnapshot() {
     surfaceFpsCap: surfaceFrameIntervalMs > 0 ? Number((1000 / surfaceFrameIntervalMs).toFixed(1)) : null,
     surfaceDprCap: surfacePixelRatioCap(),
     devicePixelRatio: globalThis.devicePixelRatio,
+    paintStrokeActive,
+    paintSyncActive,
     overlayCanvasVisible,
     readbackInFlight,
     pendingReadback: pendingReadback

@@ -47,6 +47,9 @@ let initialized = false;
  *     the texture / metrics. In the visual app this is `updateAll()`.
  *   onBeforePaint() — invoked before each stamp so GPU-backed callers can
  *     synchronize the CPU field arrays that stamp functions mutate.
+ *   onPaintStart() / onPaintEnd() — optional stroke lifecycle hooks.
+ *     GPU-backed callers use these to suppress stale background readbacks
+ *     while CPU stamp arrays are being edited and uploaded.
  *   onProbeMove(event) — invoked on canvas pointermove when no paint
  *     stroke is in flight. Caller drives the probe overlay from this.
  *   getPaused() / setPaused(bool) — sim-pause state. The
@@ -58,7 +61,7 @@ export function initPaint(deps) {
   initialized = true;
 
   const { canvas, camera, globe, ui, state, controls } = deps;
-  const { onBeforePaint, onAfterPaint, onProbeMove, getPaused, setPaused } = deps;
+  const { onBeforePaint, onAfterPaint, onPaintStart, onPaintEnd, onProbeMove, getPaused, setPaused } = deps;
 
   // The visual app's only raycaster + pointer Vec2. Reused across every
   // pointer event; cheaper than allocating per-call.
@@ -69,6 +72,7 @@ export function initPaint(deps) {
   let paintDown = false;
   let wasPausedBeforePaint = false;
   let paintPrepared = false;
+  let paintPreparePromise = null;
 
   function pointerHit(event) {
     const rect = canvas.getBoundingClientRect();
@@ -104,7 +108,22 @@ export function initPaint(deps) {
     // click does nothing because the dispatch map is empty.
     const compiled = controls.stamps;
     const fn = compiled && compiled[brush];
-    if (fn) fn(state, x, y, r, hit, phase);
+    if (!fn) return null;
+    fn(state, x, y, r, hit, phase);
+    return Array.isArray(fn.writes) ? fn.writes : [];
+  }
+
+  async function ensurePaintPrepared() {
+    if (paintPrepared) {
+      if (paintPreparePromise) await paintPreparePromise;
+      return;
+    }
+    paintPrepared = true;
+    paintPreparePromise = Promise.resolve(onBeforePaint?.())
+      .finally(() => {
+        paintPreparePromise = null;
+      });
+    await paintPreparePromise;
   }
 
   async function paintAtPointer(event, phase = "drag") {
@@ -112,13 +131,12 @@ export function initPaint(deps) {
     if (!hit) return;
     const r = controls.brushRadius.value;
     const brush = ui.brushSelect.value;
-    if (!paintPrepared) {
-      await onBeforePaint?.();
-      paintPrepared = true;
-    }
-    applyStamp(brush, hit.x, hit.y, r, hit, phase);
+    await ensurePaintPrepared();
+    if (!paintDown) return;
+    const writtenFields = applyStamp(brush, hit.x, hit.y, r, hit, phase);
+    if (!writtenFields) return;
     registry.lastPaintLabel = `${brush} @ lon ${hit.lon.toFixed(2)}, lat ${hit.lat.toFixed(2)}`;
-    onAfterPaint();
+    onAfterPaint(writtenFields);
   }
 
   function endPaintStroke(event) {
@@ -128,12 +146,14 @@ export function initPaint(deps) {
     event.stopImmediatePropagation();
     paintDown = false;
     paintPrepared = false;
+    paintPreparePromise = null;
     if (canvas.hasPointerCapture(event.pointerId)) {
       canvas.releasePointerCapture(event.pointerId);
     }
     if (ui.autoPausePaint.checked) {
       setPaused(wasPausedBeforePaint);
     }
+    onPaintEnd?.();
   }
 
   canvas.addEventListener("pointerdown", (event) => {
@@ -145,6 +165,9 @@ export function initPaint(deps) {
     event.stopPropagation();
     event.stopImmediatePropagation();
     paintDown = true;
+    paintPrepared = false;
+    paintPreparePromise = null;
+    onPaintStart?.();
     if (ui.autoPausePaint.checked) {
       wasPausedBeforePaint = getPaused();
       setPaused(true);

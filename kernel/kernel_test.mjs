@@ -113,6 +113,7 @@ step { stage s { reads u, v; writes u; cell { set u = u + v } } }
   const hit = { lon: 0, lat: 0, u: 0.5, v: 0.5, px: 1, py: 0, pz: 0 };
   const stamp = recipe.stamps.find((s) => s.id === "ripple");
   assert(stamp, "phased stamp must materialize");
+  assert(stamp.writes?.join(",") === "u,v", "stamp should expose its written fields");
 
   const dragState = makeGeodesicStampState(8, recipe);
   stamp.run(dragState, 128, 64, 0, hit, "drag");
