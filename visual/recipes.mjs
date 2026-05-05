@@ -29,6 +29,7 @@ import {
   pickRecipeFile,
   upsertSavedRecipe,
 } from "./recipe-storage.mjs";
+import { perfNow, recordPerfSpan } from "./perf-counters.mjs";
 
 const registry = {
   manifest: { defaultRecipe: null, recipes: [] },
@@ -45,6 +46,7 @@ const registry = {
   // View spec by id from the active recipe's `views[]`. Returns
   // `{ id, label, color }` where `color` is a per-cell colorer function.
   viewById: null,
+  activeViews: null,
   // True if the active recipe declares an overlay of `type` and its
   // checkbox is currently checked.
   isOverlayEnabled: null,
@@ -79,6 +81,7 @@ export function initRecipes({
   getFrame,
   getProbe,
   renderer,
+  device,
   runPreset,
   refreshView,
   onActiveRecipeChange,
@@ -106,6 +109,7 @@ export function initRecipes({
   const overlayEls = new Map();
 
   registry.viewById = (id) => activeViewDecls.find((decl) => decl.id === id);
+  registry.activeViews = () => activeViewDecls;
   registry.isOverlayEnabled = (type) => {
     for (const decl of activeOverlayDecls) {
       if (decl.type !== type) continue;
@@ -390,7 +394,7 @@ export function initRecipes({
     // the WebGPU wrapper below owns geodesic tick execution.
     registry.runner?.dispose?.();
     const metadataRunner = createPipelineMetadata(recipe);
-    const runner = wrapGeodesicRunner(recipe, metadataRunner, { renderer, getParams, getFrame, state });
+    const runner = wrapGeodesicRunner(recipe, metadataRunner, { renderer, device, getParams, getFrame, state });
     registry.runner = runner;
 
     // Hand the runner to the pipeline editor.
@@ -462,6 +466,27 @@ export function initRecipes({
       readFields(state, names) {
         return readBack(state, names).catch(handleReadbackError);
       },
+      copyFieldToRenderBuffer(name) {
+        if (disposed || !gpuReady || failed || dirty) return null;
+        return gpuRunner.copyFieldToRenderBuffer?.(name) ?? null;
+      },
+      copyFieldToRenderTexture(name) {
+        if (disposed || !gpuReady || failed || dirty) return null;
+        return gpuRunner.copyFieldToRenderTexture?.(name) ?? null;
+      },
+      renderField(name) {
+        if (disposed || !gpuReady || failed || dirty) return null;
+        return gpuRunner.renderField?.(name) ?? null;
+      },
+      flushStateUpload(state) {
+        if (disposed || !gpuReady || failed || !dirty) return;
+        gpuRunner.uploadState(state);
+        if (presetJustApplied) {
+          gpuRunner.initHistory?.();
+          presetJustApplied = false;
+        }
+        dirty = false;
+      },
       syncState(state) {
         return readBack(state).catch(handleReadbackError);
       },
@@ -472,14 +497,7 @@ export function initRecipes({
             state.events.totalThisTick = 0;
             state.events.byLabel = Object.create(null);
           }
-          if (dirty) {
-            gpuRunner.uploadState(state);
-            if (presetJustApplied) {
-              gpuRunner.initHistory?.();
-              presetJustApplied = false;
-            }
-            dirty = false;
-          }
+          wrapper.flushStateUpload(state);
           gpuRunner.runTick(dt);
           // Pull the latest GPU-reduced metric values into state.dslMetrics
           // so the metrics panel (which evaluates `dsl:<id>` sources)
@@ -505,9 +523,11 @@ export function initRecipes({
       if (reading) return readPromise;
       reading = true;
       readPromise = (async () => {
+        const perfStart = perfNow();
         await gpuRunner.readState(state, names);
         await gpuRunner.readEventCounts?.(state);
         bumpFieldRevision(state);
+        recordPerfSpan("webgpu.readBack", perfStart, { fields: Array.isArray(names) ? names.length : null });
       })();
       try {
         await readPromise;
@@ -530,6 +550,7 @@ export function initRecipes({
           grid: deps.state.grid?.topology,
           getParams,
           getFrame,
+          device: deps.device ?? deps.renderer?.backend?.device ?? null,
         });
         wrapper.grid = gpuRunner.grid;
         gpuReady = true;

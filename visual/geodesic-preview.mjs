@@ -2,27 +2,38 @@ import * as THREE from "three";
 import {
   MeshBasicNodeMaterial,
   attribute,
+  clamp as nodeClamp,
+  floor,
+  int,
+  ivec2,
+  mod,
+  textureLoad,
   uv,
   wgslFn,
 } from "three/addons/nodes/Nodes.js";
 
 import { createGeodesicGrid } from "../kernel/geodesic-grid.mjs";
+import { perfNow, recordPerfSpan } from "./perf-counters.mjs";
 
 // Geodesic display mesh for recipe state. It renders one tile per state cell
 // and keeps the hidden globe alive underneath for existing raycasts.
-export async function createGeodesicPreview({ scene, globe, frequency = 48, grid: providedGrid = null } = {}) {
+export async function createGeodesicPreview({ scene, globe, renderer = null, camera = null, frequency = 48, grid: providedGrid = null } = {}) {
   const grid = providedGrid ?? createGeodesicGrid({ frequency });
 
   const geometry = createTileGeometry(grid, { radius: 1.006, inset: 0 });
 
-  const material = new THREE.MeshBasicMaterial({
+  const cpuMaterial = new THREE.MeshBasicMaterial({
     vertexColors: true,
     side: THREE.DoubleSide,
     polygonOffset: true,
     polygonOffsetFactor: -1,
     polygonOffsetUnits: -1,
   });
-  const mesh = new THREE.Mesh(geometry, material);
+  let gpuMaterial = null;
+  let gpuDataTexture = null;
+  let gpuMaterialKey = "";
+  let activeMaterialMode = "cpu";
+  const mesh = new THREE.Mesh(geometry, cpuMaterial);
   mesh.name = "geodesic-state-preview";
   scene.add(mesh);
 
@@ -40,7 +51,7 @@ export async function createGeodesicPreview({ scene, globe, frequency = 48, grid
   // Lines aren't an option (WebGL clamps line widths to 1px on Chrome
   // and Safari) so even "ring" and "plus" are built from triangles.
   const glyphLayer = createGlyphLayer(scene, grid);
-  const particleLayer = createParticleLayer(scene, grid);
+  const particleLayer = createParticleLayer(scene, grid, camera);
 
   const globeMaterialSnapshot = muteGlobeMaterial(globe);
 
@@ -56,15 +67,22 @@ export async function createGeodesicPreview({ scene, globe, frequency = 48, grid
     mesh,
     glyphLayer,
     particleLayer,
-    refresh({ fields, viewSpec, frame = 0, fieldRevision = 0, force = false } = {}) {
+    refresh({ fields, viewSpec, frame = 0, fieldRevision = 0, force = false, gpuRenderBuffer = null, externalSurfaceActive = false } = {}) {
+      const perfStart = perfNow();
       if (disposed) return;
+      mesh.visible = !externalSurfaceActive;
+      const gpuColor = externalSurfaceActive ? false : installGpuScalarMaterial(viewSpec, gpuRenderBuffer);
+      if (!gpuColor && activeMaterialMode !== "cpu") {
+        mesh.material = cpuMaterial;
+        activeMaterialMode = "cpu";
+      }
       const g = viewSpec?.glyph;
-      const p = viewSpec?.particles;
+      const p = externalSurfaceActive ? null : viewSpec?.particles;
       const glyphKey = g ? `${g.kind}:${g.rotate ?? "_"}:${g.size ?? "_"}:${g.length}:${g.stride}` : "";
       const particleKey = p ? `${p.advect}:${p.count}:${p.length}:${p.speed}:${p.fade}:${p.size}:${p.color?.join(",")}` : "";
       const viewId = viewSpec?.id ?? "";
       const colorKey = `${viewId}:${fieldRevision}`;
-      if (force || colorKey !== lastColorKey) {
+      if (!externalSurfaceActive && !gpuColor && (force || colorKey !== lastColorKey)) {
         lastColorKey = colorKey;
         refreshColors({ grid, geometry, fields, viewSpec });
       }
@@ -76,8 +94,13 @@ export async function createGeodesicPreview({ scene, globe, frequency = 48, grid
       const nextParticleKey = `${viewId}:${particleKey}:${frame}`;
       if (force || nextParticleKey !== lastParticleKey) {
         lastParticleKey = nextParticleKey;
-        particleLayer.populate({ fields, viewSpec, frame });
+        particleLayer.populate({
+          fields,
+          viewSpec: externalSurfaceActive ? { ...viewSpec, particles: null } : viewSpec,
+          frame,
+        });
       }
+      recordPerfSpan("geodesicPreview.refresh", perfStart, { view: viewSpec?.id ?? "" });
     },
     update() {},
     dispose() {
@@ -87,9 +110,119 @@ export async function createGeodesicPreview({ scene, globe, frequency = 48, grid
       glyphLayer.dispose();
       particleLayer.dispose();
       geometry.dispose();
-      material.dispose();
+      cpuMaterial.dispose();
+      gpuMaterial?.dispose?.();
+      gpuDataTexture?.dispose?.();
     },
   };
+
+  function installGpuScalarMaterial(viewSpec, gpuRenderBuffer) {
+    if (!renderer?.backend?.get || !gpuRenderBuffer?.texture || gpuRenderBuffer.type !== "f32") return false;
+    const gpuSpec = viewSpec?.gpuColor;
+    if (gpuSpec?.kind !== "ramp") return false;
+    const key = `${viewSpec?.id ?? ""}:${gpuRenderBuffer.width}x${gpuRenderBuffer.height}:${JSON.stringify(gpuSpec.range)}:${JSON.stringify(gpuSpec.stops)}`;
+    if (!gpuMaterial || key !== gpuMaterialKey) {
+      gpuMaterial?.dispose?.();
+      gpuDataTexture?.dispose?.();
+      gpuDataTexture = new THREE.DataTexture(
+        new Float32Array(gpuRenderBuffer.width * gpuRenderBuffer.height * 4),
+        gpuRenderBuffer.width,
+        gpuRenderBuffer.height,
+        THREE.RGBAFormat,
+        THREE.FloatType,
+      );
+      gpuDataTexture.name = "field-lab-render-field";
+      gpuDataTexture.magFilter = THREE.NearestFilter;
+      gpuDataTexture.minFilter = THREE.NearestFilter;
+      gpuDataTexture.generateMipmaps = false;
+      const textureData = renderer.backend.get(gpuDataTexture);
+      textureData.texture = gpuRenderBuffer.texture;
+      textureData.initialized = true;
+      textureData.version = gpuDataTexture.version;
+      const cell = floor(attribute("cellIndex", "float"));
+      const pixel = floor(cell.div(4));
+      const texel = textureLoad(
+        gpuDataTexture,
+        ivec2(int(mod(pixel, gpuRenderBuffer.width)), int(floor(pixel.div(gpuRenderBuffer.width)))),
+      );
+      const value = packedTexelValue({ texel, channel: mod(cell, 4) });
+      const [lo, hi] = gpuSpec.range ?? [0, 1];
+      const span = (hi - lo) || 1;
+      const t = nodeClamp(value.sub(lo).div(span), 0, 1);
+      gpuMaterial = new MeshBasicNodeMaterial();
+      gpuMaterial.colorNode = gpuRampColorNode(gpuSpec.stops ?? [], key)({ t });
+      gpuMaterial.side = THREE.DoubleSide;
+      gpuMaterial.polygonOffset = true;
+      gpuMaterial.polygonOffsetFactor = -1;
+      gpuMaterial.polygonOffsetUnits = -1;
+      gpuMaterialKey = key;
+    } else {
+      renderer.backend.get(gpuDataTexture).texture = gpuRenderBuffer.texture;
+    }
+    if (activeMaterialMode !== "gpu") {
+      mesh.material = gpuMaterial;
+      activeMaterialMode = "gpu";
+    }
+    return true;
+  }
+}
+
+const packedTexelValue = wgslFn(`
+fn packedTexelValue(texel: vec4<f32>, channel: f32) -> f32 {
+  if (channel < 0.5) { return texel.x; }
+  if (channel < 1.5) { return texel.y; }
+  if (channel < 2.5) { return texel.z; }
+  return texel.w;
+}
+`);
+
+function gpuRampColorNode(stops, key) {
+  const fnName = `fieldLabRamp_${hashString(key).toString(16)}`;
+  const normalized = normalizeRampStops(stops);
+  const fallback = "return vec3<f32>(0.31, 0.24, 0.35);";
+  let body = fallback;
+  if (normalized.length === 1) {
+    body = `return vec3<f32>(${rgbLiteral(normalized[0].color)});`;
+  } else if (normalized.length > 1) {
+    const lines = [];
+    for (let i = 0; i < normalized.length - 1; i++) {
+      const a = normalized[i];
+      const b = normalized[i + 1];
+      const span = Math.max(1e-6, b.t - a.t);
+      const condition = i === normalized.length - 2 ? "true" : `t <= ${floatLiteral(b.t)}`;
+      lines.push(`
+  if (${condition}) {
+    let localT = clamp((t - ${floatLiteral(a.t)}) / ${floatLiteral(span)}, 0.0, 1.0);
+    return mix(vec3<f32>(${rgbLiteral(a.color)}), vec3<f32>(${rgbLiteral(b.color)}), localT);
+  }`);
+    }
+    body = lines.join("\n");
+  }
+  return wgslFn(`
+fn ${fnName}(t: f32) -> vec3<f32> {
+  ${body}
+}
+`);
+}
+
+function normalizeRampStops(stops) {
+  const source = Array.isArray(stops) ? stops : [];
+  return source
+    .map((stop) => ({
+      t: Math.max(0, Math.min(1, Number(stop?.t ?? 0))),
+      color: Array.isArray(stop?.color) ? stop.color : [80, 60, 90],
+    }))
+    .sort((a, b) => a.t - b.t);
+}
+
+function rgbLiteral(color) {
+  return [0, 1, 2]
+    .map((i) => floatLiteral(Math.max(0, Math.min(255, Number(color[i] ?? 0))) / 255))
+    .join(", ");
+}
+
+function floatLiteral(value) {
+  return Number(value).toFixed(8);
 }
 
 // =============================================================================
@@ -395,9 +528,10 @@ const particleGlowColor = wgslFn(`
   fn particleGlowColor(localUv: vec2<f32>, tint: vec3<f32>) -> vec3<f32> {
     let p = localUv * 2.0 - vec2<f32>(1.0, 1.0);
     let r2 = dot(p, p);
-    let core = exp(-r2 * 18.0);
-    let halo = exp(-r2 * 3.2);
-    return tint * (0.20 * halo + 1.10 * core);
+    let soft = clamp(1.0 - r2, 0.0, 1.0);
+    let core = soft * soft;
+    let halo = soft * (0.45 + 0.55 * soft);
+    return tint * (0.35 * halo + 0.85 * core);
   }
 `);
 
@@ -405,14 +539,14 @@ const particleGlowAlpha = wgslFn(`
   fn particleGlowAlpha(localUv: vec2<f32>, strength: f32) -> f32 {
     let p = localUv * 2.0 - vec2<f32>(1.0, 1.0);
     let r2 = dot(p, p);
-    let core = exp(-r2 * 18.0);
-    let halo = exp(-r2 * 3.2);
-    let rim = smoothstep(0.92, 0.25, sqrt(r2));
-    return clamp(0.07 * halo + 0.78 * core, 0.0, 1.0) * rim * strength;
+    let soft = clamp(1.0 - r2, 0.0, 1.0);
+    let core = soft * soft;
+    return clamp(0.18 * soft + 0.70 * core, 0.0, 1.0) * strength;
   }
 `);
 
-function createParticleLayer(scene, grid) {
+function createParticleLayer(scene, grid, camera = null) {
+  const maxTrailPoints = 9000;
   let geometry = null;
   let material = null;
   let mesh = null;
@@ -430,8 +564,9 @@ function createParticleLayer(scene, grid) {
   const basisScratch = { ex: 1, ey: 0, ez: 0, nx: 0, ny: 1, nz: 0 };
 
   function ensure(spec) {
-    const count = Math.max(1, Math.min(20000, spec.count | 0));
     const trailLength = Math.max(2, Math.min(128, spec.length | 0));
+    const requestedCount = Math.max(1, Math.min(20000, spec.count | 0));
+    const count = Math.max(1, Math.min(requestedCount, Math.floor(maxTrailPoints / trailLength)));
     const size = Number.isFinite(spec.size) ? Math.max(0.5, Math.min(32, spec.size)) : 4;
     const fade = Math.max(0, Math.min(1, Number.isFinite(spec.fade) ? spec.fade : 0.86));
     const key = `${count}:${trailLength}:${size}:${fade}:${spec.color.join(",")}`;
@@ -478,7 +613,7 @@ function createParticleLayer(scene, grid) {
     material.transparent = true;
     material.depthTest = true;
     material.depthWrite = false;
-    material.side = THREE.DoubleSide;
+    material.side = THREE.FrontSide;
     material.blending = THREE.AdditiveBlending;
     mesh = new THREE.Mesh(geometry, material);
     mesh.frustumCulled = false;
@@ -550,12 +685,16 @@ function createParticleLayer(scene, grid) {
       const layout = ensure(spec);
       mesh.visible = true;
       const pointCount = layout.count * layout.trailLength;
-      const cadence = pointCount > 12000 ? 2 : 1;
+      const cadence = pointCount > 30000 ? 4 : pointCount > 18000 ? 3 : pointCount > 8000 ? 2 : 1;
       const frameNumber = Number.isFinite(frame) ? frame : 0;
       if (lastParticleFrame !== -Infinity && cadence > 1 && frameNumber % cadence !== 0) return;
       lastParticleFrame = frameNumber;
+      const stepStart = perfNow();
       stepParticles({ spec, vectorField, count: layout.count, trailLength: layout.trailLength });
+      recordPerfSpan("particles.step", stepStart, { count: layout.count, trailLength: layout.trailLength });
+      const writeStart = perfNow();
       writeParticleGeometry({ spec, count: layout.count, trailLength: layout.trailLength });
+      recordPerfSpan("particles.writeGeometry", writeStart, { count: layout.count, trailLength: layout.trailLength });
     },
     dispose() {
       disposeMesh();
@@ -621,6 +760,18 @@ function createParticleLayer(scene, grid) {
   function writeParticleGeometry({ spec, count, trailLength }) {
     const sphereR = 1.032;
     const sizeWorld = Math.max(0.004, Math.min(0.12, (Number.isFinite(spec.size) ? spec.size : 4) * 0.0027));
+    let viewX = 0;
+    let viewY = 0;
+    let viewZ = 1;
+    if (camera?.position) {
+      viewX = camera.position.x;
+      viewY = camera.position.y;
+      viewZ = camera.position.z;
+      const viewLen = Math.hypot(viewX, viewY, viewZ) || 1;
+      viewX /= viewLen;
+      viewY /= viewLen;
+      viewZ /= viewLen;
+    }
     let quad = 0;
     for (let i = 0; i < count; i++) {
       const base = i * trailLength * 3;
@@ -632,6 +783,7 @@ function createParticleLayer(scene, grid) {
         const px = history[src + 0];
         const py = history[src + 1];
         const pz = history[src + 2];
+        if (px * viewX + py * viewY + pz * viewZ < -0.04) continue;
         const basis = setTangentBasis(basisScratch, px, py, pz);
         const half = sizeWorld * (t === 0 ? 0.58 : 0.52);
         const cx = px * sphereR;
@@ -649,6 +801,8 @@ function createParticleLayer(scene, grid) {
         quad++;
       }
     }
+    geometry.setDrawRange(0, quad * 6);
+    if (mesh) mesh.visible = quad > 0;
     geometry.attributes.position.needsUpdate = true;
   }
 
@@ -687,19 +841,26 @@ function createParticleLayer(scene, grid) {
     let sx = 0;
     let sy = 0;
     let sw = 0;
-    const addCell = (c) => {
-      if (c < 0) return;
-      const off = c * 3;
+    if (cell >= 0) {
+      const off = cell * 3;
       const d = grid.positions[off + 0] * px + grid.positions[off + 1] * py + grid.positions[off + 2] * pz;
       const w = Math.max(0.0001, d - 0.992);
-      sx += (vectorField[c * 2 + 0] ?? 0) * w;
-      sy += (vectorField[c * 2 + 1] ?? 0) * w;
+      sx += (vectorField[cell * 2 + 0] ?? 0) * w;
+      sy += (vectorField[cell * 2 + 1] ?? 0) * w;
       sw += w;
-    };
-    addCell(cell);
+    }
     const count = grid.neighborCounts[cell] ?? 0;
     const start = cell * grid.maxNeighbors;
-    for (let k = 0; k < count; k++) addCell(grid.neighbors[start + k]);
+    for (let k = 0; k < count; k++) {
+      const n = grid.neighbors[start + k];
+      if (n < 0) continue;
+      const off = n * 3;
+      const d = grid.positions[off + 0] * px + grid.positions[off + 1] * py + grid.positions[off + 2] * pz;
+      const w = Math.max(0.0001, d - 0.992);
+      sx += (vectorField[n * 2 + 0] ?? 0) * w;
+      sy += (vectorField[n * 2 + 1] ?? 0) * w;
+      sw += w;
+    }
     if (sw > 0) {
       out.x = sx / sw;
       out.y = sy / sw;
@@ -794,6 +955,7 @@ function restoreGlobeMaterial(snapshot) {
 }
 
 function refreshColors({ grid, geometry, fields = {}, viewSpec = null }) {
+  const perfStart = perfNow();
   const colors = geometry.getAttribute("color");
   const colorValues = colors.array;
   const tileStarts = geometry.userData.tileStarts;
@@ -831,12 +993,14 @@ function refreshColors({ grid, geometry, fields = {}, viewSpec = null }) {
     changed = true;
   }
   if (changed) colors.needsUpdate = true;
+  recordPerfSpan("geodesicPreview.refreshColors", perfStart, { cells: grid.cellCount, view: viewSpec?.id ?? "" });
 }
 
 function createTileGeometry(grid, { radius = 1, inset = 0 } = {}) {
   const adjacentCorners = buildAdjacentTriangleCenters(grid);
   const positions = [];
   const colors = [];
+  const cellIndices = [];
   const tileStarts = new Uint32Array(grid.cellCount + 1);
 
   for (let cell = 0; cell < grid.cellCount; cell++) {
@@ -852,6 +1016,7 @@ function createTileGeometry(grid, { radius = 1, inset = 0 } = {}) {
       pushVec(positions, a);
       pushVec(positions, b);
       colors.push(0, 0, 0, 0, 0, 0, 0, 0, 0);
+      cellIndices.push(cell, cell, cell);
     }
   }
   tileStarts[grid.cellCount] = positions.length / 3;
@@ -859,6 +1024,7 @@ function createTileGeometry(grid, { radius = 1, inset = 0 } = {}) {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(positions), 3));
   geometry.setAttribute("color", new THREE.BufferAttribute(new Float32Array(colors), 3));
+  geometry.setAttribute("cellIndex", new THREE.BufferAttribute(new Float32Array(cellIndices), 1));
   geometry.userData.tileStarts = tileStarts;
   geometry.userData.tileColorCache = new Uint32Array(grid.cellCount);
   geometry.userData.tileColorCache.fill(0xffffffff);

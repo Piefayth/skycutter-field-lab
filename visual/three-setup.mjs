@@ -4,17 +4,37 @@ import WebGPURenderer from "three/addons/renderers/webgpu/WebGPURenderer.js";
 
 import { TAU } from "../kernel/kernel.mjs";
 
-export async function createThreeSetup() {
+export async function createThreeSetup({ gpuSurface = false, skipGpuDevice = false } = {}) {
   const canvas = document.querySelector("#viewport");
-  const renderer = await createRenderer(canvas);
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-  renderer.setClearColor(0x090b0f, 1);
+  let surfaceCanvas = null;
+  let surfaceDevice = null;
+  let gpuSurfaceActive = false;
+  if (gpuSurface && !skipGpuDevice) {
+    try {
+      surfaceDevice = await createDevice();
+      surfaceCanvas = createSurfaceCanvas(canvas);
+      gpuSurfaceActive = true;
+    } catch (error) {
+      console.warn("GPU surface renderer disabled:", error);
+    }
+  }
+  const inputCanvas = surfaceCanvas ?? canvas;
+  let renderer = null;
+  if (!gpuSurfaceActive) {
+    try {
+      renderer = await createRenderer(canvas);
+    } catch (error) {
+      console.warn("Three WebGPU renderer disabled:", error);
+    }
+  }
+  renderer?.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer?.setClearColor(0x090b0f, 1);
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
   camera.position.set(0, 0.15, 3.0);
 
-  const orbitControls = new OrbitControls(camera, canvas);
+  const orbitControls = new OrbitControls(camera, inputCanvas);
   orbitControls.enableDamping = true;
   orbitControls.minDistance = 1.35;
   orbitControls.maxDistance = 5.0;
@@ -61,12 +81,38 @@ export async function createThreeSetup() {
 
   return {
     canvas,
+    inputCanvas,
+    surfaceCanvas,
+    gpuSurfaceActive,
+    device: surfaceDevice ?? renderer?.backend?.device ?? null,
     renderer,
     scene,
     camera,
     orbitControls,
     globe,
   };
+}
+
+async function createDevice() {
+  if (!globalThis.navigator?.gpu) {
+    throw new Error("WebGPU is required for Field Lab's geodesic renderer.");
+  }
+  const adapter = await navigator.gpu.requestAdapter();
+  if (!adapter) throw new Error("WebGPU unavailable: no adapter");
+  const device = await adapter.requestDevice();
+  device.addEventListener?.("uncapturederror", (event) => {
+    globalThis.__FIELD_LAB_GPU_ERRORS__ ??= [];
+    globalThis.__FIELD_LAB_GPU_ERRORS__.push({
+      message: event.error?.message ?? String(event.error),
+      stack: event.error?.stack ?? "",
+      t: performance.now(),
+    });
+    if (globalThis.__FIELD_LAB_GPU_ERRORS__.length > 20) {
+      globalThis.__FIELD_LAB_GPU_ERRORS__.shift();
+    }
+    console.warn("Uncaptured WebGPU error:", event.error);
+  });
+  return device;
 }
 
 async function createRenderer(canvas) {
@@ -77,6 +123,15 @@ async function createRenderer(canvas) {
   await renderer.init();
   renderer.fieldLabBackend = "webgpu";
   return renderer;
+}
+
+function createSurfaceCanvas(canvas) {
+  const surface = document.createElement("canvas");
+  surface.id = "viewportSurface";
+  surface.className = "viewport-surface";
+  canvas.parentElement?.insertBefore(surface, canvas);
+  canvas.classList.add("viewport-overlay");
+  return surface;
 }
 
 function createRaycastGlobeMaterial() {

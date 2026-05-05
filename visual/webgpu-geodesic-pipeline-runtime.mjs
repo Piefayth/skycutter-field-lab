@@ -15,7 +15,9 @@ import { MetricRuntime } from "./webgpu-metric-runtime.mjs";
 // compiled passes per tick, run metric reductions, rotate history buffers.
 // =============================================================================
 
-export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGrid = null, getParams, getFrame } = {}) {
+const METRIC_DISPATCH_FRAME_INTERVAL = 15;
+
+export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGrid = null, getParams, getFrame, device = null } = {}) {
   if (!pipeline?.dsl) throw new Error("WebGPU geodesic pipeline requires DSL metadata");
   const dsl = pipeline.dsl;
   if (dsl.grid?.kind !== "geodesic") {
@@ -33,7 +35,7 @@ export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGri
       .filter((decl) => decl?.name && decl.type)
       .map((decl) => [decl.name, decl.type]),
   );
-  const runtime = await createWebGpuGeodesicRuntime({ grid, fieldNames, fieldTypes });
+  const runtime = await createWebGpuGeodesicRuntime({ grid, fieldNames, fieldTypes, device });
   const { stages } = compileWebGpuGeodesicPipeline(dsl);
   const consts = Object.fromEntries((dsl.constants ?? []).map((decl) => [decl.name, decl.value]));
   const planet = dsl.planet ?? {};
@@ -55,6 +57,7 @@ export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGri
   const metricRuntime = compiledMetrics.length > 0
     ? new MetricRuntime({ runtime, metrics: compiledMetrics })
     : null;
+  let lastMetricDispatchFrame = -Infinity;
 
   return {
     grid,
@@ -78,6 +81,15 @@ export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGri
     },
     async readState(state, names = fieldNames) {
       await runtime.readState(state, names);
+    },
+    copyFieldToRenderBuffer(name) {
+      return runtime.copyCurrentToRenderBuffer(name);
+    },
+    copyFieldToRenderTexture(name) {
+      return runtime.copyCurrentToRenderTexture(name);
+    },
+    renderField(name) {
+      return runtime.currentRenderField(name);
     },
     runTick(dt) {
       const params = getParams?.() ?? {};
@@ -146,7 +158,10 @@ export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGri
       // (the just-written value) for each field. Async readback
       // populates the metric runtime's value cache; consumers see the
       // latest completed readback via readDslMetrics() below.
-      if (metricRuntime) metricRuntime.dispatch(null, params);
+      if (metricRuntime && frame - lastMetricDispatchFrame >= METRIC_DISPATCH_FRAME_INTERVAL) {
+        metricRuntime.dispatch(null, params);
+        lastMetricDispatchFrame = frame;
+      }
     },
     // Returns the most recent post-readback values for every metric
     // declared in the recipe. Values may be null until the first

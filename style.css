@@ -138,6 +138,26 @@ button { font-family: inherit; }
   );
 }
 
+body.gpu-surface-mode .grain,
+body.gpu-surface-mode .scanlines {
+  display: none;
+}
+
+.perf-hud {
+  position: fixed;
+  left: 10px;
+  bottom: 34px;
+  z-index: 10000;
+  padding: 4px 7px;
+  border: 1px solid var(--line-strong);
+  background: rgba(6, 8, 12, 0.88);
+  color: var(--signal);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0;
+  pointer-events: none;
+}
+
 /* HEADER */
 
 .lab-header {
@@ -370,9 +390,36 @@ button { font-family: inherit; }
 }
 
 #viewport {
+  position: relative;
+  z-index: 1;
   display: block;
   width: 100%;
   height: 100%;
+}
+
+.viewport-surface {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: auto;
+}
+
+.viewport-overlay {
+  pointer-events: none;
+}
+
+body.gpu-surface-mode .viewport-frame {
+  contain: paint;
+  isolation: isolate;
+}
+
+body.gpu-surface-mode #viewport {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
 }
 
 .viewport-corner {
@@ -977,6 +1024,7 @@ input[type="range"]::-moz-range-thumb {
 .window-layer {
   position: absolute;
   inset: 0;
+  z-index: 100;
   pointer-events: none;
 }
 
@@ -2051,6 +2099,7 @@ input[type="range"]::-moz-range-thumb {
   height: 100%;
   min-height: 0;
   overflow: hidden;
+  contain: layout paint;
 }
 
 .pg-resize-handle {
@@ -2114,6 +2163,7 @@ input[type="range"]::-moz-range-thumb {
   background: var(--ink-900);
   border: 1px solid var(--line);
   border-bottom: 0;
+  contain: layout paint;
 }
 
 .pg-dsl-pane__header {
@@ -2228,6 +2278,7 @@ input[type="range"]::-moz-range-thumb {
   min-height: 0;
   touch-action: none;
   cursor: grab;
+  contain: layout paint;
 }
 
 .pg-graph-wrap--panning {
@@ -2241,6 +2292,7 @@ input[type="range"]::-moz-range-thumb {
   transform-origin: 0 0;
   will-change: transform;
   z-index: 1;
+  contain: layout paint;
 }
 
 .pg-graph-hud {
@@ -2377,30 +2429,22 @@ input[type="range"]::-moz-range-thumb {
   overflow: visible;
 }
 
-/* Idle wire: a clean 1px hairline, no glow. Glow lives on touched
-   wires only — a wire is either inert or carrying signal. */
+/* Idle wire: a clean 1px hairline. Keep wires cheap: SVG filters and
+   infinite dash animations make the whole graph repaint even when the
+   simulation is idle. */
 .pg-wire {
   fill: none;
   stroke: var(--wire, var(--signal-trace));
   stroke-width: 1.15px;
   stroke-linecap: round;
   opacity: 0.82;
-  transition: stroke 120ms ease, stroke-width 120ms ease, opacity 120ms ease;
 }
 
 .pg-wire--touched {
   stroke: var(--wire, var(--signal));
-  stroke-width: 1.8px;
+  stroke-width: 1.65px;
   opacity: 1;
-  stroke-dasharray: 4 8;
-  filter:
-    drop-shadow(0 0 2px var(--wire-glow, var(--signal-glow)))
-    drop-shadow(0 0 7px var(--wire-glow, rgba(124, 249, 157, 0.22)));
-  animation: pg-wire-march 2.4s linear infinite;
-}
-
-@keyframes pg-wire-march {
-  to { stroke-dashoffset: -24; }
+  stroke-dasharray: 7 5;
 }
 
 /* Preview wire — drawn while user drags from an output port to an
@@ -2410,7 +2454,6 @@ input[type="range"]::-moz-range-thumb {
   stroke: var(--signal);
   stroke-width: 1.8px;
   stroke-dasharray: 6 4;
-  filter: drop-shadow(0 0 4px var(--signal-glow));
   pointer-events: none;
 }
 
@@ -2435,6 +2478,21 @@ body.pg-wiring .pg-port { cursor: crosshair; }
   z-index: 3;
 }
 
+.pg-selection-box {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 4;
+  border: 1px solid var(--signal);
+  box-shadow: 0 0 0 1px rgba(124, 249, 157, 0.18);
+  pointer-events: none;
+  will-change: transform;
+}
+
+.pg-selection-box[hidden] {
+  display: none;
+}
+
 /* Variable node — typed value source. Smaller, dashed-border, no head
    bar. Two stacked rows: type tag (small mono, bone-dim) above, value
    (mono, bone-bright) below. The dashed border + neutral palette makes
@@ -2452,7 +2510,6 @@ body.pg-wiring .pg-port { cursor: crosshair; }
   cursor: grab;
   user-select: none;
   font-family: var(--font-mono);
-  transition: border-color 120ms ease, background 120ms ease;
 }
 
 .pg-var:hover {
@@ -2578,7 +2635,6 @@ body.pg-wiring .pg-port { cursor: crosshair; }
   cursor: grab;
   user-select: none;
   font-family: var(--font-sans);
-  transition: border-color 120ms ease, opacity 160ms ease;
 }
 
 .pg-node::before,
@@ -2600,8 +2656,7 @@ body.pg-wiring .pg-port { cursor: crosshair; }
 /* Selected: replace the green halo with a bone-bright border + a
    phosphor sweep beneath the head bar (mirrors .lab-header::after). */
 .pg-node--selected {
-  border-color: var(--signal);
-  box-shadow: 0 0 0 1px var(--signal-glow), 0 0 12px -2px var(--signal-glow);
+  border-color: var(--line-strong);
 }
 
 /* Selection-by-attenuation: unselected nodes recede slightly so the

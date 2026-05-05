@@ -6,6 +6,9 @@ rules. The implementation in `dsl/cst-v2.mjs`, `dsl/cst-to-ast-v2.mjs`,
 this. If the implementation and the spec disagree, the spec wins (or the spec
 is updated explicitly).
 
+Known recipe-facing limitations and missing abstractions are tracked in
+`dsl/LIMITATIONS.md`.
+
 ## Philosophy
 
 The unifying principle: **simulation state is a 4D tensor `time × cell ×
@@ -756,8 +759,9 @@ Cells with great-circle distance `d <= cutoff` are gathered. `center` and
 `width` may be number literals or global params, but not locals or fields.
 The compiler/runtime precomputes packed gather tables for each resolved
 kernel and rebuilds them lazily when kernel params change. Guardrails:
-`center >= 0`, `width > 0`, `cutoff <= 0.35`, and max 128 gathered cells per
-cell. `mean` normalizes by total weight; `sum` returns the raw weighted sum.
+`center >= 0`, `width > 0`, and `cutoff <= 0.35`. Large kernels can be
+expensive, but the DSL does not cap gathered cells per cell. `mean`
+normalizes by total weight; `sum` returns the raw weighted sum.
 Weighted kernels support `sum` and `mean` only. `max` / `min` are deliberately
 not defined for weighted kernels.
 

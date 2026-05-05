@@ -525,7 +525,7 @@ export const STENCIL_HELPERS = [
   {
     name: "kernel",
     signature: "<op> n in kernel bell(center, width) { EXPR }",
-    doc: "Weighted metric neighborhood reduction over great-circle distance. First version supports `bell(center,width)` only, with center/width as number literals or global params. The compiler precomputes packed weighted gather tables and rebuilds them lazily when kernel params change. Guardrails: center >= 0, width > 0, center + 3*width <= 0.35, max 128 gathered cells per cell.",
+    doc: "Weighted metric neighborhood reduction over great-circle distance. First version supports `bell(center,width)` only, with center/width as number literals or global params. The compiler precomputes packed weighted gather tables and rebuilds them lazily when kernel params change. Guardrails: center >= 0, width > 0, center + 3*width <= 0.35. Large kernels can be expensive, but gathered cells per cell are not capped.",
   },
   {
     name: "bell",

@@ -29,10 +29,15 @@ import {
 import { createWindow, listWindows } from "./windows.mjs";
 import { buildMenuBar } from "./menu.mjs";
 import { createGeodesicPreview } from "./geodesic-preview.mjs";
+import { createGeodesicSurfaceRenderer } from "./geodesic-surface-renderer.mjs";
 import { createDslDocsContent, registerDslDocsWindow } from "./dsl-docs.mjs";
 import { groupManifestRecipes } from "./recipe-menu-model.mjs";
+import { perfNow, recordPerfSpan } from "./perf-counters.mjs";
 
 let canvas = null;
+let inputCanvas = null;
+let surfaceCanvas = null;
+let device = null;
 let renderer = null;
 let scene = null;
 let camera = null;
@@ -81,6 +86,19 @@ ui.resetButton = document.querySelector("#resetButton");
 ui.randomButton = document.querySelector("#randomButton");
 
 const metrics = createMetrics({ ui });
+const gpuRenderQueryEnabled = new URLSearchParams(window.location.search).has("gpu-render");
+const gpuSurfaceQueryEnabled = new URLSearchParams(window.location.search).has("gpu-surface")
+  || globalThis.__FIELD_LAB_GPU_SURFACE_ENABLED__ === true;
+let gpuSurfaceActive = gpuSurfaceQueryEnabled;
+const surfaceContinuousQueryEnabled = new URLSearchParams(window.location.search).has("surface-continuous");
+const surfaceFrameIntervalMs = surfacePresentIntervalMs();
+const startPausedQueryEnabled = new URLSearchParams(window.location.search).has("startPaused");
+const simRateOverride = simRateQueryOverride();
+const perfHudQueryEnabled = new URLSearchParams(window.location.search).has("perfHud");
+const idleRafQueryEnabled = new URLSearchParams(window.location.search).has("idleRaf");
+const bootStage = new URLSearchParams(window.location.search).get("bootStage") ?? "";
+const skipGpuDeviceQueryEnabled = new URLSearchParams(window.location.search).has("skipGpuDevice");
+document.body.classList.toggle("gpu-surface-mode", gpuSurfaceActive);
 
 ui.pauseButton.addEventListener("click", () => {
   ui.pauseButton.textContent = togglePaused() ? "Resume" : "Pause";
@@ -121,7 +139,7 @@ let simAccumulator = 0;
 function stepSim(dt) {
   const runner = getRunner();
   if (!runner) return;
-  const simRateHz = Math.max(0, Number(paramValue("simRateHz") ?? FIXED_SIM_HZ));
+  const simRateHz = Math.max(0, Number(simRateOverride ?? paramValue("simRateHz") ?? FIXED_SIM_HZ));
   simAccumulator += Math.max(0, dt) * simRateHz;
   let steps = 0;
   try {
@@ -143,7 +161,12 @@ function stepSim(dt) {
     pipelineEditor.setStatus(`tick failed: ${error.message}`, true);
     return;
   }
-  if (steps > 0) updateAll();
+  debugFrameStats.simStepCalls++;
+  debugFrameStats.simSteps += steps;
+  if (steps > 0) {
+    debugFrameStats.simFramesWithSteps++;
+    updateAll();
+  }
 }
 
 function stepOneTick() {
@@ -187,37 +210,253 @@ function wireSectionCollapse() {
 let lastPreviewRefreshFrame = -Infinity;
 let lastMetricsRefreshFrame = -Infinity;
 let lastProbeRefreshFrame = -Infinity;
+let lastRenderSyncMs = -Infinity;
+let lastFullSyncMs = -Infinity;
+let pendingReadback = null;
+let readbackInFlight = false;
+let lastCanvasWidth = 0;
+let lastCanvasHeight = 0;
+let lastOverlayRenderMs = -Infinity;
 let geodesicPreview = null;
 let geodesicPreviewLoadingFrequency = null;
+let geodesicSurfaceRenderer = null;
 let menuRef = null;
+let overlayCanvasVisible = true;
+let perfHudEl = null;
+let lastAnimatePhase = "not-started";
+let lastAnimateError = null;
+let lastSurfaceSkipReason = "";
+let lastRafAt = 0;
+let animationScheduled = false;
+let animationFallbackTimer = null;
+let animationRafId = 0;
+let animationTicket = 0;
+let lastFrameSource = "none";
+let watchdogTicks = 0;
+const RAF_FALLBACK_MS = 180;
+const debugTrace = [];
+const debugFrameStats = {
+  samples: [],
+  lastFps: 0,
+  recentFps: 0,
+  lastFrameMs: 0,
+  minFrameMs: Infinity,
+  maxFrameMs: 0,
+  surfaceRenders: 0,
+  surfaceReuses: 0,
+  simSteps: 0,
+  simFramesWithSteps: 0,
+  simStepCalls: 0,
+};
+const lastSurfaceRender = {
+  frame: -Infinity,
+  viewId: "",
+  fieldName: "",
+  width: 0,
+  height: 0,
+  aspect: 0,
+  presentMs: -Infinity,
+};
+
+function traceDebug(event, detail = null) {
+  debugTrace.push({
+    t: Number(performance.now().toFixed(1)),
+    frame: runtime.frame,
+    event,
+    detail,
+  });
+  if (debugTrace.length > 80) debugTrace.shift();
+}
+
+function installDebugTraps() {
+  globalThis.addEventListener?.("error", (event) => {
+    traceDebug("window-error", {
+      message: event.message,
+      filename: event.filename,
+      lineno: event.lineno,
+      colno: event.colno,
+    });
+  });
+  globalThis.addEventListener?.("unhandledrejection", (event) => {
+    traceDebug("unhandled-rejection", {
+      reason: event.reason?.message ?? String(event.reason),
+      stack: event.reason?.stack ?? "",
+    });
+  });
+  setInterval(() => {
+    watchdogTicks++;
+    const age = lastRafAt ? performance.now() - lastRafAt : null;
+    if (age == null || age > 500) {
+      traceDebug("raf-watchdog", {
+        age: age == null ? null : Number(age.toFixed(1)),
+        phase: lastAnimatePhase,
+        frameSamples: debugFrameStats.samples.length,
+        error: lastAnimateError?.message ?? null,
+      });
+    }
+  }, 500);
+}
+
+function scheduleAnimationFrame() {
+  if (animationScheduled) return;
+  animationScheduled = true;
+  const ticket = ++animationTicket;
+  animationRafId = requestAnimationFrame(() => {
+    if (!animationScheduled || ticket !== animationTicket) return;
+    runAnimationFrame("raf");
+  });
+  animationFallbackTimer = setTimeout(() => {
+    if (!animationScheduled || ticket !== animationTicket) return;
+    cancelAnimationFrame(animationRafId);
+    animationRafId = 0;
+    runAnimationFrame("timeout");
+  }, RAF_FALLBACK_MS);
+}
 
 function updateAll({ force = false } = {}) {
+  const perfStart = perfNow();
   syncGeodesicPreview();
   updateGridRev();
   const runner = getRunner();
-  if (pipelineEditor.isVisible?.() && (force || runtime.frame - lastPreviewRefreshFrame >= 12)) {
-    runner?.syncState?.(state);
+  const viewSpec = gpuSurfaceActive ? ensureGpuSurfaceCompatibleView() : recipes.viewById?.(ui.viewSelect.value);
+  const now = performance.now();
+  const shouldRefreshPipeline =
+    (pipelineEditor.isVisible?.() || pipelineEditor.hasPreviewPopouts?.()) &&
+    (force || runtime.frame - lastPreviewRefreshFrame >= 12);
+  const shouldRefreshMetrics = force || runtime.frame - lastMetricsRefreshFrame >= 30;
+  const shouldRefreshProbe = force || runtime.frame - lastProbeRefreshFrame >= 30;
+  const shouldSyncFull = force || now - lastFullSyncMs >= 5000;
+  const renderSyncIntervalMs = gpuSurfaceActive ? 100 : 33;
+  const shouldSyncRender = force || now - lastRenderSyncMs >= renderSyncIntervalMs;
+  const gpuRenderField = (globalThis.__FIELD_LAB_GPU_RENDER_ENABLED__ === true || gpuRenderQueryEnabled)
+    && !globalThis.__FIELD_LAB_GPU_RENDER_DISABLED__
+    ? gpuRenderableField(viewSpec)
+    : null;
+  const gpuRenderQueued = gpuRenderField && typeof runner?.copyFieldToRenderTexture === "function";
+  const gpuRenderResource = gpuRenderQueued ? copyGpuRenderResource(gpuRenderField) : null;
+  const surfaceField = gpuSurfaceField(viewSpec);
+  const surfaceActive = Boolean(
+    gpuSurfaceActive &&
+    geodesicSurfaceRenderer?.hasFrame?.() &&
+    surfaceField &&
+    runner?.renderField
+  );
+  const renderFields = fieldsForView(viewSpec, {
+    gpuRenderField: surfaceActive ? surfaceField : (gpuRenderQueued ? gpuRenderField : null),
+    skipParticles: surfaceActive,
+  });
+  const shouldBackgroundFullSync = !surfaceActive && (shouldRefreshPipeline || shouldRefreshMetrics || shouldRefreshProbe);
+  const shouldForceFullSync = force && !surfaceActive;
+  if (runner && (shouldForceFullSync || shouldBackgroundFullSync) && shouldSyncFull) {
+    queueReadback({ full: true });
+    lastFullSyncMs = now;
+    lastRenderSyncMs = now;
+  } else if (runner && shouldSyncRender && renderFields.length > 0 && typeof runner.readFields === "function") {
+    queueReadback({ fields: renderFields });
+    lastRenderSyncMs = now;
+  }
+  if (shouldRefreshPipeline) {
     pipelineEditor.refreshPreviews?.();
     lastPreviewRefreshFrame = runtime.frame;
   }
   geodesicPreview?.refresh?.({
     fields: state.fields,
-    viewSpec: recipes.viewById?.(ui.viewSelect.value),
+    viewSpec,
     frame: runtime.frame,
     fieldRevision: state.__fieldRevision ?? 0,
     force,
+    gpuRenderBuffer: gpuRenderResource,
+    externalSurfaceActive: surfaceActive,
   });
-  if (force || runtime.frame - lastMetricsRefreshFrame >= 6) {
-    runner?.syncState?.(state);
+  if (shouldRefreshMetrics) {
     metrics.updateStrip({ state });
     lastMetricsRefreshFrame = runtime.frame;
   }
   ui.stats.textContent = `frame ${runtime.frame} | ${paint.lastPaintLabel}`;
-  if (force || runtime.frame - lastProbeRefreshFrame >= 3) {
-    runner?.syncState?.(state);
+  if (shouldRefreshProbe) {
     probe.render();
     lastProbeRefreshFrame = runtime.frame;
   }
+  recordPerfSpan("boot.updateAll", perfStart, { force });
+}
+
+function queueReadback(request) {
+  if (request.full) {
+    pendingReadback = { full: true, fields: null };
+    return;
+  }
+  if (pendingReadback?.full) return;
+  pendingReadback = { full: false, fields: request.fields ?? [] };
+}
+
+function gpuRenderableField(viewSpec) {
+  if (viewSpec?.gpuColor?.kind !== "ramp") return null;
+  const fields = viewSpec?.color?.fields;
+  if (!Array.isArray(fields) || fields.length !== 1) return null;
+  if (viewSpec?.glyph) return null;
+  return fields[0] ?? null;
+}
+
+function gpuSurfaceField(viewSpec) {
+  if (viewSpec?.gpuColor?.kind !== "ramp" && viewSpec?.gpuColor?.kind !== "wheel") return null;
+  if (viewSpec.gpuColor.field) return viewSpec.gpuColor.field;
+  const fields = viewSpec?.color?.fields;
+  if (!Array.isArray(fields) || fields.length !== 1) return null;
+  return fields[0] ?? null;
+}
+
+function ensureGpuSurfaceCompatibleView() {
+  const current = recipes.viewById?.(ui.viewSelect.value);
+  if (!gpuSurfaceActive || gpuSurfaceField(current)) return current;
+  const fallback = recipes.activeViews?.().find((view) => gpuSurfaceField(view));
+  if (!fallback) return current;
+  ui.viewSelect.value = fallback.id;
+  return fallback;
+}
+
+function copyGpuRenderResource(field) {
+  const runner = getRunner();
+  const info = runner?.copyFieldToRenderTexture?.(field);
+  if (!info) return null;
+  return {
+    field,
+    width: info.width,
+    height: info.height,
+    cellCount: info.cellCount,
+    type: info.type,
+    frame: runtime.frame,
+    texture: info.texture,
+  };
+}
+
+function flushReadbackAfterRender() {
+  if (!pendingReadback || readbackInFlight) return;
+  const runner = getRunner();
+  if (!runner) return;
+  const request = pendingReadback;
+  pendingReadback = null;
+  const promise = request.full
+    ? runner.syncState?.(state)
+    : runner.readFields?.(state, request.fields);
+  if (!promise || typeof promise.finally !== "function") return;
+  readbackInFlight = true;
+  promise.finally(() => {
+    readbackInFlight = false;
+  });
+}
+
+function fieldsForView(viewSpec, { gpuRenderField = null, skipParticles = false } = {}) {
+  const names = new Set();
+  for (const name of viewSpec?.color?.fields ?? []) {
+    if (name === gpuRenderField) continue;
+    if (name) names.add(name);
+  }
+  const glyph = viewSpec?.glyph;
+  if (glyph?.rotate) names.add(glyph.rotate);
+  if (glyph?.size) names.add(glyph.size);
+  const particles = skipParticles ? null : viewSpec?.particles;
+  if (particles?.advect) names.add(particles.advect);
+  return [...names];
 }
 
 function previewView() {
@@ -231,23 +470,215 @@ function previewView() {
 }
 
 function resize() {
-  const width = canvas.clientWidth;
-  const height = canvas.clientHeight;
-  renderer.setSize(width, height, false);
+  const sizeSource = document.querySelector(".viewport-frame") ?? inputCanvas ?? canvas;
+  const width = sizeSource.clientWidth;
+  const height = sizeSource.clientHeight;
+  if (width === lastCanvasWidth && height === lastCanvasHeight) return;
+  lastCanvasWidth = width;
+  lastCanvasHeight = height;
+  renderer?.setSize(width, height, false);
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
 }
 
-function animate() {
-  requestAnimationFrame(animate);
-  resize();
-  const { frameMs, dt } = tickFrame();
-  if (!runtime.paused) stepSim(dt);
-  geodesicPreview?.update?.();
-  orbitControls.update();
-  if (pipelineEditor.isVisible?.() || pipelineEditor.hasPreviewPopouts?.()) pipelineEditor.refreshPreviews?.();
-  renderer.render(scene, camera);
-  metrics.updateFpsMetric(frameMs, { paused: runtime.paused });
+function runAnimationFrame(source = "raf") {
+  animationScheduled = false;
+  animationRafId = 0;
+  if (animationFallbackTimer) {
+    clearTimeout(animationFallbackTimer);
+    animationFallbackTimer = null;
+  }
+  scheduleAnimationFrame();
+  lastFrameSource = source;
+  lastRafAt = performance.now();
+  try {
+    lastAnimatePhase = "resize";
+    resize();
+    lastAnimatePhase = "tick-frame";
+    const { frameMs, dt } = tickFrame();
+    recordDebugFrame(frameMs);
+    if (idleRafQueryEnabled) {
+      lastAnimatePhase = "idle";
+      updatePerfHud();
+      return;
+    }
+    if (!runtime.paused) {
+      lastAnimatePhase = "step-sim";
+      const stepStart = perfNow();
+      stepSim(dt);
+      recordPerfSpan("boot.stepSim", stepStart);
+    }
+    lastAnimatePhase = "preview-update";
+    geodesicPreview?.update?.();
+    lastAnimatePhase = "orbit";
+    const cameraChanged = orbitControls.update();
+    lastAnimatePhase = "surface-render";
+    const surfaceRendered = renderGeodesicSurface({ cameraChanged });
+    const viewSpec = recipes.viewById?.(ui.viewSelect.value);
+    lastAnimatePhase = "overlay-choice";
+    const renderOverlay = shouldRenderThreeOverlay({ surfaceRendered, viewSpec });
+    setOverlayCanvasVisible(renderOverlay);
+    if (renderOverlay && shouldPresentThreeOverlay({ cameraChanged, viewSpec })) {
+      lastAnimatePhase = "three-render";
+      const renderStart = perfNow();
+      renderer?.render(scene, camera);
+      lastOverlayRenderMs = performance.now();
+      recordPerfSpan("boot.render", renderStart);
+    }
+    lastAnimatePhase = "readback";
+    flushReadbackAfterRender();
+    lastAnimatePhase = "metrics";
+    metrics.updateFpsMetric(frameMs, { paused: runtime.paused });
+    updatePerfHud();
+    lastAnimatePhase = "done";
+    lastAnimateError = null;
+  } catch (error) {
+    lastAnimateError = {
+      phase: lastAnimatePhase,
+      message: error?.message ?? String(error),
+      stack: error?.stack ?? "",
+    };
+    traceDebug("animate-error", lastAnimateError);
+    console.error("animation frame failed:", error);
+  }
+}
+
+function renderGeodesicSurface({ cameraChanged = true } = {}) {
+  if (!gpuSurfaceActive || !geodesicSurfaceRenderer) return false;
+  const perfStart = perfNow();
+  const viewSpec = ensureGpuSurfaceCompatibleView();
+  const fieldName = gpuSurfaceField(viewSpec);
+  const runner = getRunner();
+  const field = fieldName ? runner?.renderField?.(fieldName) : null;
+  if (!fieldName) lastSurfaceSkipReason = "no-surface-field";
+  else if (!runner) lastSurfaceSkipReason = "no-runner";
+  else if (!field) lastSurfaceSkipReason = "field-not-ready";
+  else lastSurfaceSkipReason = "";
+  if (lastSurfaceSkipReason) traceDebug("surface-skip", { reason: lastSurfaceSkipReason, fieldName });
+  if (canReuseSurfaceFrame({ viewSpec, fieldName, cameraChanged })) {
+    geodesicSurfaceRenderer.setVisible(true);
+    debugFrameStats.surfaceReuses++;
+    return true;
+  }
+  if (canThrottleSurfacePresent({ viewSpec, fieldName, cameraChanged })) {
+    geodesicSurfaceRenderer.setVisible(true);
+    debugFrameStats.surfaceReuses++;
+    return true;
+  }
+  let rendered = false;
+  try {
+    rendered = geodesicSurfaceRenderer.render({
+      grid: state.grid?.topology,
+      field,
+      viewSpec,
+      camera,
+    });
+  } catch (error) {
+    console.warn("GPU surface renderer disabled:", error);
+    geodesicSurfaceRenderer?.setVisible?.(false);
+    geodesicSurfaceRenderer = null;
+    gpuSurfaceActive = false;
+    document.body.classList.toggle("gpu-surface-mode", false);
+    return false;
+  }
+  if (!rendered) geodesicSurfaceRenderer.setVisible(false);
+  if (rendered) rememberSurfaceFrame({ viewSpec, fieldName });
+  if (rendered) debugFrameStats.surfaceRenders++;
+  recordPerfSpan("surface.render", perfStart, { view: viewSpec?.id ?? "" });
+  return rendered;
+}
+
+function canReuseSurfaceFrame({ viewSpec, fieldName, cameraChanged }) {
+  return !surfaceContinuousQueryEnabled
+    && !cameraChanged
+    && geodesicSurfaceRenderer.hasFrame?.()
+    && lastSurfaceRender.frame === runtime.frame
+    && lastSurfaceRender.viewId === (viewSpec?.id ?? "")
+    && lastSurfaceRender.fieldName === (fieldName ?? "")
+    && lastSurfaceRender.width === lastCanvasWidth
+    && lastSurfaceRender.height === lastCanvasHeight
+    && lastSurfaceRender.aspect === camera.aspect;
+}
+
+function canThrottleSurfacePresent({ viewSpec, fieldName, cameraChanged }) {
+  if (surfaceContinuousQueryEnabled || surfaceFrameIntervalMs <= 0 || cameraChanged) return false;
+  if (!geodesicSurfaceRenderer.hasFrame?.()) return false;
+  if (lastSurfaceRender.viewId !== (viewSpec?.id ?? "")) return false;
+  if (lastSurfaceRender.fieldName !== (fieldName ?? "")) return false;
+  if (lastSurfaceRender.width !== lastCanvasWidth || lastSurfaceRender.height !== lastCanvasHeight) return false;
+  if (lastSurfaceRender.aspect !== camera.aspect) return false;
+  return performance.now() - lastSurfaceRender.presentMs < surfaceFrameIntervalMs;
+}
+
+function rememberSurfaceFrame({ viewSpec, fieldName }) {
+  lastSurfaceRender.frame = runtime.frame;
+  lastSurfaceRender.viewId = viewSpec?.id ?? "";
+  lastSurfaceRender.fieldName = fieldName ?? "";
+  lastSurfaceRender.width = lastCanvasWidth;
+  lastSurfaceRender.height = lastCanvasHeight;
+  lastSurfaceRender.aspect = camera.aspect;
+  lastSurfaceRender.presentMs = performance.now();
+}
+
+function invalidateSurfaceFrame() {
+  lastSurfaceRender.frame = -Infinity;
+}
+
+function recordDebugFrame(frameMs) {
+  debugFrameStats.samples.push(frameMs);
+  if (debugFrameStats.samples.length > 240) debugFrameStats.samples.shift();
+  debugFrameStats.lastFrameMs = frameMs;
+  debugFrameStats.minFrameMs = Math.min(debugFrameStats.minFrameMs, frameMs);
+  debugFrameStats.maxFrameMs = Math.max(debugFrameStats.maxFrameMs, frameMs);
+  let total = 0;
+  for (const sample of debugFrameStats.samples) total += sample;
+  const mean = total / Math.max(1, debugFrameStats.samples.length);
+  debugFrameStats.lastFps = mean > 0 ? 1000 / mean : 0;
+  let recentTotal = 0;
+  const recent = debugFrameStats.samples.slice(-30);
+  for (const sample of recent) recentTotal += sample;
+  const recentMean = recentTotal / Math.max(1, recent.length);
+  debugFrameStats.recentFps = recentMean > 0 ? 1000 / recentMean : 0;
+}
+
+function updatePerfHud() {
+  if (!perfHudEl) return;
+  perfHudEl.textContent = [
+    `RAF ${debugFrameStats.recentFps.toFixed(1)}`,
+    `focus ${document.hasFocus() ? "yes" : "no"}`,
+    `vis ${document.visibilityState}`,
+    `sim ${debugFrameStats.simSteps}`,
+    `surf ${debugFrameStats.surfaceRenders}/${debugFrameStats.surfaceReuses}`,
+  ].join("  ");
+}
+
+function shouldRenderThreeOverlay({ surfaceRendered, viewSpec }) {
+  if (gpuSurfaceActive) {
+    return Boolean(viewSpec?.glyph);
+  }
+  if (!surfaceRendered) return true;
+  // In surface mode the colored planet is already drawn by the custom WebGPU
+  // pass. CPU particles are intentionally disabled in this mode until they
+  // move to a GPU-native path.
+  return Boolean(viewSpec?.glyph);
+}
+
+function shouldPresentThreeOverlay({ cameraChanged = false, viewSpec = null } = {}) {
+  if (!gpuSurfaceActive) return true;
+  if (cameraChanged) return true;
+  if (viewSpec?.glyph && !viewSpec?.particles) return true;
+  if (!viewSpec?.particles) return true;
+  return performance.now() - lastOverlayRenderMs >= 1000 / 30;
+}
+
+function setOverlayCanvasVisible(next) {
+  if (overlayCanvasVisible === next) return;
+  overlayCanvasVisible = next;
+  if (gpuSurfaceActive) {
+    canvas.style.display = next ? "block" : "none";
+  } else {
+    canvas.style.visibility = next ? "visible" : "hidden";
+  }
 }
 
 async function syncGeodesicPreview() {
@@ -264,7 +695,7 @@ async function syncGeodesicPreview() {
   geodesicPreview = null;
   geodesicPreviewLoadingFrequency = grid.frequency;
   try {
-    const preview = await createGeodesicPreview({ scene, globe, grid: grid.topology });
+    const preview = await createGeodesicPreview({ scene, globe, renderer, camera, grid: grid.topology });
     if (state.grid?.topology !== grid.topology) {
       preview.dispose?.();
       if (geodesicPreviewLoadingFrequency === grid.frequency) geodesicPreviewLoadingFrequency = null;
@@ -455,21 +886,70 @@ function windowMenuItems(windows) {
 // Boot
 // =========================================================================
 export async function bootApp() {
+  traceDebug("boot-start", { gpuSurface: gpuSurfaceQueryEnabled });
+  let nextGpuSurfaceActive = false;
   ({
     canvas,
+    inputCanvas,
+    surfaceCanvas,
+    device,
     renderer,
     scene,
     camera,
     orbitControls,
     globe,
-  } = await createThreeSetup());
+    gpuSurfaceActive: nextGpuSurfaceActive,
+  } = await createThreeSetup({
+    gpuSurface: gpuSurfaceQueryEnabled,
+    skipGpuDevice: skipGpuDeviceQueryEnabled,
+  }));
+  traceDebug("three-setup", {
+    requestedSurface: gpuSurfaceQueryEnabled,
+    activeSurface: nextGpuSurfaceActive,
+    hasSurfaceCanvas: Boolean(surfaceCanvas),
+    hasRenderer: Boolean(renderer),
+    hasDevice: Boolean(device),
+  });
+  gpuSurfaceActive = Boolean(nextGpuSurfaceActive && surfaceCanvas && device);
+  document.body.classList.toggle("gpu-surface-mode", gpuSurfaceActive);
+  if (gpuSurfaceActive && surfaceCanvas) {
+    try {
+      geodesicSurfaceRenderer = createGeodesicSurfaceRenderer({
+        device,
+        canvas: surfaceCanvas,
+        maxPixelRatio: surfacePixelRatioCap(),
+      });
+      gpuSurfaceActive = Boolean(geodesicSurfaceRenderer);
+    } catch (error) {
+      console.warn("GPU surface renderer disabled:", error);
+      geodesicSurfaceRenderer = null;
+      gpuSurfaceActive = false;
+    }
+    document.body.classList.toggle("gpu-surface-mode", gpuSurfaceActive);
+    if (gpuSurfaceActive) {
+      geodesicSurfaceRenderer?.setVisible?.(false);
+      setOverlayCanvasVisible(true);
+    }
+  }
+  installDebugSnapshot();
+  installDebugTraps();
+  if (bootStage === "three") {
+    initPerfHud();
+    initRuntime();
+    if (startPausedQueryEnabled) runtime.paused = true;
+    animate();
+    return;
+  }
 
   initControls(ui);
   initPaint({
-    canvas, camera, globe, ui, state, controls,
+    canvas: inputCanvas ?? canvas, camera, globe, ui, state, controls,
     onBeforePaint: () => getRunner()?.syncState?.(state),
     onAfterPaint: () => {
-      getRunner()?.markStateDirty?.();
+      const runner = getRunner();
+      runner?.markStateDirty?.();
+      runner?.flushStateUpload?.(state);
+      invalidateSurfaceFrame();
       updateAll();
     },
     onProbeMove: (event) => probe.updateFromPointer(event),
@@ -480,6 +960,16 @@ export async function bootApp() {
     },
   });
   initProbe({ ui, state, pointerHit: paint.pointerHit });
+  if (bootStage === "paint") {
+    initPerfHud();
+    initRuntime();
+    if (startPausedQueryEnabled) {
+      runtime.paused = true;
+      ui.pauseButton.textContent = "Resume";
+    }
+    animate();
+    return;
+  }
 
   // Build authoring windows + mount editors before recipes.mjs's
   // bootstrap fires — recipes.mjs's `applyRecipe()` calls
@@ -490,6 +980,16 @@ export async function bootApp() {
     getState: () => state,
     getPreviewView: previewView,
   });
+  if (bootStage === "editors") {
+    initPerfHud();
+    initRuntime();
+    if (startPausedQueryEnabled) {
+      runtime.paused = true;
+      ui.pauseButton.textContent = "Resume";
+    }
+    animate();
+    return;
+  }
   initRecipes({
     state,
     ui,
@@ -501,6 +1001,7 @@ export async function bootApp() {
     getFrame: () => runtime.frame,
     getProbe: () => probe,
     renderer,
+    device,
     runPreset: initPreset,
     refreshView: updateAll,
     onActiveRecipeChange: () => {
@@ -524,7 +1025,114 @@ export async function bootApp() {
 
   metrics.setupSparklines();
   wireSectionCollapse();
+  initPerfHud();
   initRuntime();
+  if (startPausedQueryEnabled) {
+    runtime.paused = true;
+    ui.pauseButton.textContent = "Resume";
+  }
   syncGeodesicPreview();
-  animate();
+  traceDebug("animate-start");
+  scheduleAnimationFrame();
+}
+
+function initPerfHud() {
+  if (!perfHudQueryEnabled) return;
+  perfHudEl = document.createElement("div");
+  perfHudEl.className = "perf-hud";
+  perfHudEl.textContent = "RAF ...";
+  document.body.appendChild(perfHudEl);
+}
+
+function surfacePixelRatioCap() {
+  const raw = new URLSearchParams(window.location.search).get("surfaceDpr");
+  const parsed = raw == null ? 1 : Number(raw);
+  return Number.isFinite(parsed) ? parsed : 1;
+}
+
+function surfacePresentIntervalMs() {
+  const raw = new URLSearchParams(window.location.search).get("surfaceFps");
+  if (raw == null) return 0;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+  return 1000 / Math.min(240, parsed);
+}
+
+function simRateQueryOverride() {
+  const raw = new URLSearchParams(window.location.search).get("simFps");
+  if (raw == null) return null;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : null;
+}
+
+function installDebugSnapshot() {
+  globalThis.__FIELD_LAB_DEBUG__ = () => {
+    const debugViewSpec = recipes.viewById?.(ui.viewSelect?.value);
+    const debugSurfaceField = gpuSurfaceField(debugViewSpec);
+    const debugRunner = getRunner();
+    const debugRenderField = debugSurfaceField ? debugRunner?.renderField?.(debugSurfaceField) : null;
+    return ({
+    recipe: recipes.activeId,
+    view: ui.viewSelect?.value ?? null,
+    frame: runtime.frame,
+    fpsText: document.querySelector('[data-metric-id="fps"] .metric-cell__num')?.textContent ?? null,
+    rafFps: Number(debugFrameStats.lastFps.toFixed(1)),
+    recentRafFps: Number(debugFrameStats.recentFps.toFixed(1)),
+    frameSamples: debugFrameStats.samples.length,
+    lastFrameMs: Number(debugFrameStats.lastFrameMs.toFixed(2)),
+    minFrameMs: Number(debugFrameStats.minFrameMs.toFixed(2)),
+    maxFrameMs: Number(debugFrameStats.maxFrameMs.toFixed(2)),
+    visibilityState: document.visibilityState,
+    focused: document.hasFocus(),
+    reducedMotion: globalThis.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? null,
+    surfaceRenders: debugFrameStats.surfaceRenders,
+    surfaceReuses: debugFrameStats.surfaceReuses,
+    simSteps: debugFrameStats.simSteps,
+    simFramesWithSteps: debugFrameStats.simFramesWithSteps,
+    simStepCalls: debugFrameStats.simStepCalls,
+    simRateOverride,
+    lastAnimatePhase,
+    lastAnimateError,
+    lastSurfaceSkipReason,
+    lastFrameSource,
+    lastRafAgeMs: lastRafAt ? Number((performance.now() - lastRafAt).toFixed(1)) : null,
+    watchdogTicks,
+    gpuErrors: globalThis.__FIELD_LAB_GPU_ERRORS__ ?? [],
+    debugTrace: [...debugTrace],
+    gpuSurface: gpuSurfaceQueryEnabled,
+    gpuSurfaceActive,
+    surfaceField: debugSurfaceField,
+    surfaceFieldType: debugRenderField?.type ?? null,
+    idleRaf: idleRafQueryEnabled,
+    bootStage: bootStage || "full",
+    skipGpuDevice: skipGpuDeviceQueryEnabled,
+    surfaceContinuous: surfaceContinuousQueryEnabled,
+    surfaceFpsCap: surfaceFrameIntervalMs > 0 ? Number((1000 / surfaceFrameIntervalMs).toFixed(1)) : null,
+    surfaceDprCap: surfacePixelRatioCap(),
+    devicePixelRatio: globalThis.devicePixelRatio,
+    overlayCanvasVisible,
+    readbackInFlight,
+    pendingReadback: pendingReadback
+      ? { full: pendingReadback.full, fields: pendingReadback.fields?.length ?? null }
+      : null,
+    viewport: elementDebug(canvas),
+    surface: elementDebug(surfaceCanvas),
+    lastSurfaceRender: { ...lastSurfaceRender },
+    bodyClasses: document.body.className,
+    });
+  };
+}
+
+function elementDebug(el) {
+  if (!el) return null;
+  const rect = el.getBoundingClientRect();
+  const style = getComputedStyle(el);
+  return {
+    client: [el.clientWidth, el.clientHeight],
+    buffer: [el.width ?? null, el.height ?? null],
+    rect: [Math.round(rect.width), Math.round(rect.height)],
+    display: style.display,
+    visibility: style.visibility,
+    position: style.position,
+  };
 }

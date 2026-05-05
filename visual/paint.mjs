@@ -68,6 +68,7 @@ export function initPaint(deps) {
 
   let paintDown = false;
   let wasPausedBeforePaint = false;
+  let paintPrepared = false;
 
   function pointerHit(event) {
     const rect = canvas.getBoundingClientRect();
@@ -111,7 +112,10 @@ export function initPaint(deps) {
     if (!hit) return;
     const r = controls.brushRadius.value;
     const brush = ui.brushSelect.value;
-    await onBeforePaint?.();
+    if (!paintPrepared) {
+      await onBeforePaint?.();
+      paintPrepared = true;
+    }
     applyStamp(brush, hit.x, hit.y, r, hit, phase);
     registry.lastPaintLabel = `${brush} @ lon ${hit.lon.toFixed(2)}, lat ${hit.lat.toFixed(2)}`;
     onAfterPaint();
@@ -123,6 +127,7 @@ export function initPaint(deps) {
     event.stopPropagation();
     event.stopImmediatePropagation();
     paintDown = false;
+    paintPrepared = false;
     if (canvas.hasPointerCapture(event.pointerId)) {
       canvas.releasePointerCapture(event.pointerId);
     }

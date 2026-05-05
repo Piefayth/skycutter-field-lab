@@ -1,16 +1,16 @@
-// Bak-Tang-Wiesenfeld (1987) — the original self-organised-criticality
-// model. Each cell holds an integer "sand height" h. Every tick:
+// Parallel sandpile relaxation on a geodesic sphere. Each cell holds an
+// integer sand height h. Every tick:
 //
-//   - Drive: with probability `dropRate` per cell, add 1 grain.
+//   - Drive: with a small probability per cell, add 1 grain.
 //   - Topple: any cell with h ≥ threshold redistributes — loses
 //     `threshold` grains, sends 1 to each neighbour.
 //
-// Avalanches form because a single drop can push a cell over threshold,
-// which sends grains to neighbours, which in turn may topple. The size
-// distribution of avalanches is a power law — that's the SOC signature.
-// Bak's whole point was that the system organises itself onto the
-// critical surface without external tuning, just by the slow drive
-// matching the fast relaxation.
+// This is deliberately the synchronous, one-relaxation-sweep-per-tick
+// version that the current DSL can express cleanly. It is related to
+// Bak-Tang-Wiesenfeld, but it is not the full Abelian sandpile protocol
+// where one grain is dropped and the avalanche relaxes to quiescence
+// before the next grain arrives. That fully-relaxed model wants a bounded
+// cascade/relax primitive.
 //
 // Why the geodesic: BTW is canonically a square-lattice rule (h ≥ 4 →
 // topple, distribute 1 to each of 4 neighbours; mass exactly conserved).
@@ -21,11 +21,10 @@
 // time they topple. Pentagons act as dissipative defects pinned to
 // specific points — geometrically, the curvature has to leak somewhere.
 //
-// Compared to the forest-fire SOC recipe (drossel-schwabl): same
-// universality class (power-law avalanche-size distribution) but
-// reached by very different mechanism — deterministic toppling cascades
-// triggered by a slow stochastic drive, vs stochastic ignition spreading
-// through a percolating tree cluster.
+// Compared to the forest-fire recipe: this is a conservative local
+// redistribution toy. Watch toppling fronts, pinned pentagon sinks, and
+// metastable near-critical patches rather than a rigorously measured SOC
+// avalanche distribution.
 
 import { compileV2 } from "../dsl/compile-v2.mjs";
 
@@ -49,28 +48,28 @@ export const regime = {
 };
 
 export const pipelineDsl = `
-recipe "Bak-Tang-Wiesenfeld sandpile"
-summary "Classic SOC sandpile. Slowly drop grains onto random cells; whenever a cell's height reaches the toppling threshold (6 for the geodesic's hexagonal cells), it loses 6 grains and sends 1 to each neighbour, possibly triggering further topples in a cascading avalanche. The 12 pentagonal cells (5 neighbours) act as dissipative defects — every pentagon topple leaks one grain — so the pile self-organises around a critical density set by mass-balance with these pinned sinks."
-recommendedPreset primed
+recipe "Sandpile relaxation"
+summary "Parallel sandpile relaxation on a sphere. Sparse random grains slowly load an integer height field; cells at threshold lose grains to their neighbours, producing toppling fronts and pinned sinks at the 12 pentagonal cells. This is the synchronous one-sweep-per-tick model the current DSL can express, not the fully-relaxed Abelian sandpile."
+recommendedPreset patchy
 
 substrate geodesic frequency 32
 
 field h: u32                  // sand height (integer grains)
 field toppled: u32 derived    // 1 if this cell toppled this tick (for visualization + metrics)
 
-// Drop rate: probability per cell per tick of receiving a grain.
-// Default 0.001 → ~10 drops/tick on the freq-32 mesh (~10k cells),
-// slow enough that avalanches finish between drops at low pile heights.
-param DROP_RATE   slider 0..0.05  step 0.0005 default 0.001 label "DROP RATE"
+// Drop rate: probability per cell per tick of receiving a grain. Keep it
+// low: at frequency 32, 0.00008 is roughly one random drop per tick.
+param DROP_RATE   slider 0..0.005 step 0.00002 default 0.00008 label "DROP RATE"
 // Topple threshold. Six is the natural value for the hexagonal majority;
 // dropping it produces faster cascades, raising it slows everything.
 param THRESHOLD   slider 3..12    step 1      default 6     label "THRESHOLD"
-param simRateHz   slider 0..120   step 1      default 30    label "SIM RATE"
+param simRateHz   slider 0..120   step 1      default 24    label "SIM RATE"
 
 step {
-  // Stage 1 — Drive. Each cell rolls a per-frame random number; if
-  // it falls in the bottom DROP_RATE fraction of [0, 1], the cell
-  // gets one grain.
+  // Stage 1 — Drive. Each cell rolls a per-frame random number; if it
+  // falls in the bottom DROP_RATE fraction of [0, 1], the cell gets
+  // one grain. This is intentionally sparse so relaxation fronts remain
+  // readable between random kicks.
   stage drive "Random grain drop" {
     reads h
     writes h
@@ -83,10 +82,10 @@ step {
     }
   }
 
-  // Stage 2 — Topple. Synchronous: every cell that's above threshold
-  // loses THRESHOLD grains; every cell receives 1 grain per toppling
-  // neighbour. Reads-from-previous-tick guarantees a deterministic
-  // synchronous avalanche front.
+  // Stage 2 — Topple. Synchronous: every cell at/above threshold loses
+  // THRESHOLD grains; every cell receives 1 grain per toppling neighbour.
+  // One tick performs one relaxation sweep, so large avalanches visibly
+  // travel as fronts instead of collapsing into a single hidden event.
   stage topple "Toppling cascade" {
     reads h
     writes h, toppled
@@ -144,27 +143,38 @@ stamps {
 }
 
 scenarios {
-  scenario slow "Slow drive (default)" {
-    // Bare lattice; drive nucleates the pile from scratch. The pile
-    // climbs to criticality over ~30 wallclock seconds and then
-    // produces intermittent avalanches forever.
+  scenario slow "Empty slow drive" {
+    // Bare lattice; sparse drive slowly nucleates the pile from scratch.
+    // This is the cleanest long-run view, but it takes time to build.
     set h = 0
   }
 
-  scenario primed "Pre-loaded near-critical" {
-    // Every cell starts one grain shy of toppling. Any further drop
-    // triggers a cascade — useful for watching a single avalanche
-    // propagate cleanly.
+  scenario patchy "Patchy near-critical" {
+    // A calmer default than filling the whole sphere to threshold - 1.
+    // Most cells are subcritical; scattered near-critical patches produce
+    // local relaxation fronts without instantly wiping the whole planet.
     for each cell {
-      set h = THRESHOLD - 1
+      let r = cellRand(17) * 0.5 + 0.5
+      let band = sin(lon * 2.0 + lat * 1.5) * 0.5 + 0.5
+      let base = r > 0.72 ? THRESHOLD - 1 : (r > 0.38 ? THRESHOLD - 2 : THRESHOLD - 3)
+      set h = max(0, base + (band > 0.68 && r > 0.55 ? 1 : 0))
     }
   }
 
   scenario peak "Single tall pile" {
-    // One cell vastly over threshold; the topple front spreads
-    // radially and leaves a roughly-conical pile behind.
+    // One cell vastly over threshold; the relaxation front spreads
+    // radially over many ticks.
     set h = 0
     spot h at lon=0, lat=0, radius=0.05, amount=20
+  }
+
+  scenario primed "Whole sphere primed (explosive)" {
+    // Deliberately extreme: every cell starts one grain shy of toppling.
+    // A single drop creates a planet-scale wave and then a drained sphere.
+    // Useful as a stress test, not as the default behaviour.
+    for each cell {
+      set h = THRESHOLD - 1
+    }
   }
 }
 `;

@@ -32,10 +32,12 @@ field wind: vec2 derived
 param simRateHz slider 0..240 step 1 default 60 label "SIM RATE"
 param rate      slider 1..60  step 1 default 12 label "RATE"
 param windSpeed slider 0..2   step 0.01 default 0.80 label "WIND SPEED"
-param bandFlow  slider 0..2   step 0.01 default 1.00 label "BAND FLOW"
-param eddyFlow  slider 0..2   step 0.01 default 0.70 label "EDDY FLOW"
-param northFlow slider 0..2   step 0.01 default 0.85 label "N/S FLOW"
-param drift     slider 0..2   step 0.01 default 0.75 label "DRIFT"
+param tradeWind slider 0..2   step 0.01 default 0.85 label "TRADE WINDS"
+param jetStream slider 0..2   step 0.01 default 0.95 label "JET STREAMS"
+param stormWave slider 0..2   step 0.01 default 0.55 label "STORM WAVES"
+param crossFlow slider 0..2   step 0.01 default 0.45 label "CROSS-FLOW"
+param polarCalm slider 0..1   step 0.01 default 0.75 label "POLAR CALM"
+param drift     slider 0..2   step 0.01 default 0.65 label "DRIFT"
 param flowScale slider 0..1   step 0.01 default 0.45 label "ADVECTION SCALE"
 
 step {
@@ -43,16 +45,22 @@ step {
     reads moisture
     writes wind
     cell {
-      let t = frame / 180 * drift
-      let trades = -0.34 * sin(lat * 2.4)
-      let jet = 0.56 * sin(lat * 5.1)
-      let polar = 0.22 * sin(lat * 8.0)
-      let wave1 = sin(lon * 3 + t + sin(lat * 2))
-      let wave2 = sin(lon * 5 - t * 0.7 + lat * 3)
-      let bandEast = bandFlow * (trades + jet + polar)
-      let eddyEast = eddyFlow * 0.22 * wave1 * sin(lat * 2)
-      let eddyNorth = eddyFlow * northFlow * (0.28 * wave2 * cos(lat) + 0.14 * sin(lon * 2 - t) * sin(lat * 3))
-      let east = bandEast + eddyEast
+      let t = frame / 210 * drift
+      let absLat = abs(lat)
+      let poleFade = pow(max(cos(lat), 0), 1.2 + polarCalm * 3.2)
+      let equatorCalm = smoothstep(0.10, 0.36, absLat)
+      let tropics = smoothstep(0.20, 0.52, absLat) * (1 - smoothstep(0.72, 1.02, absLat))
+      let midLat = smoothstep(0.48, 0.82, absLat) * (1 - smoothstep(1.08, 1.34, absLat))
+      let jetCore = smoothstep(0.56, 0.82, absLat) * (1 - smoothstep(0.96, 1.18, absLat))
+      let hemisphere = lat >= 0 ? 1 : -1
+      let trades = -hemisphere * tradeWind * tropics * 0.46
+      let jets = hemisphere * jetStream * midLat * 0.62
+      let waveA = sin(lon * 4 + t + hemisphere * 1.4)
+      let waveB = sin(lon * 7 - t * 0.8 + lat * 2.2)
+      let stormBand = stormWave * jetCore * poleFade
+      let eddyEast = stormBand * 0.18 * waveA
+      let eddyNorth = stormBand * crossFlow * 0.26 * waveB
+      let east = (trades + jets + eddyEast) * poleFade * equatorCalm
       let north = eddyNorth
       set wind = vec2(east, north) * windSpeed
     }

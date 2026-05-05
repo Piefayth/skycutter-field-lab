@@ -523,6 +523,7 @@ export function materializeView(view, palettes, fieldDecls = [], paramDecls = []
       id: view.id,
       label: view.label,
       color: rampFromStops(view.field, stops, view.range),
+      gpuColor: { kind: "ramp", field: view.field, stops, range: view.range },
       glyph,
       particles,
     };
@@ -532,6 +533,7 @@ export function materializeView(view, palettes, fieldDecls = [], paramDecls = []
       id: view.id,
       label: view.label,
       color: wheelFromRange(view.field, view.range),
+      gpuColor: { kind: "wheel", field: view.field, range: view.range },
       glyph,
       particles,
     };

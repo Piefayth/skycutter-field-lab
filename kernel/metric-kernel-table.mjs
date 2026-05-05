@@ -8,7 +8,6 @@
 
 export const KERNEL_SIGMA_CUTOFF = 3;
 export const MAX_KERNEL_RADIUS = 0.35;
-export const MAX_KERNEL_ENTRIES_PER_CELL = 128;
 
 export function resolveMetricKernelSpec(spec, params = {}) {
   if (!spec || spec.kind !== "kernel" || spec.kernel !== "bell") {
@@ -46,7 +45,6 @@ export function buildMetricKernelTable(grid, resolved) {
 
   for (let cell = 0; cell < cellCount; cell++) {
     const candidates = candidateCellsFor(cell, grid.positions, bins);
-    let entriesForCell = 0;
     const px = grid.positions[cell * 3];
     const py = grid.positions[cell * 3 + 1];
     const pz = grid.positions[cell * 3 + 2];
@@ -66,13 +64,6 @@ export function buildMetricKernelTable(grid, resolved) {
       local.push({ other, weight });
     }
     local.sort((a, b) => a.other - b.other);
-    entriesForCell = local.length;
-    if (entriesForCell > MAX_KERNEL_ENTRIES_PER_CELL) {
-      throw new Error(
-        `kernel bell(${resolved.center}, ${resolved.width}) covers ${entriesForCell} cells at cell ${cell}; ` +
-        `limit is ${MAX_KERNEL_ENTRIES_PER_CELL}. Reduce center/width or grid frequency.`,
-      );
-    }
     for (const entry of local) {
       indices.push(entry.other);
       weights.push(entry.weight);

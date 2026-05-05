@@ -169,6 +169,11 @@ export function mountPipelineGraph(rootEl, api) {
   nodeLayer.className = "pg-node-layer";
   graphScene.appendChild(nodeLayer);
 
+  const selectionBox = document.createElement("div");
+  selectionBox.className = "pg-selection-box";
+  selectionBox.hidden = true;
+  graphScene.appendChild(selectionBox);
+
   const graphHud = document.createElement("div");
   graphHud.className = "pg-graph-hud";
   graphWrap.appendChild(graphHud);
@@ -217,6 +222,13 @@ export function mountPipelineGraph(rootEl, api) {
   let wireRerouteFrame = 0;
   let lastPreviewAt = 0;
   let fieldKindMap = new Map();
+  const wiresByNode = new Map();
+  const touchedWireEls = new Set();
+  const energizedPortEls = new Set();
+  const energizedRowEls = new Set();
+  let highlightedNodeEl = null;
+  let selectionNotifySeq = 0;
+  let wireHighlightSeq = 0;
 
   // ---- Build / refresh ---------------------------------------------------
   function refresh() {
@@ -430,6 +442,8 @@ export function mountPipelineGraph(rootEl, api) {
     nodeLayer.replaceChildren();
     nodeEls.clear();
     previewCanvases.clear();
+    clearGraphHighlights();
+    wiresByNode.clear();
     // Wipe wire paths but keep the preview wire (which hides itself
     // when no drag is in progress).
     for (const child of [...wireSvg.children]) {
@@ -551,6 +565,7 @@ export function mountPipelineGraph(rootEl, api) {
     wireSvg.setAttribute("width", totalW);
     wireSvg.setAttribute("height", totalH);
     applyViewport();
+    moveSelectionBox(selectedId);
   }
 
   function nodeWidth(id) {
@@ -798,6 +813,7 @@ export function mountPipelineGraph(rootEl, api) {
     }
     el.addEventListener("pointerdown", (event) => {
       if (event.target.closest(".pg-port, .pg-port-row")) return;
+      if (selectable) selectNode(item.id);
       el.setPointerCapture(event.pointerId);
       const start = positions.get(item.id);
       const startMouse = { x: event.clientX, y: event.clientY };
@@ -811,12 +827,12 @@ export function mountPipelineGraph(rootEl, api) {
         const p = positions.get(item.id);
         el.style.left = `${p.x}px`;
         el.style.top = `${p.y}px`;
+        if (selectedId === item.id) moveSelectionBox(item.id);
         rerouteWires();
       }
       function onUp() {
         el.removeEventListener("pointermove", onMove);
         el.removeEventListener("pointerup", onUp);
-        if (!dragged && selectable) selectNode(item.id);
       }
       el.addEventListener("pointermove", onMove);
       el.addEventListener("pointerup", onUp);
@@ -885,7 +901,19 @@ export function mountPipelineGraph(rootEl, api) {
     path.style.setProperty("--wire", wireAccent(fromPort, toPort));
     path.style.setProperty("--wire-glow", wireGlow(fromPort, toPort));
     path.setAttribute("d", wirePath(fromId, fromPort, toId, toPort));
+    registerWireForNode(fromId, path);
+    registerWireForNode(toId, path);
     return path;
+  }
+
+  function registerWireForNode(nodeId, path) {
+    if (!nodeId) return;
+    let wires = wiresByNode.get(nodeId);
+    if (!wires) {
+      wires = new Set();
+      wiresByNode.set(nodeId, wires);
+    }
+    wires.add(path);
   }
 
   function endpointForPort(nodeId, side, portName) {
@@ -1197,14 +1225,24 @@ export function mountPipelineGraph(rootEl, api) {
     if (!id) return;
     selectedId = id;
     highlightSelected(id);
-    api.onChange?.("select", id);
+    notifySelectionChanged(id);
   }
 
   function clearSelection() {
     if (!selectedId) return;
     selectedId = null;
     highlightSelected(null);
-    api.onChange?.("select", null);
+    notifySelectionChanged(null);
+  }
+
+  function notifySelectionChanged(id) {
+    const seq = ++selectionNotifySeq;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (seq !== selectionNotifySeq) return;
+        api.onChange?.("select", id);
+      });
+    });
   }
 
   function focusStageInDsl(id) {
@@ -1220,33 +1258,82 @@ export function mountPipelineGraph(rootEl, api) {
     dslEditor.view.focus();
   }
 
+  function clearGraphHighlights() {
+    wireHighlightSeq++;
+    clearSelectionOutline();
+    clearWireHighlights();
+  }
+
+  function clearSelectionOutline() {
+    highlightedNodeEl?.classList.remove("pg-node--selected");
+    highlightedNodeEl = null;
+    selectionBox.hidden = true;
+  }
+
+  function clearWireHighlights() {
+    for (const path of touchedWireEls) path.classList.remove("pg-wire--touched");
+    touchedWireEls.clear();
+    for (const portEl of energizedPortEls) portEl.classList.remove("pg-port--energized");
+    energizedPortEls.clear();
+    for (const row of energizedRowEls) row.classList.remove("pg-port-row--energized");
+    energizedRowEls.clear();
+  }
+
+  function energizePort(owner, side, portName) {
+    const node = nodeEls.get(owner);
+    if (!node) return;
+    const row = node.querySelector(
+      `.pg-port-row[data-port-side="${side}"][data-port-name="${cssEscape(portName)}"]`,
+    );
+    if (row) {
+      row.classList.add("pg-port-row--energized");
+      energizedRowEls.add(row);
+    }
+    const port = node.querySelector(`.pg-port--${side}`);
+    if (port) {
+      port.classList.add("pg-port--energized");
+      energizedPortEls.add(port);
+    }
+  }
+
   function highlightSelected(id) {
+    clearSelectionOutline();
     graphWrap.classList.toggle("pg-graph-wrap--has-selection", Boolean(id));
-    for (const el of nodeLayer.querySelectorAll(".pg-node, .pg-var, .pg-rail")) {
-      el.classList.toggle("pg-node--selected", el.dataset.nodeId === id);
+    highlightedNodeEl = id ? nodeEls.get(id) ?? null : null;
+    highlightedNodeEl?.classList.add("pg-node--selected");
+    moveSelectionBox(id);
+    scheduleWireHighlights(id);
+  }
+
+  function moveSelectionBox(id) {
+    const pos = id ? positions.get(id) : null;
+    if (!id || !pos) {
+      selectionBox.hidden = true;
+      return;
     }
-    // Wire bloom + march on touched, port "energized" on the endpoints
-    // of those wires. Together they communicate "current flowing".
-    const energized = new Set();
-    for (const path of wireSvg.querySelectorAll(".pg-wire")) {
-      const isTouched = path.dataset.from === id || path.dataset.to === id;
-      path.classList.toggle("pg-wire--touched", isTouched);
-      if (isTouched) {
-        energized.add(`${path.dataset.from}:out:${path.dataset.fromPort ?? "out"}`);
-        energized.add(`${path.dataset.to}:in:${path.dataset.toPort ?? "in"}`);
-      }
-    }
-    for (const portEl of nodeLayer.querySelectorAll(".pg-port")) {
-      const owner = portEl.parentElement?.dataset.nodeId;
-      if (!owner) continue;
-      const side = portEl.classList.contains("pg-port--out") ? "out" : "in";
-      portEl.classList.toggle("pg-port--energized", energized.has(`${owner}:${side}:${side}`));
-    }
-    for (const row of nodeLayer.querySelectorAll(".pg-port-row")) {
-      const owner = row.dataset.nodeId;
-      const side = row.dataset.portSide;
-      const port = row.dataset.portName;
-      row.classList.toggle("pg-port-row--energized", energized.has(`${owner}:${side}:${port}`));
+    selectionBox.hidden = false;
+    selectionBox.style.transform = `translate3d(${pos.x}px, ${pos.y}px, 0)`;
+    selectionBox.style.width = `${nodeWidth(id)}px`;
+    selectionBox.style.height = `${nodeHeight(id)}px`;
+  }
+
+  function scheduleWireHighlights(id) {
+    const seq = ++wireHighlightSeq;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (seq !== wireHighlightSeq) return;
+        refreshWireHighlights(id);
+      });
+    });
+  }
+
+  function refreshWireHighlights(id) {
+    clearWireHighlights();
+    for (const path of wiresByNode.get(id) ?? []) {
+      path.classList.add("pg-wire--touched");
+      touchedWireEls.add(path);
+      energizePort(path.dataset.from, "out", path.dataset.fromPort ?? "out");
+      energizePort(path.dataset.to, "in", path.dataset.toPort ?? "in");
     }
   }
 
