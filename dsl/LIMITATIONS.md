@@ -10,6 +10,40 @@ This is the current pragmatic readout from recipe work. The direction is not a
 second authoring DSL. It is v2 plus small primitives that remove real awkwardness
 from real recipes.
 
+Recent sketch work:
+
+- [DSL v2.5 Proposal](./V2_5_PROPOSAL.md): current consolidated proposal. Keep
+  ordered v2 stages, add composable effects inside them, and only promote
+  `budget` if real ports prove it.
+- [Process Style Sketches](./PROCESS-STYLE-SKETCHES.md): useful for regularizing
+  cells / edges / relax scopes, but mostly renames v2 unless paired with
+  budgets.
+- [Rate And Budget Sketches](./RATE-BUDGET-SKETCHES.md): useful pressure test,
+  but the `rate` keyword now looks weaker than the budget idea; most examples
+  can stay as `let`.
+- [Field Lifecycle Sketches](./FIELD-LIFECYCLE-SKETCHES.md): useful as a
+  generated explanation view, but too scattered as the primary authoring form.
+- [Planet Biosphere Split Sketch](./PLANET-BIOSPHERE-SPLIT-SKETCH.md): concrete
+  rewrite showing that phases/stages still matter; budgets should improve
+  ordered groups rather than replace scheduling.
+- [Downwind Pollution Budget Sketch](./DOWNWIND-BUDGET-SKETCH.md): strongest
+  positive budget test so far; emission, decay, conservative flux, and
+  projection become one auditable field transaction.
+
+Current working thesis:
+
+```text
+budget    = explicit field accounting for source/sink/flux/project
+process   = ordered or coupled computation over cells/edges/relax
+term      = ordinary `let` unless shared-term ports prove a keyword is needed
+lifecycle = generated UI/doc view of how a field changes
+```
+
+This is more coherent than the old "semantic update graph" proposal because it
+does not pretend every recipe wants inferred ordering. Planet/ecology recipes
+often need explicit phases, but the inside of those phases can be much more
+semantic than raw cell stages.
+
 ### Already Implemented / Usable
 
 - `transport(vec2, coord)` — explicit vector basis transport for neighbor reads.
