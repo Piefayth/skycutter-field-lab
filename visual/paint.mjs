@@ -61,7 +61,7 @@ export function initPaint(deps) {
   initialized = true;
 
   const { canvas, camera, globe, ui, state, controls } = deps;
-  const { onBeforePaint, onAfterPaint, onPaintStart, onPaintEnd, onProbeMove, getPaused, setPaused } = deps;
+  const { onBeforePaint, onAfterPaint, onApplyPaintDelta, onPaintStart, onPaintEnd, onProbeMove, getFrame, getPaused, setPaused } = deps;
 
   // The visual app's only raycaster + pointer Vec2. Reused across every
   // pointer event; cheaper than allocating per-call.
@@ -70,10 +70,13 @@ export function initPaint(deps) {
   const hitLocal = new THREE.Vector3();
 
   let paintDown = false;
+  let paintStrokeId = 0;
   let wasPausedBeforePaint = false;
   let paintPrepared = false;
   let paintPreparePromise = null;
   let paintPreparedFieldsKey = "";
+  let paintPreparedFrame = -1;
+  let paintDragSeq = 0;
 
   function pointerHit(event) {
     const rect = canvas.getBoundingClientRect();
@@ -121,30 +124,81 @@ export function initPaint(deps) {
     return Array.isArray(fn.writes) ? fn.writes : [];
   }
 
+  function stampCanGpuDelta(brush, writtenFields) {
+    const compiled = controls.stamps;
+    const fn = compiled && compiled[brush];
+    return Boolean(
+      fn?.gpuDelta &&
+      typeof onApplyPaintDelta === "function" &&
+      writtenFields.every((name) => state.fields?.[name] instanceof Float32Array),
+    );
+  }
+
+  function snapshotFields(fieldNames) {
+    const out = Object.create(null);
+    for (const name of fieldNames) {
+      const arr = state.fields?.[name];
+      if (arr instanceof Float32Array) out[name] = new Float32Array(arr);
+    }
+    return out;
+  }
+
+  function diffFields(before, fieldNames) {
+    const out = Object.create(null);
+    for (const name of fieldNames) {
+      const prev = before?.[name];
+      const arr = state.fields?.[name];
+      if (!(prev instanceof Float32Array) || !(arr instanceof Float32Array) || prev.length !== arr.length) continue;
+      const delta = new Float32Array(arr.length);
+      for (let i = 0; i < arr.length; i++) delta[i] = arr[i] - prev[i];
+      out[name] = delta;
+    }
+    return out;
+  }
+
   async function ensurePaintPrepared(writtenFields) {
     const fieldsKey = [...writtenFields].sort().join(",");
-    if (paintPrepared && paintPreparedFieldsKey === fieldsKey) {
+    const frame = Number(getFrame?.() ?? -1);
+    if (paintPrepared && paintPreparedFieldsKey === fieldsKey && paintPreparedFrame === frame) {
       if (paintPreparePromise) await paintPreparePromise;
       return;
     }
     paintPrepared = true;
     paintPreparedFieldsKey = fieldsKey;
-    paintPreparePromise = Promise.resolve(onBeforePaint?.(writtenFields))
+    paintPreparedFrame = frame;
+    const preparePromise = Promise.resolve(onBeforePaint?.(writtenFields))
       .finally(() => {
-        paintPreparePromise = null;
+        if (paintPreparePromise === preparePromise) {
+          paintPreparePromise = null;
+        }
       });
+    paintPreparePromise = preparePromise;
     await paintPreparePromise;
   }
 
-  async function paintAtPointer(event, phase = "drag") {
+  async function paintAtPointer(event, phase = "drag", strokeId = paintStrokeId, dragSeq = paintDragSeq) {
+    if (strokeId !== paintStrokeId) return;
     const hit = pointerHit(event);
     if (!hit) return;
     const r = controls.brushRadius.value;
     const brush = ui.brushSelect.value;
     const expectedWrites = stampWrittenFields(brush);
     if (!expectedWrites) return;
+    if (stampCanGpuDelta(brush, expectedWrites)) {
+      const before = snapshotFields(expectedWrites);
+      if (!paintDown || strokeId !== paintStrokeId) return;
+      if (phase === "drag" && dragSeq !== paintDragSeq) return;
+      const writtenFields = applyStamp(brush, hit.x, hit.y, r, hit, phase);
+      if (!writtenFields) return;
+      const deltas = diffFields(before, writtenFields);
+      const applied = onApplyPaintDelta(deltas, writtenFields);
+      registry.lastPaintLabel = `${brush} @ lon ${hit.lon.toFixed(2)}, lat ${hit.lat.toFixed(2)}`;
+      onAfterPaint(writtenFields, { gpuApplied: applied });
+      return;
+    }
     await ensurePaintPrepared(expectedWrites);
-    if (!paintDown) return;
+    if (!paintDown || strokeId !== paintStrokeId) return;
+    if (phase === "drag" && dragSeq !== paintDragSeq) return;
     const writtenFields = applyStamp(brush, hit.x, hit.y, r, hit, phase);
     if (!writtenFields) return;
     registry.lastPaintLabel = `${brush} @ lon ${hit.lon.toFixed(2)}, lat ${hit.lat.toFixed(2)}`;
@@ -157,9 +211,12 @@ export function initPaint(deps) {
     event.stopPropagation();
     event.stopImmediatePropagation();
     paintDown = false;
+    paintStrokeId++;
+    paintDragSeq++;
     paintPrepared = false;
     paintPreparePromise = null;
     paintPreparedFieldsKey = "";
+    paintPreparedFrame = -1;
     if (canvas.hasPointerCapture(event.pointerId)) {
       canvas.releasePointerCapture(event.pointerId);
     }
@@ -178,9 +235,13 @@ export function initPaint(deps) {
     event.stopPropagation();
     event.stopImmediatePropagation();
     paintDown = true;
+    paintStrokeId++;
+    paintDragSeq++;
     paintPrepared = false;
     paintPreparePromise = null;
     paintPreparedFieldsKey = "";
+    paintPreparedFrame = -1;
+    const strokeId = paintStrokeId;
     onPaintStart?.();
     if (ui.autoPausePaint.checked) {
       wasPausedBeforePaint = getPaused();
@@ -189,7 +250,7 @@ export function initPaint(deps) {
     if (!canvas.hasPointerCapture(event.pointerId)) {
       canvas.setPointerCapture(event.pointerId);
     }
-    void paintAtPointer(event, "press");
+    void paintAtPointer(event, "press", strokeId);
   }, { capture: true });
   canvas.addEventListener("pointerup", endPaintStroke, { capture: true });
   canvas.addEventListener("pointercancel", endPaintStroke, { capture: true });
@@ -206,7 +267,8 @@ export function initPaint(deps) {
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();
-    void paintAtPointer(event);
+    const dragSeq = ++paintDragSeq;
+    void paintAtPointer(event, "drag", paintStrokeId, dragSeq);
   }, { capture: true });
   canvas.addEventListener("pointermove", (event) => {
     if (!paintDown) onProbeMove(event);

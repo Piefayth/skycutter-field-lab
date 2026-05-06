@@ -70,6 +70,9 @@ export async function createWebGpuGeodesicPipeline({ pipeline, grid: providedGri
     uploadState(state, names = fieldNames) {
       runtime.uploadState(state, names);
     },
+    applyFieldDeltas(deltas = {}) {
+      return runtime.applyFieldDeltas(deltas);
+    },
     // Initialize the prev slot of every history field from its current
     // value. Called by the recipe layer after preset apply so the
     // first tick's prev() reads the freshly-initialized state rather

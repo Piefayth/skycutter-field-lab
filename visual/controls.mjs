@@ -213,6 +213,7 @@ function renderStamps(decls) {
     if (typeof decl?.id === "string" && typeof decl.run === "function") {
       const fn = decl.run;
       fn.writes = Array.isArray(decl.writes) ? [...decl.writes] : [];
+      fn.gpuDelta = Boolean(decl.gpuDelta);
       map[decl.id] = fn;
     }
   }

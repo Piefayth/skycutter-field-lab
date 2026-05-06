@@ -37,6 +37,7 @@ export function buildDslStampDecls(stamps, dsl, getParam) {
     id: stamp.id,
     label: stamp.label ?? stamp.id,
     writes: stampWriteFields(stamp),
+    gpuDelta: stampSupportsGpuDelta(stamp),
     run: (state, x, y, r, hit = null, phase = "drag") => runDslStamp(state, stamp, x, y, r, dsl, hit, getParam, phase),
   }));
 }
@@ -64,6 +65,13 @@ function collectCellActionWrites(actions, fields) {
     if ((action?.type === "set" || action?.type === "add") && action.field) fields.add(action.field);
     if (action?.type === "when") collectCellActionWrites(action.actions ?? [], fields);
   }
+}
+
+function stampSupportsGpuDelta(stamp) {
+  const actions = stamp.phases
+    ? [...(stamp.phases.press ?? []), ...(stamp.phases.drag ?? [])]
+    : (stamp.actions ?? []);
+  return actions.length > 0 && actions.every((action) => action?.type === "spot" || action?.type === "ellipse");
 }
 
 function runDslPreset(state, preset, dsl, getParam, setParam) {

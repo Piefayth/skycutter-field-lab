@@ -227,6 +227,7 @@ let menuRef = null;
 let overlayCanvasVisible = true;
 let paintStrokeActive = false;
 let paintSyncActive = false;
+let paintSyncDepth = 0;
 let perfHudEl = null;
 let lastAnimatePhase = "not-started";
 let lastAnimateError = null;
@@ -922,6 +923,7 @@ export async function bootApp() {
     canvas: inputCanvas ?? canvas, camera, globe, ui, state, controls,
     onBeforePaint: async (writtenFields = []) => {
       const syncFields = Array.isArray(writtenFields) ? writtenFields.filter(Boolean) : [];
+      paintSyncDepth++;
       paintSyncActive = true;
       traceDebug("paint-sync-start", { fields: syncFields });
       try {
@@ -929,7 +931,8 @@ export async function bootApp() {
           await getRunner()?.syncState?.(state, syncFields, { fresh: true });
         }
       } finally {
-        paintSyncActive = false;
+        paintSyncDepth = Math.max(0, paintSyncDepth - 1);
+        paintSyncActive = paintSyncDepth > 0;
         traceDebug("paint-sync-end", { fields: syncFields });
       }
     },
@@ -941,17 +944,29 @@ export async function bootApp() {
       paintStrokeActive = false;
       updateAll({ force: true });
     },
-    onAfterPaint: (writtenFields = null) => {
+    onApplyPaintDelta: (deltas = {}, writtenFields = null) => {
+      const fields = Array.isArray(writtenFields) ? writtenFields.filter(Boolean) : Object.keys(deltas ?? {});
+      if (fields.length === 0) return false;
+      const applied = getRunner()?.applyFieldDeltas?.(deltas) ?? false;
+      if (applied) traceDebug("paint-delta", { fields });
+      return applied;
+    },
+    onAfterPaint: (writtenFields = null, options = {}) => {
       const fields = Array.isArray(writtenFields) ? writtenFields.filter(Boolean) : [];
       if (fields.length === 0) return;
       const runner = getRunner();
-      traceDebug("paint-upload", { fields });
-      runner?.markStateDirty?.(fields);
-      runner?.flushStateUpload?.(state, fields);
+      if (options?.gpuApplied) {
+        traceDebug("paint-gpu-applied", { fields });
+      } else {
+        traceDebug("paint-upload", { fields });
+        runner?.markStateDirty?.(fields);
+        runner?.flushStateUpload?.(state, fields);
+      }
       invalidateSurfaceFrame();
       updateAll();
     },
     onProbeMove: (event) => probe.updateFromPointer(event),
+    getFrame: () => runtime.frame,
     getPaused: () => runtime.paused,
     setPaused: (next) => {
       runtime.paused = Boolean(next);
@@ -1112,6 +1127,7 @@ function installDebugSnapshot() {
     devicePixelRatio: globalThis.devicePixelRatio,
     paintStrokeActive,
     paintSyncActive,
+    paintSyncDepth,
     overlayCanvasVisible,
     readbackInFlight,
     pendingReadback: pendingReadback

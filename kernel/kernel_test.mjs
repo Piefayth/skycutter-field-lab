@@ -84,6 +84,8 @@ step { stage s { reads u, mask; writes u; cell { set u = u + mask } } }
   const mark = recipe.stamps.find((s) => s.id === "mark");
   const erase = recipe.stamps.find((s) => s.id === "erase");
   assert(mark && erase, "source stamps must materialize");
+  assert(mark.gpuDelta === true, "additive spot stamps should advertise GPU-delta support");
+  assert(erase.gpuDelta === false, "exact set stamps should stay on the conservative paint path");
   mark.run(state, 128, 64, 10, hit);
   assert(nonZeroCount(state.fields.mask) === 1, "radius=0 source stamp should affect exactly one cell");
   erase.run(state, 128, 64, 10, hit);
@@ -114,6 +116,7 @@ step { stage s { reads u, v; writes u; cell { set u = u + v } } }
   const stamp = recipe.stamps.find((s) => s.id === "ripple");
   assert(stamp, "phased stamp must materialize");
   assert(stamp.writes?.join(",") === "u,v", "stamp should expose its written fields");
+  assert(stamp.gpuDelta === true, "all-spot phased stamps should advertise GPU-delta support");
 
   const dragState = makeGeodesicStampState(8, recipe);
   stamp.run(dragState, 128, 64, 0, hit, "drag");

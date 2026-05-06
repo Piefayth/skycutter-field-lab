@@ -489,6 +489,15 @@ export function initRecipes({
         dirtyFieldNames = null;
         stateEpoch++;
       },
+      applyFieldDeltas(deltas = {}) {
+        if (disposed || !gpuReady || failed || dirty) return false;
+        const applied = gpuRunner.applyFieldDeltas?.(deltas) ?? false;
+        if (applied) {
+          stateEpoch++;
+          bumpFieldRevision(deps.state);
+        }
+        return applied;
+      },
       syncState(state, names = undefined, options = undefined) {
         return readBack(state, names, options).catch(handleReadbackError);
       },

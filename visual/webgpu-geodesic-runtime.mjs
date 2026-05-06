@@ -75,6 +75,7 @@ export class WebGpuGeodesicRuntime {
     this.bindLayouts = new Map();
     this.metricKernels = new Map();
     this.edgeFluxBuffers = new Map();
+    this.deltaBuffers = new Map();
 
     this.positionsBuffer = makeStorageBuffer(device, grid.positions, GPUBufferUsage.STORAGE);
     this.neighborsBuffer = makeStorageBuffer(device, grid.neighbors, GPUBufferUsage.STORAGE);
@@ -312,6 +313,38 @@ export class WebGpuGeodesicRuntime {
     }
   }
 
+  applyFieldDelta(name, values) {
+    if (!(values instanceof Float32Array)) return false;
+    const field = this.ensureField(name);
+    if (field.type !== "f32" && field.type !== "vec2") return false;
+    const expectedBytes = field.bytes;
+    if (values.byteLength !== expectedBytes) return false;
+    const deltaBuffer = this.deltaBuffer(name);
+    this.device.queue.writeBuffer(deltaBuffer, 0, values.buffer, values.byteOffset, values.byteLength);
+    const source = field.type === "vec2" ? vec2DeltaShader() : f32DeltaShader();
+    const pipeline = this.pipeline(`paint-delta:${field.type}`, source);
+    const bindGroup = this.cachedBindGroup(
+      pipeline,
+      `paint-delta:${name}:${this.fieldBufferToken(name, "current")}`,
+      [
+        { binding: 0, resource: { buffer: this.currentBuffer(name) } },
+        { binding: 1, resource: { buffer: deltaBuffer } },
+        { binding: 2, resource: { buffer: this.paramsBuffer } },
+      ],
+    );
+    this.writeUniforms(new Float32Array([0, 0, this.cellCount, 0]));
+    this.dispatch(pipeline, bindGroup);
+    return true;
+  }
+
+  applyFieldDeltas(deltas = {}) {
+    let applied = false;
+    for (const [name, values] of Object.entries(deltas)) {
+      applied = this.applyFieldDelta(name, values) || applied;
+    }
+    return applied;
+  }
+
   runCellPass({ key, source, field, reads = [], prevReads = [], uniforms = null, needsNeighbors = false, kernelSpecs = [], params = {}, swapAfter = true }) {
     const pipeline = this.pipeline(key, source);
     this.writeUniforms(uniforms ?? new Float32Array([0, 0, this.cellCount, 0]));
@@ -444,6 +477,19 @@ export class WebGpuGeodesicRuntime {
     return buffer;
   }
 
+  deltaBuffer(name) {
+    const field = this.ensureField(name);
+    const key = `${name}:${field.bytes}`;
+    const existing = this.deltaBuffers.get(key);
+    if (existing) return existing;
+    const buffer = this.device.createBuffer({
+      size: field.bytes,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
+    this.deltaBuffers.set(key, buffer);
+    return buffer;
+  }
+
   fieldBufferToken(name, role, depth = 1) {
     const field = this.ensureField(name);
     if (field.history) {
@@ -514,6 +560,8 @@ export class WebGpuGeodesicRuntime {
     }
     for (const buffer of this.edgeFluxBuffers.values()) buffer.destroy();
     this.edgeFluxBuffers.clear();
+    for (const buffer of this.deltaBuffers.values()) buffer.destroy();
+    this.deltaBuffers.clear();
     this.paramsBuffer.destroy();
     this.readbackBuffer.destroy();
     for (const field of this.fields.values()) {
@@ -521,6 +569,36 @@ export class WebGpuGeodesicRuntime {
     }
     this.fields.clear();
   }
+}
+
+function f32DeltaShader() {
+  return `
+@group(0) @binding(0) var<storage, read_write> field: array<f32>;
+@group(0) @binding(1) var<storage, read> delta: array<f32>;
+@group(0) @binding(2) var<uniform> params: vec4f;
+
+@compute @workgroup_size(${WORKGROUP_SIZE})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= u32(params.z)) { return; }
+  field[i] = field[i] + delta[i];
+}
+`;
+}
+
+function vec2DeltaShader() {
+  return `
+@group(0) @binding(0) var<storage, read_write> field: array<vec2f>;
+@group(0) @binding(1) var<storage, read> delta: array<vec2f>;
+@group(0) @binding(2) var<uniform> params: vec4f;
+
+@compute @workgroup_size(${WORKGROUP_SIZE})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= u32(params.z)) { return; }
+  field[i] = field[i] + delta[i];
+}
+`;
 }
 
 function fieldUsage() {
