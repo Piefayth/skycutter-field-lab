@@ -27,13 +27,15 @@ from real recipes.
 
 ### Next Best DSL Primitives
 
-1. `relax ... until all cells { PRED }`
+1. `relax ... stable when PRED`
    - Why: `sandpile` is now much better, but still budgeted. It cannot express
      "drop one grain, settle fully, then continue" without burning a fixed
      iteration count every tick.
+   - The `all cells` part should be implicit. A relax stable condition is
+     global by definition: the loop stops only when every cell satisfies it.
    - Shape:
      ```dsl
-     relax settle max_iters 64 until all cells { toppled == 0 } {
+     relax settle max_iters 64 stable when toppled == 0 {
        stage topple { ... }
      }
      ```
@@ -260,13 +262,15 @@ Recipe examples:
 Likely future extension:
 
 ```dsl
-relax settle max_iters 64 until all cells { toppled == 0 } {
+relax settle max_iters 64 stable when toppled == 0 {
   ...
 }
 ```
 
-The important semantics are: global stable condition, each relaxation iteration
-reads the previous iteration's committed state, and the loop is bounded.
+The important semantics are: `stable when` is a global condition over cells, each
+relaxation iteration reads the previous iteration's committed state, and the
+loop is bounded. The surface should not require `all cells` in the syntax; that
+is what "stable" means in a relax block.
 
 Status: bounded `relax` is implemented and `sandpile` uses it. The missing
 piece is early exit / stable condition. The current recipe is intentionally
